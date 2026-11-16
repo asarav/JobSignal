@@ -76,17 +76,7 @@ async def migrate(db_path: Path) -> int:
             await backup_database(db_path)
         latest = max(applied) if applied else 0
         for version, name, sql, checksum in pending:
-            statements = [s.strip() for s in sql.split(";") if s.strip()]
-            # 0001 also creates schema_migrations; skip if already present
-            for statement in statements:
-                if "CREATE TABLE schema_migrations" in statement and version in applied:
-                    continue
-                try:
-                    await conn.execute(statement)
-                except aiosqlite.OperationalError as exc:
-                    if "already exists" in str(exc) and "schema_migrations" in statement:
-                        continue
-                    raise
+            await conn.executescript(sql)
             await conn.execute(
                 "INSERT INTO schema_migrations(version, name, applied_at, checksum) "
                 "VALUES (?, ?, ?, ?)",

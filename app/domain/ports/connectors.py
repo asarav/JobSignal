@@ -16,7 +16,7 @@ class JobSourceConnector(Protocol):
 
     def matches(self, url: str, sniff: PageSniff | None = None) -> MatchResult: ...
 
-    def list_jobs(
+    async def list_jobs(
         self, source: SourceConfig, ctx: ExecutionContext
     ) -> AsyncIterator[RawJobRef]: ...
 

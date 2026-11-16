@@ -9,16 +9,23 @@ import aiosqlite
 from app.domain.ports.repositories import (
     ApplicationRepository,
     CompanyRepository,
+    CrawlRunRepository,
     JobRepository,
     KeywordRepository,
     MatchRepository,
     ObservationRepository,
     ResumeRepository,
+    SourceRepository,
 )
 from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrate
 from app.infrastructure.persistence.sqlite.repositories import (
+    SqliteCompanyRepository,
+    SqliteCrawlRunRepository,
+    SqliteJobRepository,
+    SqliteObservationRepository,
     SqlitePluginStateRepository,
     SqliteSettingsRepository,
+    SqliteSourceRepository,
     SqliteTaskRepository,
 )
 
@@ -33,6 +40,8 @@ class SqliteUnitOfWork:
         self._db_path = db_path
         self._clock_now = clock_now
         self._conn: aiosqlite.Connection | None = None
+        self.sources: SourceRepository = _Unimplemented()  # type: ignore[assignment]
+        self.crawl_runs: CrawlRunRepository = _Unimplemented()  # type: ignore[assignment]
         self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
         self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
         self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
@@ -51,6 +60,11 @@ class SqliteUnitOfWork:
         self.settings = SqliteSettingsRepository(self._conn, self._clock_now)
         self.tasks = SqliteTaskRepository(self._conn)
         self.plugins = SqlitePluginStateRepository(self._conn, self._clock_now)
+        self.sources = SqliteSourceRepository(self._conn, self._clock_now)
+        self.companies = SqliteCompanyRepository(self._conn, self._clock_now)
+        self.jobs = SqliteJobRepository(self._conn, self._clock_now)
+        self.observations = SqliteObservationRepository(self._conn, self._clock_now)
+        self.crawl_runs = SqliteCrawlRunRepository(self._conn, self._clock_now)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -64,6 +78,10 @@ class SqliteUnitOfWork:
         if self._conn is None:
             raise RuntimeError("unit of work is closed")
         await self._conn.commit()
+
+    async def rollback(self) -> None:
+        if self._conn is not None:
+            await self._conn.rollback()
 
 
 class SqliteUnitOfWorkFactory:

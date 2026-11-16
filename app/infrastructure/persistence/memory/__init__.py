@@ -4,16 +4,8 @@ import copy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
-from app.domain.ports.repositories import (
-    ApplicationRepository,
-    CompanyRepository,
-    JobRepository,
-    KeywordRepository,
-    MatchRepository,
-    ObservationRepository,
-    ResumeRepository,
-)
 
 
 class _Unimplemented:
@@ -126,28 +118,169 @@ class InMemoryPluginStateRepository:
         self._configs[plugin_id] = dict(config)
 
 
+class InMemorySourceRepository:
+    def __init__(self, store: dict[str, SourceConfig]) -> None:
+        self._store = store
+
+    async def add(self, source: SourceConfig) -> None:
+        self._store[source.id] = source
+
+    async def get(self, source_id: str) -> SourceConfig | None:
+        return self._store.get(source_id)
+
+    async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
+        items = list(self._store.values())
+        if enabled_only:
+            items = [s for s in items if s.enabled]
+        return list(items)
+
+    async def set_enabled(self, source_id: str, enabled: bool) -> None:
+        if source_id in self._store:
+            from dataclasses import replace
+
+            self._store[source_id] = replace(self._store[source_id], enabled=enabled)
+
+    async def save(self, source: SourceConfig) -> None:
+        self._store[source.id] = source
+
+    async def delete(self, source_id: str) -> None:
+        self._store.pop(source_id, None)
+
+
+class InMemoryCompanyRepository:
+    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+        self._store = store
+
+    async def upsert(self, company_id: str, canonical_name: str, **fields: object) -> None:
+        self._store[company_id] = {"id": company_id, "canonical_name": canonical_name, **fields}
+
+    async def get(self, company_id: str) -> Mapping[str, object] | None:
+        return self._store.get(company_id)
+
+    async def find_by_name(self, normalized_name: str) -> str | None:
+        for cid, c in self._store.items():
+            if str(c.get("normalized_name", "")).lower() == normalized_name.lower():
+                return cid
+        return None
+
+    async def list(self) -> Sequence[Mapping[str, object]]:
+        return [dict(v) for v in self._store.values()]
+
+
+class InMemoryJobRepository:
+    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+        self._store = store
+
+    async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None) -> None:
+        self._store[job_id] = {
+            "id": job_id,
+            "company_id": company_id,
+            "source_id": source_id,
+            "content_hash": content_hash,
+            "title": getattr(job, "title", None),
+            "canonical_url": getattr(job, "canonical_url", None),
+        }
+
+    async def get(self, job_id: str) -> Mapping[str, object] | None:
+        return self._store.get(job_id)
+
+    async def find_by_canonical_url(self, canonical_url: str) -> str | None:
+        for jid, j in self._store.items():
+            if j.get("canonical_url") == canonical_url:
+                return jid
+        return None
+
+    async def list(self, *, company_id=None, source_id=None, limit=50, offset=0):
+        items = list(self._store.values())
+        if company_id:
+            items = [j for j in items if j.get("company_id") == company_id]
+        if source_id:
+            items = [j for j in items if j.get("source_id") == source_id]
+        return items[offset : offset + limit]
+
+    async def search(self, query, *, limit=50):
+        q = query.lower()
+        return [j for j in self._store.values() if q in str(j.get("title", "")).lower()][:limit]
+
+    async def count(self) -> int:
+        return len(self._store)
+
+    async def mark_not_seen(self, source_id, seen_ids, cutoff):
+        changed = 0
+        for jid, j in list(self._store.items()):
+            if j.get("source_id") == source_id and jid not in seen_ids:
+                j["posting_status"] = "removed"
+                changed += 1
+        return changed
+
+
+class InMemoryObservationRepository:
+    def __init__(self, store: list[dict[str, object]]) -> None:
+        self._store = store
+
+    async def add(self, *, job_id, source_id, observed_at, posting_status, details=None):
+        self._store.append(
+            {"job_id": job_id, "source_id": source_id, "observed_at": observed_at, "posting_status": posting_status, "details": details or {}}
+        )
+
+    async def list_for_job(self, job_id: str):
+        return [d for d in self._store if d["job_id"] == job_id]
+
+
+class InMemoryCrawlRunRepository:
+    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+        self._store = store
+
+    async def create(self, run_id, source_id, started_at):
+        self._store[run_id] = {"id": run_id, "source_id": source_id, "status": "running", "started_at": started_at}
+
+    async def finish(self, run_id, *, status, finished_at, stats, error=None):
+        if run_id in self._store:
+            self._store[run_id].update({"status": status, "finished_at": finished_at, "stats": stats, "error": error})
+
+    async def get(self, run_id):
+        return self._store.get(run_id)
+
+    async def list(self, *, source_id=None, limit=50):
+        items = list(self._store.values())
+        if source_id:
+            items = [r for r in items if r.get("source_id") == source_id]
+        return items[:limit]
+
 class InMemoryUnitOfWork:
     def __init__(
         self,
-        settings: dict[str, dict[str, object]] | None = None,
-        tasks: dict[str, BackgroundTask] | None = None,
-        plugins: dict[str, dict[str, object]] | None = None,
-        configs: dict[str, dict[str, object]] | None = None,
-    ) -> None:
+        settings=None,
+        tasks=None,
+        plugins=None,
+        configs=None,
+        sources=None,
+        companies=None,
+        jobs=None,
+        observations=None,
+        crawl_runs=None,
+    ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
         self._plugins_store = plugins if plugins is not None else {}
         self._configs_store = configs if configs is not None else {}
-        self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
-        self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
-        self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
-        self.observations: ObservationRepository = _Unimplemented()  # type: ignore[assignment]
-        self.resumes: ResumeRepository = _Unimplemented()  # type: ignore[assignment]
-        self.matches: MatchRepository = _Unimplemented()  # type: ignore[assignment]
-        self.keywords: KeywordRepository = _Unimplemented()  # type: ignore[assignment]
+        self._sources_store = sources if sources is not None else {}
+        self._companies_store = companies if companies is not None else {}
+        self._jobs_store = jobs if jobs is not None else {}
+        self._observations_store = observations if observations is not None else []
+        self._crawl_runs_store = crawl_runs if crawl_runs is not None else {}
+        self.jobs = InMemoryJobRepository(self._jobs_store)
+        self.companies = InMemoryCompanyRepository(self._companies_store)
+        self.applications = _Unimplemented()
+        self.observations = InMemoryObservationRepository(self._observations_store)
+        self.resumes = _Unimplemented()
+        self.matches = _Unimplemented()
+        self.keywords = _Unimplemented()
         self.settings = InMemorySettingsRepository(self._settings_store)
         self.tasks = InMemoryTaskRepository(self._tasks_store)
         self.plugins = InMemoryPluginStateRepository(self._plugins_store, self._configs_store)
+        self.sources = InMemorySourceRepository(self._sources_store)
+        self.crawl_runs = InMemoryCrawlRunRepository(self._crawl_runs_store)
         self.committed = False
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
@@ -167,6 +300,21 @@ class InMemoryUnitOfWorkFactory:
         self.tasks: dict[str, BackgroundTask] = {}
         self.plugins: dict[str, dict[str, object]] = {}
         self.configs: dict[str, dict[str, object]] = {}
+        self.sources: dict[str, SourceConfig] = {}
+        self.companies: dict[str, dict[str, object]] = {}
+        self.jobs: dict[str, dict[str, object]] = {}
+        self.observations: list[dict[str, object]] = []
+        self.crawl_runs: dict[str, dict[str, object]] = {}
 
     def __call__(self) -> InMemoryUnitOfWork:
-        return InMemoryUnitOfWork(self.settings, self.tasks, self.plugins, self.configs)
+        return InMemoryUnitOfWork(
+            self.settings,
+            self.tasks,
+            self.plugins,
+            self.configs,
+            self.sources,
+            self.companies,
+            self.jobs,
+            self.observations,
+            self.crawl_runs,
+        )

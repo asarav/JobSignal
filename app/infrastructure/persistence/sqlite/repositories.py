@@ -8,6 +8,7 @@ from typing import Any
 import aiosqlite
 
 from app.domain.models.enums import TaskStatus
+from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
 
 
@@ -253,3 +254,360 @@ class SqlitePluginStateRepository:
             """,
             (plugin_id, json.dumps(dict(config), sort_keys=True), self._ts()),
         )
+
+
+class SqliteCompanyRepository:
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    def _ts(self):
+        return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def upsert(self, company_id, canonical_name, **fields):
+        normalized = str(fields.get("normalized_name") or canonical_name.lower())
+        domains = fields.get("domains", [])
+        ats_tenants = fields.get("ats_tenants", [])
+        aliases = fields.get("aliases", [])
+        notes = fields.get("notes")
+        website = fields.get("website")
+        cur = await self._conn.execute("SELECT id FROM companies WHERE id = ?", (company_id,))
+        if await cur.fetchone() is None:
+            await self._conn.execute(
+                "INSERT INTO companies(id, canonical_name, normalized_name, domains_json, ats_tenants_json, aliases_json, notes, website, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (company_id, canonical_name, normalized, json.dumps(list(domains) if isinstance(domains, (list, tuple)) else []), json.dumps(list(ats_tenants) if isinstance(ats_tenants, (list, tuple)) else []), json.dumps(list(aliases) if isinstance(aliases, (list, tuple)) else []), notes, website, self._ts()),
+            )
+        else:
+            await self._conn.execute(
+                "UPDATE companies SET canonical_name=?, normalized_name=?, domains_json=?, ats_tenants_json=?, aliases_json=?, notes=?, website=? WHERE id=?",
+                (canonical_name, normalized, json.dumps(list(domains) if isinstance(domains, (list, tuple)) else []), json.dumps(list(ats_tenants) if isinstance(ats_tenants, (list, tuple)) else []), json.dumps(list(aliases) if isinstance(aliases, (list, tuple)) else []), notes, website, company_id),
+            )
+
+    async def get(self, company_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM companies WHERE id = ?", (company_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def find_by_name(self, normalized_name):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT id FROM companies WHERE normalized_name = ?", (normalized_name,))
+        row = await cur.fetchone()
+        return str(row["id"]) if row else None
+
+    async def list(self):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM companies ORDER BY canonical_name")
+        return [dict(r) for r in await cur.fetchall()]
+
+
+class SqliteJobRepository:
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    def _ts(self):
+        return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None):
+        from app.domain.models.job import NormalizedJob
+
+        if isinstance(job, NormalizedJob):
+            title = job.title
+            normalized_title = job.normalized_title
+            title_family = job.title_family
+            description_text = job.description_text
+            description_html = job.description_html
+            locations = [loc.__dict__ for loc in job.locations]
+            workplace_type = job.workplace_type.value
+            employment_type = job.employment_type.value
+            seniority = job.seniority.value
+            salary = job.salary.__dict__ if job.salary else None
+            posted_at = job.posted_at.strftime("%Y-%m-%dT%H:%M:%SZ") if job.posted_at else None
+            source_posting_id = job.source_posting_id
+            canonical_url = job.canonical_url
+            original_urls = list(job.original_urls)
+            department = job.department
+            required_skills = list(job.required_skills)
+            preferred_skills = list(job.preferred_skills)
+            extraction_status = job.extraction_status.value
+            extraction_confidence = job.extraction_confidence
+            field_confidence = dict(job.field_confidence)
+            provenance = [p.__dict__ for p in job.provenance]
+            posting_status = job.posting_status_hint.value
+            fetched_at = job.fetched_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            title = getattr(job, "title", "")
+            normalized_title = str(title).lower()
+            title_family = None
+            description_text = getattr(job, "description_text", "")
+            description_html = None
+            locations = []
+            workplace_type = getattr(job, "workplace_type", "unknown")
+            if hasattr(workplace_type, "value"):
+                workplace_type = workplace_type.value
+            employment_type = getattr(job, "employment_type", "unknown")
+            if hasattr(employment_type, "value"):
+                employment_type = employment_type.value
+            seniority = getattr(job, "seniority", "unknown")
+            if hasattr(seniority, "value"):
+                seniority = seniority.value
+            salary = None
+            posted_at = None
+            source_posting_id = None
+            canonical_url = getattr(job, "canonical_url", None) or ""
+            original_urls = []
+            department = None
+            required_skills = list(getattr(job, "required_skills", []))
+            preferred_skills = list(getattr(job, "preferred_skills", []))
+            extraction_status = "complete"
+            extraction_confidence = 1.0
+            field_confidence = {}
+            provenance = []
+            posting_status = getattr(job, "posting_status", "active")
+            if hasattr(posting_status, "value"):
+                posting_status = posting_status.value
+            fetched_at = self._ts()
+
+        now = self._ts()
+        cur = await self._conn.execute("SELECT id FROM jobs WHERE canonical_url = ?", (canonical_url,))
+        existing = await cur.fetchone()
+        if existing is None:
+            await self._conn.execute(
+                """INSERT INTO jobs(id, company_id, title, normalized_title, title_family,
+                  description_text, description_html, locations_json, workplace_type,
+                  employment_type, seniority, salary_json, posted_at, source_id,
+                  source_posting_id, canonical_url, original_urls_json, department,
+                  required_skills_json, preferred_skills_json, extraction_status,
+                  extraction_confidence, field_confidence_json, provenance_json,
+                  posting_status, content_hash, first_seen_at, last_seen_at, fetched_at,
+                  created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (job_id, company_id, title, normalized_title, title_family, description_text, description_html,
+                 json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
+                 posted_at, source_id, source_posting_id, canonical_url, json.dumps(original_urls), department,
+                 json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
+                 json.dumps(field_confidence), json.dumps(provenance), posting_status, content_hash, now, now, fetched_at, now, now),
+            )
+        else:
+            await self._conn.execute(
+                """UPDATE jobs SET company_id=?, title=?, normalized_title=?, title_family=?,
+                  description_text=?, description_html=?, locations_json=?, workplace_type=?,
+                  employment_type=?, seniority=?, salary_json=?, posted_at=?, source_id=?,
+                  source_posting_id=?, original_urls_json=?, department=?,
+                  required_skills_json=?, preferred_skills_json=?, extraction_status=?,
+                  extraction_confidence=?, field_confidence_json=?, provenance_json=?,
+                  posting_status=?, content_hash=?, last_seen_at=?, fetched_at=?, updated_at=?
+                WHERE canonical_url=?""",
+                (company_id, title, normalized_title, title_family, description_text, description_html,
+                 json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
+                 posted_at, source_id, source_posting_id, json.dumps(original_urls), department,
+                 json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
+                 json.dumps(field_confidence), json.dumps(provenance), posting_status, content_hash, now, fetched_at, now, canonical_url),
+            )
+
+    async def get(self, job_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def find_by_canonical_url(self, canonical_url):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT id FROM jobs WHERE canonical_url = ?", (canonical_url,))
+        row = await cur.fetchone()
+        return str(row["id"]) if row else None
+
+    async def list(self, *, company_id=None, source_id=None, limit=50, offset=0):
+        self._conn.row_factory = aiosqlite.Row
+        clauses = []
+        params = []
+        if company_id:
+            clauses.append("company_id = ?")
+            params.append(company_id)
+        if source_id:
+            clauses.append("source_id = ?")
+            params.append(source_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.extend([limit, offset])
+        cur = await self._conn.execute(f"SELECT * FROM jobs{where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?", tuple(params))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def search(self, query, *, limit=50):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT jobs.* FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid WHERE jobs_fts MATCH ? ORDER BY rank LIMIT ?",
+            (query, limit),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def count(self):
+        cur = await self._conn.execute("SELECT COUNT(*) FROM jobs")
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+    async def mark_not_seen(self, source_id, seen_ids, cutoff):
+        ts = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not seen_ids:
+            cur = await self._conn.execute("UPDATE jobs SET posting_status='removed', last_seen_at=? WHERE source_id=?", (ts, source_id))
+            return cur.rowcount or 0
+        placeholders = ",".join("?" for _ in seen_ids)
+        params = [ts, source_id, *seen_ids]
+        cur = await self._conn.execute(f"UPDATE jobs SET posting_status='removed', last_seen_at=? WHERE source_id=? AND id NOT IN ({placeholders})", tuple(params))
+        return cur.rowcount or 0
+
+
+class SqliteObservationRepository:
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    async def add(self, *, job_id, source_id, observed_at, posting_status, details=None):
+        import uuid
+        await self._conn.execute(
+            "INSERT INTO job_observations(id, job_id, source_id, observed_at, posting_status, details_json) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), job_id, source_id, observed_at.strftime("%Y-%m-%dT%H:%M:%SZ"), posting_status, json.dumps(dict(details or {}), sort_keys=True)),
+        )
+
+    async def list_for_job(self, job_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM job_observations WHERE job_id = ? ORDER BY observed_at DESC", (job_id,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+class SqliteCrawlRunRepository:
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    def _ts(self):
+        return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def create(self, run_id, source_id, started_at):
+        await self._conn.execute(
+            "INSERT INTO crawl_runs(id, source_id, status, started_at, stats_json) VALUES (?,?,?,?,?)",
+            (run_id, source_id, "running", started_at.strftime("%Y-%m-%dT%H:%M:%SZ"), "{}"),
+        )
+
+    async def finish(self, run_id, *, status, finished_at, stats, error=None):
+        await self._conn.execute(
+            "UPDATE crawl_runs SET status=?, finished_at=?, stats_json=?, error=? WHERE id=?",
+            (status, finished_at.strftime("%Y-%m-%dT%H:%M:%SZ"), json.dumps(dict(stats)), error, run_id),
+        )
+
+    async def get(self, run_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM crawl_runs WHERE id = ?", (run_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list(self, *, source_id=None, limit=50):
+        self._conn.row_factory = aiosqlite.Row
+        if source_id:
+            cur = await self._conn.execute("SELECT * FROM crawl_runs WHERE source_id = ? ORDER BY started_at DESC LIMIT ?", (source_id, limit))
+        else:
+            cur = await self._conn.execute("SELECT * FROM crawl_runs ORDER BY started_at DESC LIMIT ?", (limit,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# M1 discovery repositories
+# ---------------------------------------------------------------------------
+
+
+class SqliteSourceRepository:
+    def __init__(self, conn: aiosqlite.Connection, clock_now: Any) -> None:
+        self._conn = conn
+        self._now = clock_now
+
+    def _ts(self) -> str:
+        return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def add(self, source: SourceConfig) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO sources(id, url, kind, company_id, connector_id, ats_tenant_key,
+              enabled, extraction_order, limits_json, schedule_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source.id,
+                source.url,
+                source.kind,
+                source.company_id,
+                source.connector_id,
+                source.ats_tenant_key,
+                1 if source.enabled else 0,
+                json.dumps(list(source.extraction_order)),
+                json.dumps(dict(source.limits)),
+                json.dumps(dict(source.schedule)),
+                self._ts(),
+                self._ts(),
+            ),
+        )
+
+    async def get(self, source_id: str) -> SourceConfig | None:
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return self._row(row)
+
+    async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
+        self._conn.row_factory = aiosqlite.Row
+        if enabled_only:
+            cur = await self._conn.execute("SELECT * FROM sources WHERE enabled = 1")
+        else:
+            cur = await self._conn.execute("SELECT * FROM sources")
+        return [self._row(r) for r in await cur.fetchall()]
+
+    async def set_enabled(self, source_id: str, enabled: bool) -> None:
+        await self._conn.execute(
+            "UPDATE sources SET enabled = ?, updated_at = ? WHERE id = ?",
+            (1 if enabled else 0, self._ts(), source_id),
+        )
+
+    async def save(self, source: SourceConfig) -> None:
+        await self._conn.execute(
+            """
+            UPDATE sources SET url=?, kind=?, company_id=?, connector_id=?, ats_tenant_key=?,
+              enabled=?, extraction_order=?, limits_json=?, schedule_json=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                source.url,
+                source.kind,
+                source.company_id,
+                source.connector_id,
+                source.ats_tenant_key,
+                1 if source.enabled else 0,
+                json.dumps(list(source.extraction_order)),
+                json.dumps(dict(source.limits)),
+                json.dumps(dict(source.schedule)),
+                self._ts(),
+                source.id,
+            ),
+        )
+
+    async def delete(self, source_id: str) -> None:
+        await self._conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+
+    def _row(self, row: aiosqlite.Row) -> SourceConfig:
+        return SourceConfig(
+            id=row["id"],
+            url=row["url"],
+            kind=row["kind"],
+            company_id=row["company_id"],
+            connector_id=row["connector_id"],
+            ats_tenant_key=row["ats_tenant_key"],
+            enabled=bool(row["enabled"]),
+            extraction_order=tuple(json.loads(row["extraction_order"] or "[]")),
+            limits=json.loads(row["limits_json"] or "{}"),
+            schedule=json.loads(row["schedule_json"] or "{}"),
+        )
+
+
+# The remaining M1 repositories (Company, Job, Observation, CrawlRun) are added
+# in the next slice. For now they remain _Unimplemented in the UoW so the
+# discovery slice can land without breaking existing tests.
