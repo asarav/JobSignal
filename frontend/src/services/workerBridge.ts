@@ -91,6 +91,8 @@ class PreviewBridge implements WorkerBridge {
         });
       case "plugins.list":
         return response({ plugins: previewPlugins() });
+      case "sources.list":
+        return response({ sources: [] });
       case "tasks.list":
         return response({ tasks: this.tasks });
       case "tasks.cancel":
