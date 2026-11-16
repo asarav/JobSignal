@@ -148,6 +148,26 @@ try the desktop app. Override with environment variables when needed:
 A crashed worker is restarted with exponential backoff, capped at **5 restarts
 in 5 minutes**.
 
+### Dev database and schema checksums
+
+The migrator enforces a per-migration checksum (SHA256 of the `.sql` file)
+stored in `schema_migrations`. If a migration file changes between runs — for
+example after pulling a new milestone — the stored checksum no longer matches
+and the worker refuses to start, crash-looping until the restart budget is
+exhausted.
+
+The dev script `.\scripts\dev.ps1` handles this automatically: it removes the
+ephemeral dev database at `%APPDATA%\com.jobsignal.app\worker\lodestar.sqlite`
+before launching Tauri, so the worker applies the current schema and emits
+`worker.ready`. This only touches local dev data; never production data.
+
+To reset the database manually:
+
+```powershell
+Remove-Item "$env:APPDATA\com.jobsignal.app\worker\lodestar.sqlite*" -ErrorAction SilentlyContinue
+```
+
+
 ### Run the UI in a browser (no Tauri)
 
 ```bash
