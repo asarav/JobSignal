@@ -81,7 +81,7 @@ async def run_crawl(
 
     ctx = ExecutionContext(
         task_id=run_id,
-        clock=__import__("app.domain.ports.clock", fromlist=["Clock"]).Clock() if False else _ClockAdapter(clock_now),
+        clock=_ClockAdapter(clock_now),
         http=http,
         logger=_NullLogger(),
         cancel=CancellationToken(),
@@ -197,6 +197,8 @@ def _normalize(raw: Any, source: SourceConfig) -> NormalizedJob:
 
 
 class _ClockAdapter:
+    """Adapt a ``now()`` callable to the ``Clock`` protocol (M1 helper)."""
+
     def __init__(self, now_fn: Any) -> None:
         self._now = now_fn
 
