@@ -8,7 +8,7 @@ from app.application.container import Container
 from app.application.dto import CrawlRunListResult, CrawlRunSummary, DiscoveryRunParams
 from app.application.sources import SourceRegistry, run_crawl
 from app.domain.models.source import SourceConfig
-from app.infrastructure.http.policy_client import PolicyHttpClient
+from app.domain.ports.http import HttpClient
 
 
 class DiscoveryUseCase:
@@ -16,7 +16,7 @@ class DiscoveryUseCase:
         self,
         container: Container,
         registry: SourceRegistry,
-        http: PolicyHttpClient,
+        http: HttpClient,
     ) -> None:
         self._container = container
         self._registry = registry

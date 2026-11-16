@@ -12,9 +12,9 @@ from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.job import NormalizedJob
 from app.domain.models.source import SourceConfig
 from app.domain.ports.connectors import JobSourceConnector
+from app.domain.ports.http import HttpClient
 from app.domain.ports.repositories import UnitOfWorkFactory
 from app.domain.services.classifier import classify_url
-from app.infrastructure.http.policy_client import PolicyHttpClient
 
 
 class SourceRegistry:
@@ -66,7 +66,7 @@ async def run_crawl(
     source: SourceConfig,
     connector: JobSourceConnector,
     uow_factory: UnitOfWorkFactory,
-    http: PolicyHttpClient,
+    http: HttpClient,
     clock_now: Any,
     events: Any = None,
 ) -> dict[str, object]:
