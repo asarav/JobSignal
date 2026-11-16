@@ -531,16 +531,17 @@ mod tests {
         for prefix in FORBIDDEN_PREFIXES {
             assert!(
                 !ALLOWED_METHODS.iter().any(|method| method.starts_with(prefix)),
-                "M0 allowlist must not contain {prefix}*, found a generated entry"
+                "M1 allowlist must not contain {prefix}*, found a generated entry"
             );
         }
         for method in [
-            "discovery.run",
-            "jobs.list",
             "browser.open",
             "resume.parse",
             "matching.score",
             "applications.create",
+            "posting_intelligence.evaluate",
+            "keywords.extract",
+            "search_profiles.list",
         ] {
             assert!(!is_allowed(method), "{method} must be rejected in M0");
         }
@@ -591,7 +592,7 @@ mod tests {
         for method in ["", " ", "SYSTEM.HELLO", "system.hello ", "system.hello\n"] {
             assert!(!is_allowed(method), "{method:?} must not be forwarded");
         }
-        assert_eq!(ALLOWED_METHODS.len(), 15);
+        assert_eq!(ALLOWED_METHODS.len(), 23);
     }
 
     #[test]

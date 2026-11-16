@@ -42,10 +42,18 @@ src = ["app", "tests"]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
+"app/application/commands/sources.py" = ["E501"]
 "app/application/sources.py" = ["E501"]
+"app/worker/main.py" = ["E501"]
+"app/application/commands/discovery.py" = ["E501"]
+"app/application/commands/jobs.py" = ["E501"]
+"app/plugins/ats/ashby/__init__.py" = ["E501"]
+"app/plugins/ats/greenhouse/__init__.py" = ["E501"]
+"app/plugins/ats/lever/__init__.py" = ["E501"]
 "app/infrastructure/persistence/memory/__init__.py" = ["E501"]
 "app/infrastructure/persistence/sqlite/repositories.py" = ["E501"]
 "tests/contract/test_greenhouse.py" = ["E501"]
+"tests/integration/test_crawl_run.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

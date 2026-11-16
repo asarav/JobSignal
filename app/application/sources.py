@@ -74,7 +74,7 @@ async def run_crawl(
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     started = clock_now()
-    stats: dict[str, object] = {"discovered": 0, "new": 0, "updated": 0, "removed": 0, "errors": 0}
+    stats: dict[str, object] = {"discovered": 0, "new": 0, "updated": 0, "skipped": 0, "removed": 0, "errors": 0}
     async with uow_factory() as uow:
         await uow.crawl_runs.create(run_id, source.id, started)
         await uow.commit()
@@ -102,16 +102,32 @@ async def run_crawl(
             raw = result.value
             # Normalize via a minimal normalizer v1
             normalized = _normalize(raw, source)
+            import hashlib
+
+            content_hash = hashlib.sha256(
+                ((normalized.title or "") + "\n" + (normalized.description_text or "")).encode()
+            ).hexdigest()
             job_id = f"job_{uuid.uuid4().hex[:12]}"
             async with uow_factory() as uow:
                 company_id = f"co_{uuid.uuid4().hex[:8]}"
                 await uow.companies.upsert(company_id, normalized.company_ref.name if hasattr(normalized, "company_ref") else (raw.title or "Unknown"))
                 existing = await uow.jobs.find_by_canonical_url(normalized.canonical_url)
+                if existing is not None:
+                    existing_row = await uow.jobs.get(existing)
+                    if existing_row is not None and existing_row.get("content_hash") == content_hash:
+                        # Unchanged: just record observation and skip.
+                        await uow.observations.add(
+                            job_id=existing, source_id=source.id, observed_at=clock_now(), posting_status="active"
+                        )
+                        await uow.commit()
+                        seen_ids.append(existing)
+                        stats["skipped"] = int(str(stats["skipped"])) + 1
+                        continue
                 if existing is None:
-                    await uow.jobs.upsert(job_id, company_id=company_id, source_id=source.id, job=normalized)
+                    await uow.jobs.upsert(job_id, company_id=company_id, source_id=source.id, job=normalized, content_hash=content_hash)
                     stats["new"] = int(str(stats["new"])) + 1
                 else:
-                    await uow.jobs.upsert(existing, company_id=company_id, source_id=source.id, job=normalized)
+                    await uow.jobs.upsert(existing, company_id=company_id, source_id=source.id, job=normalized, content_hash=content_hash)
                     stats["updated"] = int(str(stats["updated"])) + 1
                 await uow.observations.add(job_id=existing or job_id, source_id=source.id, observed_at=clock_now(), posting_status="active")
                 await uow.commit()

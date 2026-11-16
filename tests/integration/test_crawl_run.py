@@ -1,4 +1,4 @@
-"""Integration: crawl runner skips unchanged jobs and isolates failing sources."""
+"""Integration: crawl runner creates jobs, skips unchanged ones, isolates failures."""
 
 from __future__ import annotations
 
@@ -14,14 +14,13 @@ from app.plugins.ats.greenhouse import GreenhouseConnector
 from tests.support.fakes import FakeClock, FakeHttpClient
 
 
-def _http_with_board() -> FakeHttpClient:
+def _board_http() -> FakeHttpClient:
     payload = {
         "jobs": [
             {"id": 1, "title": "Backend Engineer", "absolute_url": "https://boards.greenhouse.io/acme/jobs/1"},
             {"id": 2, "title": "Frontend Engineer", "absolute_url": "https://boards.greenhouse.io/acme/jobs/2"},
         ]
     }
-
     return FakeHttpClient(
         {
             "https://boards-api.greenhouse.io/v1/boards/acme/jobs": HttpResponse(
@@ -38,7 +37,7 @@ def _http_with_board() -> FakeHttpClient:
 @pytest.mark.asyncio
 async def test_crawl_creates_jobs_and_marks_not_seen():
     factory = InMemoryUnitOfWorkFactory()
-    http = _http_with_board()
+    http = _board_http()
     policy = PolicyHttpClient(transport=http)
     clock = FakeClock()
     source = SourceConfig(
@@ -62,13 +61,35 @@ async def test_crawl_creates_jobs_and_marks_not_seen():
         assert len(jobs) == 2
         runs = await uow.crawl_runs.list()
         assert runs[0]["status"] == "completed"
+        assert runs[0]["stats"].get("discovered") == 2
+
+
+@pytest.mark.asyncio
+async def test_crawl_skips_unchanged_jobs_on_second_run():
+    factory = InMemoryUnitOfWorkFactory()
+    http = _board_http()
+    policy = PolicyHttpClient(transport=http)
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://boards.greenhouse.io/acme", kind="ats",
+        connector_id="ats.greenhouse", ats_tenant_key="acme",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    connector = GreenhouseConnector()
+    await run_crawl(source=source, connector=connector, uow_factory=factory, http=policy, clock_now=clock.now)
+    stats2 = await run_crawl(source=source, connector=connector, uow_factory=factory, http=policy, clock_now=clock.now)
+    assert stats2["discovered"] == 2
+    assert stats2["new"] == 0
+    assert stats2["updated"] == 0
+    assert stats2["skipped"] == 2
 
 
 @pytest.mark.asyncio
 async def test_failing_source_is_isolated():
     factory = InMemoryUnitOfWorkFactory()
-    # HTTP returns a non-JSON body for the board -> connector raises -> run fails
-
     http = FakeHttpClient(
         {
             "https://boards-api.greenhouse.io/v1/boards/acme/jobs": HttpResponse(

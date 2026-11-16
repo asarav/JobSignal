@@ -1,0 +1,75 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/CrawlRunsListResponseCrawlRunSummary"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "runs"
+  ],
+  "title": "CrawlRunsListResponse",
+  "type": "object",
+  "$defs": {
+    "CrawlRunsListResponseCrawlRunSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stats": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "run_id",
+        "source_id",
+        "status"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "source_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "limit": {
+      "default": 50,
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "type": "integer"
+    }
+  },
+  "title": "JobsListRequest",
+  "type": "object"
+}

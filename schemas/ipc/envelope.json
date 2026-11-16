@@ -56,7 +56,8 @@
       "default": null
     },
     "result": {
-      "default": null
+      "default": null,
+      "title": "Result"
     },
     "error": {
       "anyOf": [
@@ -101,7 +102,8 @@
       "default": null
     },
     "data": {
-      "default": null
+      "default": null,
+      "title": "Data"
     }
   },
   "required": [

@@ -15,23 +15,34 @@ from pathlib import Path
 from typing import Any
 
 from app.application.commands.diagnostics import FetchUrlUseCase
+from app.application.commands.discovery import DiscoveryUseCase
 from app.application.commands.hello import HealthUseCase, HelloUseCase
+from app.application.commands.jobs import JobsUseCase
 from app.application.commands.plugins import PluginsUseCase
 from app.application.commands.settings import SettingsUseCase
+from app.application.commands.sources import SourcesUseCase
 from app.application.commands.tasks import TasksUseCase
 from app.application.config import SETTINGS_KEY, AppConfig
+from app.application.sources import SourceRegistry
 from app.domain.models.common import PortError
 from app.infrastructure.clock import SystemClock
+from app.infrastructure.http import PolicyHttpClient
 from app.infrastructure.ids import UlidGenerator
 from app.infrastructure.persistence.sqlite.migrator import migrate
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
+from app.plugins.ats.ashby import AshbyConnector
+from app.plugins.ats.greenhouse import GreenhouseConnector
+from app.plugins.ats.lever import LeverConnector
 from app.worker.composition_root import build_container
 from app.worker.ipc.dispatcher import Dispatcher, validate_request
 from app.worker.ipc.envelope import PROTOCOL_VERSION, error_envelope, event_envelope, ok_envelope
 from app.worker.ipc.events import QueuedEventPublisher, event_writer
 from app.worker.ipc.handlers.diagnostics import DiagnosticsHandlers
+from app.worker.ipc.handlers.discovery import DiscoveryHandlers
+from app.worker.ipc.handlers.jobs import JobsHandlers
 from app.worker.ipc.handlers.plugins import PluginsHandlers
 from app.worker.ipc.handlers.settings import SettingsHandlers
+from app.worker.ipc.handlers.sources import SourcesHandlers
 from app.worker.ipc.handlers.system import SystemHandlers
 from app.worker.ipc.handlers.tasks import TasksHandlers
 from app.worker.ipc.transport import NdjsonTransport
@@ -52,14 +63,20 @@ async def _load_config(uow_factory: SqliteUnitOfWorkFactory, data_dir: Path) -> 
 def _build_dispatcher(container: Any) -> Dispatcher:
     from app.application.dto import (
         CancelTaskParams,
+        DiscoveryRunParams,
         EmptyParams,
         FetchUrlParams,
         HelloParams,
+        JobFilter,
+        JobSearchParams,
         PluginConfigureParams,
         PluginIdParams,
         PluginOptionalIdParams,
         SettingsPatch,
         SleepTaskParams,
+        SourceAddParams,
+        SourceIdParams,
+        SourceSetEnabledParams,
         TaskFilter,
     )
 
@@ -98,6 +115,24 @@ def _build_dispatcher(container: Any) -> Dispatcher:
         "diagnostics.fetch_url", diagnostics.fetch_url, params_model=FetchUrlParams
     )
     dispatcher.register("diagnostics.sleep", diagnostics.sleep, params_model=SleepTaskParams)
+
+    # M1: discovery + sources + jobs + crawl runs
+    connectors = [GreenhouseConnector(), AshbyConnector(), LeverConnector()]
+    policy_http = PolicyHttpClient(transport=container.http)
+    registry = SourceRegistry(container.uow_factory, connectors)
+    sources = SourcesHandlers(SourcesUseCase(container, registry))
+    dispatcher.register("sources.list", sources.list, params_model=EmptyParams)
+    dispatcher.register("sources.add", sources.add, params_model=SourceAddParams)
+    dispatcher.register("sources.set_enabled", sources.set_enabled, params_model=SourceSetEnabledParams)
+    dispatcher.register("sources.delete", sources.delete, params_model=SourceIdParams)
+
+    jobs = JobsHandlers(JobsUseCase(container))
+    dispatcher.register("jobs.list", jobs.list, params_model=JobFilter)
+    dispatcher.register("jobs.search", jobs.search, params_model=JobSearchParams)
+
+    discovery = DiscoveryHandlers(DiscoveryUseCase(container, registry, policy_http))
+    dispatcher.register("discovery.run", discovery.run, params_model=DiscoveryRunParams)
+    dispatcher.register("crawl_runs.list", discovery.list_runs, params_model=EmptyParams)
     return dispatcher
 
 

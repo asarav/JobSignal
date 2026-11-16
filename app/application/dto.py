@@ -138,6 +138,78 @@ class OkResult(DTO):
     ok: bool = True
 
 
+class SourceInfo(DTO):
+    source_id: str
+    url: str
+    kind: str
+    connector_id: str | None = None
+    company_id: str | None = None
+    enabled: bool = True
+
+
+class SourceListResult(DTO):
+    sources: list[SourceInfo]
+
+
+class SourceAddParams(DTO):
+    url: str
+    connector_id: str | None = None
+    company_id: str | None = None
+
+
+class SourceIdParams(DTO):
+    source_id: str
+
+
+class SourceSetEnabledParams(DTO):
+    source_id: str
+    enabled: bool
+
+
+class JobSummary(DTO):
+    job_id: str
+    title: str
+    company_id: str | None = None
+    canonical_url: str | None = None
+    posting_status: str = "active"
+    source_id: str | None = None
+
+
+class JobListResult(DTO):
+    jobs: list[JobSummary]
+    total: int = 0
+
+
+class JobSearchParams(DTO):
+    query: str
+    limit: int = 50
+
+
+class JobFilter(DTO):
+    source_id: str | None = None
+    company_id: str | None = None
+    limit: int = 50
+    offset: int = 0
+
+
+class CrawlRunSummary(DTO):
+    run_id: str
+    source_id: str
+    status: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    stats: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class CrawlRunListResult(DTO):
+    runs: list[CrawlRunSummary]
+
+
+class DiscoveryRunParams(DTO):
+    source_id: str
+
+
 def task_summary(task: Any) -> TaskSummary:
     def iso(value: Any) -> str | None:
         return value.isoformat() if value is not None else None

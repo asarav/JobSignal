@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.worker.ipc.method_catalog import (  # noqa: E402
     FORBIDDEN_METHOD_PREFIXES,
-    M0_METHODS,
+    MILESTONE_METHODS,
     PROTOCOL_VERSION,
     EnvelopeSchema,
     WorkerReadyEvent,
@@ -60,22 +60,34 @@ def namespace_defs(schema: dict[str, Any], prefix: str) -> dict[str, Any]:
     return schema
 
 
-def strip_nested_titles(node: Any, *, is_root: bool = True) -> Any:
+def strip_nested_titles(node: Any, *, is_root: bool = True, in_properties: bool = False) -> Any:
     """Keep only the root ``title``; Pydantic adds titles to every field.
 
     json-schema-to-typescript turns titled primitives into aliases, which
     collide across files (``Url``, ``V`` ...). Nested names are unnecessary
     because nested object ``$defs`` already carry unique prefixed keys.
+
+    A field literally named ``title`` must be preserved, so we only strip the
+    metadata ``title`` of schema objects (those carrying type/properties/$ref).
     """
     if isinstance(node, dict):
+        is_schema = any(k in node for k in ("type", "properties", "$ref", "items", "allOf", "anyOf", "oneOf", "$defs"))
         out = {}
         for key, value in node.items():
-            if key == "title" and not is_root:
+            if (
+                key == "title"
+                and not is_root
+                and not in_properties
+                and is_schema
+            ):
                 continue
-            out[key] = strip_nested_titles(value, is_root=False)
+            if key == "properties":
+                out[key] = strip_nested_titles(value, is_root=False, in_properties=True)
+            else:
+                out[key] = strip_nested_titles(value, is_root=False, in_properties=False)
         return out
     if isinstance(node, list):
-        return [strip_nested_titles(item, is_root=False) for item in node]
+        return [strip_nested_titles(item, is_root=False, in_properties=False) for item in node]
     return node
 
 
@@ -90,7 +102,7 @@ def render(model: Any, title: str) -> str:
 def generate() -> dict[Path, str]:
     files: dict[Path, str] = {}
     methods: list[dict[str, Any]] = []
-    for spec in M0_METHODS:
+    for spec in MILESTONE_METHODS:
         group = spec.method.split(".", 1)[0]
         snake = spec.method.replace(".", "_")
         request_name = method_type_name(spec.method, "Request")

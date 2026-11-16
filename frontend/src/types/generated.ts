@@ -3,6 +3,25 @@
 // Source of truth: Pydantic models in app/worker/ipc/method_catalog.py
 // CI fails if this file is stale.
 
+// schemas/ipc/crawl_runs/crawl_runs_list_request.json
+export interface CrawlRunsListRequest {}
+
+// schemas/ipc/crawl_runs/crawl_runs_list_response.json
+export interface CrawlRunsListResponse {
+  runs: CrawlRunsListResponseCrawlRunSummary[];
+}
+export interface CrawlRunsListResponseCrawlRunSummary {
+  run_id: string;
+  source_id: string;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  stats?: {
+    [k: string]: unknown;
+  };
+  error?: string | null;
+}
+
 // schemas/ipc/diagnostics/diagnostics_fetch_url_request.json
 export interface DiagnosticsFetchUrlRequest {
   url: string;
@@ -27,6 +46,16 @@ export interface DiagnosticsSleepResponse {
   task_id: string;
 }
 
+// schemas/ipc/discovery/discovery_run_request.json
+export interface DiscoveryRunRequest {
+  source_id: string;
+}
+
+// schemas/ipc/discovery/discovery_run_response.json
+export interface DiscoveryRunResponse {
+  ok?: boolean;
+}
+
 // schemas/ipc/envelope.json
 /**
  * Wire envelope union, kept narrow for M0 consumers.
@@ -43,9 +72,7 @@ export interface Envelope {
     [k: string]: unknown;
   };
   ok?: boolean | null;
-  result?: {
-    [k: string]: unknown;
-  };
+  result?: Result;
   error?: {
     [k: string]: unknown;
   } | null;
@@ -53,9 +80,13 @@ export interface Envelope {
   seq?: number;
   ts?: string;
   task_id?: string | null;
-  data?: {
-    [k: string]: unknown;
-  };
+  data?: Data;
+}
+export interface Result {
+  [k: string]: unknown;
+}
+export interface Data {
+  [k: string]: unknown;
 }
 
 // schemas/ipc/event/worker_ready.json
@@ -71,6 +102,48 @@ export interface WorkerReadyEventWorkerReadyData {
   protocol_versions: number[];
   app_version: string;
   schema_version: number;
+}
+
+// schemas/ipc/jobs/jobs_list_request.json
+export interface JobsListRequest {
+  source_id?: string | null;
+  company_id?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+// schemas/ipc/jobs/jobs_list_response.json
+export interface JobsListResponse {
+  jobs: JobsListResponseJobSummary[];
+  total?: number;
+}
+export interface JobsListResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
+}
+
+// schemas/ipc/jobs/jobs_search_request.json
+export interface JobsSearchRequest {
+  query: string;
+  limit?: number;
+}
+
+// schemas/ipc/jobs/jobs_search_response.json
+export interface JobsSearchResponse {
+  jobs: JobsSearchResponseJobSummary[];
+  total?: number;
+}
+export interface JobsSearchResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
 }
 
 // schemas/ipc/plugins/plugins_configure_request.json
@@ -181,6 +254,60 @@ export interface SettingsUpdateResponse {
     [k: string]: unknown;
   };
   schema_version: number;
+}
+
+// schemas/ipc/sources/sources_add_request.json
+export interface SourcesAddRequest {
+  url: string;
+  connector_id?: string | null;
+  company_id?: string | null;
+}
+
+// schemas/ipc/sources/sources_add_response.json
+export interface SourcesAddResponse {
+  source_id: string;
+  url: string;
+  kind: string;
+  connector_id?: string | null;
+  company_id?: string | null;
+  enabled?: boolean;
+}
+
+// schemas/ipc/sources/sources_delete_request.json
+export interface SourcesDeleteRequest {
+  source_id: string;
+}
+
+// schemas/ipc/sources/sources_delete_response.json
+export interface SourcesDeleteResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/sources/sources_list_request.json
+export interface SourcesListRequest {}
+
+// schemas/ipc/sources/sources_list_response.json
+export interface SourcesListResponse {
+  sources: SourcesListResponseSourceInfo[];
+}
+export interface SourcesListResponseSourceInfo {
+  source_id: string;
+  url: string;
+  kind: string;
+  connector_id?: string | null;
+  company_id?: string | null;
+  enabled?: boolean;
+}
+
+// schemas/ipc/sources/sources_set_enabled_request.json
+export interface SourcesSetEnabledRequest {
+  source_id: string;
+  enabled: boolean;
+}
+
+// schemas/ipc/sources/sources_set_enabled_response.json
+export interface SourcesSetEnabledResponse {
+  ok?: boolean;
 }
 
 // schemas/ipc/system/system_health_request.json

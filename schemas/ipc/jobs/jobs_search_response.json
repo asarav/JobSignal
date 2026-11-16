@@ -1,0 +1,75 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "jobs": {
+      "items": {
+        "$ref": "#/$defs/JobsSearchResponseJobSummary"
+      },
+      "type": "array"
+    },
+    "total": {
+      "default": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "jobs"
+  ],
+  "title": "JobsSearchResponse",
+  "type": "object",
+  "$defs": {
+    "JobsSearchResponseJobSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "company_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "canonical_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "posting_status": {
+          "default": "active",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "job_id",
+        "title"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -19,12 +19,17 @@ from pydantic import BaseModel, Field
 
 from app.application.dto import (
     CancelTaskParams,
+    CrawlRunListResult,
+    DiscoveryRunParams,
     EmptyParams,
     FetchUrlParams,
     FetchUrlResult,
     HealthResult,
     HelloParams,
     HelloResult,
+    JobFilter,
+    JobListResult,
+    JobSearchParams,
     OkResult,
     PluginConfigureParams,
     PluginIdParams,
@@ -34,6 +39,11 @@ from app.application.dto import (
     SettingsPatch,
     SettingsResult,
     SleepTaskParams,
+    SourceAddParams,
+    SourceIdParams,
+    SourceInfo,
+    SourceListResult,
+    SourceSetEnabledParams,
     TaskAcceptedResult,
     TaskFilter,
     TaskListResult,
@@ -92,7 +102,7 @@ class MethodSpec:
     long_running: bool = False
 
 
-M0_METHODS: tuple[MethodSpec, ...] = (
+MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("system.hello", HelloParams, HelloResult),
     MethodSpec("system.health", EmptyParams, HealthResult),
     MethodSpec("system.shutdown", EmptyParams, OkResult),
@@ -108,19 +118,25 @@ M0_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("plugins.reset_circuit", PluginIdParams, OkResult),
     MethodSpec("diagnostics.fetch_url", FetchUrlParams, FetchUrlResult),
     MethodSpec("diagnostics.sleep", SleepTaskParams, TaskAcceptedResult, long_running=True),
+    # M1: discovery + sources + jobs + crawl runs
+    MethodSpec("sources.list", EmptyParams, SourceListResult),
+    MethodSpec("sources.add", SourceAddParams, SourceInfo),
+    MethodSpec("sources.set_enabled", SourceSetEnabledParams, OkResult),
+    MethodSpec("sources.delete", SourceIdParams, OkResult),
+    MethodSpec("jobs.list", JobFilter, JobListResult),
+    MethodSpec("jobs.search", JobSearchParams, JobListResult),
+    MethodSpec("crawl_runs.list", EmptyParams, CrawlRunListResult),
+    MethodSpec("discovery.run", DiscoveryRunParams, OkResult),
 )
 
-M0_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in M0_METHODS)
+MILESTONE_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in MILESTONE_METHODS)
 
 # Method prefixes that MUST remain absent until their milestone lands. The
-# negative test in CI asserts none appears in M0_METHOD_NAMES or Rust's
+# negative test in CI asserts none appears in MILESTONE_METHOD_NAMES or Rust's
 # generated allowlist.
 FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = (
-    "discovery.",
-    "jobs.",
     "matching.",
     "applications.",
-    "companies.",
     "posting_intelligence.",
     "resume.",
     "keywords.",
@@ -132,7 +148,7 @@ FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = (
 def result_models() -> tuple[type[BaseModel], ...]:
     seen: set[str] = set()
     models: list[type[BaseModel]] = []
-    for spec in M0_METHODS:
+    for spec in MILESTONE_METHODS:
         for model in (spec.params, spec.result):
             name = model.__name__
             if name not in seen:

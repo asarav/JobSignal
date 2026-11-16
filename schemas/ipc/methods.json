@@ -90,14 +90,59 @@
       "long_running": true,
       "request_schema": "schemas/ipc/diagnostics/diagnostics_sleep_request.json",
       "response_schema": "schemas/ipc/diagnostics/diagnostics_sleep_response.json"
+    },
+    {
+      "method": "sources.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/sources/sources_list_request.json",
+      "response_schema": "schemas/ipc/sources/sources_list_response.json"
+    },
+    {
+      "method": "sources.add",
+      "long_running": false,
+      "request_schema": "schemas/ipc/sources/sources_add_request.json",
+      "response_schema": "schemas/ipc/sources/sources_add_response.json"
+    },
+    {
+      "method": "sources.set_enabled",
+      "long_running": false,
+      "request_schema": "schemas/ipc/sources/sources_set_enabled_request.json",
+      "response_schema": "schemas/ipc/sources/sources_set_enabled_response.json"
+    },
+    {
+      "method": "sources.delete",
+      "long_running": false,
+      "request_schema": "schemas/ipc/sources/sources_delete_request.json",
+      "response_schema": "schemas/ipc/sources/sources_delete_response.json"
+    },
+    {
+      "method": "jobs.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_list_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_list_response.json"
+    },
+    {
+      "method": "jobs.search",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_search_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_search_response.json"
+    },
+    {
+      "method": "crawl_runs.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/crawl_runs/crawl_runs_list_request.json",
+      "response_schema": "schemas/ipc/crawl_runs/crawl_runs_list_response.json"
+    },
+    {
+      "method": "discovery.run",
+      "long_running": false,
+      "request_schema": "schemas/ipc/discovery/discovery_run_request.json",
+      "response_schema": "schemas/ipc/discovery/discovery_run_response.json"
     }
   ],
   "forbidden_prefixes": [
-    "discovery.",
-    "jobs.",
     "matching.",
     "applications.",
-    "companies.",
     "posting_intelligence.",
     "resume.",
     "keywords.",

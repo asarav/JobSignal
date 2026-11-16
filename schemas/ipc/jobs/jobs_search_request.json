@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "query": {
+      "type": "string"
+    },
+    "limit": {
+      "default": 50,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "title": "JobsSearchRequest",
+  "type": "object"
+}

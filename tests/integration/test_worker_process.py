@@ -165,8 +165,6 @@ async def test_invalid_params_are_mapped(tmp_path):
 @pytest.mark.parametrize(
     "method",
     [
-        "discovery.run",
-        "jobs.list",
         "browser.open",
         "resume.parse",
         "matching.score",

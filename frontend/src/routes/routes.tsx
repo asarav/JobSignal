@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { Copy } from "../copy/copy";
 import { DiagnosticsRoute } from "../features/diagnostics/DiagnosticsRoute";
+import { DiscoverRoute } from "../features/discover/DiscoverRoute";
 import { HomeRoute } from "../features/home/HomeRoute";
 import { PlaceholderRoute } from "../features/placeholder/PlaceholderRoute";
 import { SettingsRoute } from "../features/settings/SettingsRoute";
@@ -29,7 +30,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<HomeRoute />} />
-      <Route path="/discover" element={<PlaceholderRoute screen="discover" />} />
+      <Route path="/discover" element={<DiscoverRoute />} />
       <Route path="/search-profiles" element={<PlaceholderRoute screen="searchProfiles" />} />
       <Route path="/saved" element={<PlaceholderRoute screen="saved" />} />
       <Route path="/applications" element={<PlaceholderRoute screen="applications" />} />

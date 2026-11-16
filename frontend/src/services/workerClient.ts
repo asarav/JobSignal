@@ -1,10 +1,18 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  CrawlRunsListRequest,
+  CrawlRunsListResponse,
   DiagnosticsFetchUrlRequest,
   DiagnosticsFetchUrlResponse,
   DiagnosticsSleepRequest,
   DiagnosticsSleepResponse,
+  DiscoveryRunRequest,
+  DiscoveryRunResponse,
   Envelope,
+  JobsListRequest,
+  JobsListResponse,
+  JobsSearchRequest,
+  JobsSearchResponse,
   PluginsConfigureRequest,
   PluginsConfigureResponse,
   PluginsDisableRequest,
@@ -18,6 +26,14 @@ import type {
   SettingsGetResponse,
   SettingsUpdateRequest,
   SettingsUpdateResponse,
+  SourcesAddRequest,
+  SourcesAddResponse,
+  SourcesDeleteRequest,
+  SourcesDeleteResponse,
+  SourcesListRequest,
+  SourcesListResponse,
+  SourcesSetEnabledRequest,
+  SourcesSetEnabledResponse,
   SystemHealthRequest,
   SystemHealthResponse,
   SystemHelloRequest,
@@ -46,7 +62,15 @@ export type WorkerMethod =
   | "plugins.get_capabilities"
   | "plugins.reset_circuit"
   | "diagnostics.sleep"
-  | "diagnostics.fetch_url";
+  | "diagnostics.fetch_url"
+  | "sources.list"
+  | "sources.add"
+  | "sources.set_enabled"
+  | "sources.delete"
+  | "jobs.list"
+  | "jobs.search"
+  | "crawl_runs.list"
+  | "discovery.run";
 
 export class WorkerError extends Error {
   readonly code: string;
@@ -130,6 +154,38 @@ export class WorkerClient {
 
   listPlugins(request: PluginsListRequest = {}): Promise<PluginsListResponse> {
     return this.request("plugins.list", { ...request });
+  }
+
+  listSources(request: SourcesListRequest = {}): Promise<SourcesListResponse> {
+    return this.request("sources.list", { ...request });
+  }
+
+  addSource(request: SourcesAddRequest): Promise<SourcesAddResponse> {
+    return this.request("sources.add", { ...request });
+  }
+
+  setSourceEnabled(request: SourcesSetEnabledRequest): Promise<SourcesSetEnabledResponse> {
+    return this.request("sources.set_enabled", { ...request });
+  }
+
+  deleteSource(request: SourcesDeleteRequest): Promise<SourcesDeleteResponse> {
+    return this.request("sources.delete", { ...request });
+  }
+
+  listJobs(request: JobsListRequest = {}): Promise<JobsListResponse> {
+    return this.request("jobs.list", { ...request });
+  }
+
+  searchJobs(request: JobsSearchRequest): Promise<JobsSearchResponse> {
+    return this.request("jobs.search", { ...request });
+  }
+
+  listCrawlRuns(request: CrawlRunsListRequest = {}): Promise<CrawlRunsListResponse> {
+    return this.request("crawl_runs.list", { ...request });
+  }
+
+  runDiscovery(request: DiscoveryRunRequest): Promise<DiscoveryRunResponse> {
+    return this.request("discovery.run", { ...request });
   }
 
   enablePlugin(request: PluginsEnableRequest): Promise<{ ok: boolean }> {

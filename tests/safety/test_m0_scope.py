@@ -118,7 +118,7 @@ async def test_migration_0001_creates_only_infrastructure_tables(tmp_path):
 
 
 def test_no_forbidden_ipc_methods_are_registered():
-    from app.worker.ipc.method_catalog import FORBIDDEN_METHOD_PREFIXES, M0_METHOD_NAMES
+    from app.worker.ipc.method_catalog import FORBIDDEN_METHOD_PREFIXES, MILESTONE_METHOD_NAMES
 
-    for method in M0_METHOD_NAMES:
+    for method in MILESTONE_METHOD_NAMES:
         assert not any(method.startswith(prefix) for prefix in FORBIDDEN_METHOD_PREFIXES), method

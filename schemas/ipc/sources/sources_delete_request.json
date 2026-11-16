@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "source_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_id"
+  ],
+  "title": "SourcesDeleteRequest",
+  "type": "object"
+}
