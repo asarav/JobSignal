@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "limit": {
+      "default": 50,
+      "type": "integer"
+    }
+  },
+  "title": "TasksListRequest",
+  "type": "object"
+}

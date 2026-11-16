@@ -1,0 +1,107 @@
+{
+  "protocol_version": 1,
+  "methods": [
+    {
+      "method": "system.hello",
+      "long_running": false,
+      "request_schema": "schemas/ipc/system/system_hello_request.json",
+      "response_schema": "schemas/ipc/system/system_hello_response.json"
+    },
+    {
+      "method": "system.health",
+      "long_running": false,
+      "request_schema": "schemas/ipc/system/system_health_request.json",
+      "response_schema": "schemas/ipc/system/system_health_response.json"
+    },
+    {
+      "method": "system.shutdown",
+      "long_running": false,
+      "request_schema": "schemas/ipc/system/system_shutdown_request.json",
+      "response_schema": "schemas/ipc/system/system_shutdown_response.json"
+    },
+    {
+      "method": "tasks.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/tasks/tasks_list_request.json",
+      "response_schema": "schemas/ipc/tasks/tasks_list_response.json"
+    },
+    {
+      "method": "tasks.cancel",
+      "long_running": false,
+      "request_schema": "schemas/ipc/tasks/tasks_cancel_request.json",
+      "response_schema": "schemas/ipc/tasks/tasks_cancel_response.json"
+    },
+    {
+      "method": "settings.get",
+      "long_running": false,
+      "request_schema": "schemas/ipc/settings/settings_get_request.json",
+      "response_schema": "schemas/ipc/settings/settings_get_response.json"
+    },
+    {
+      "method": "settings.update",
+      "long_running": false,
+      "request_schema": "schemas/ipc/settings/settings_update_request.json",
+      "response_schema": "schemas/ipc/settings/settings_update_response.json"
+    },
+    {
+      "method": "plugins.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/plugins/plugins_list_request.json",
+      "response_schema": "schemas/ipc/plugins/plugins_list_response.json"
+    },
+    {
+      "method": "plugins.enable",
+      "long_running": false,
+      "request_schema": "schemas/ipc/plugins/plugins_enable_request.json",
+      "response_schema": "schemas/ipc/plugins/plugins_enable_response.json"
+    },
+    {
+      "method": "plugins.disable",
+      "long_running": false,
+      "request_schema": "schemas/ipc/plugins/plugins_disable_request.json",
+      "response_schema": "schemas/ipc/plugins/plugins_disable_response.json"
+    },
+    {
+      "method": "plugins.configure",
+      "long_running": false,
+      "request_schema": "schemas/ipc/plugins/plugins_configure_request.json",
+      "response_schema": "schemas/ipc/plugins/plugins_configure_response.json"
+    },
+    {
+      "method": "plugins.get_capabilities",
+      "long_running": false,
+      "request_schema": "schemas/ipc/plugins/plugins_get_capabilities_request.json",
+      "response_schema": "schemas/ipc/plugins/plugins_get_capabilities_response.json"
+    },
+    {
+      "method": "plugins.reset_circuit",
+      "long_running": false,
+      "request_schema": "schemas/ipc/plugins/plugins_reset_circuit_request.json",
+      "response_schema": "schemas/ipc/plugins/plugins_reset_circuit_response.json"
+    },
+    {
+      "method": "diagnostics.fetch_url",
+      "long_running": false,
+      "request_schema": "schemas/ipc/diagnostics/diagnostics_fetch_url_request.json",
+      "response_schema": "schemas/ipc/diagnostics/diagnostics_fetch_url_response.json"
+    },
+    {
+      "method": "diagnostics.sleep",
+      "long_running": true,
+      "request_schema": "schemas/ipc/diagnostics/diagnostics_sleep_request.json",
+      "response_schema": "schemas/ipc/diagnostics/diagnostics_sleep_response.json"
+    }
+  ],
+  "forbidden_prefixes": [
+    "discovery.",
+    "jobs.",
+    "matching.",
+    "applications.",
+    "companies.",
+    "posting_intelligence.",
+    "resume.",
+    "keywords.",
+    "browser.",
+    "search_profiles."
+  ]
+}

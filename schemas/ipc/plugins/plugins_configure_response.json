@@ -1,0 +1,13 @@
+{
+  "properties": {
+    "config": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "config"
+  ],
+  "title": "PluginsConfigureResponse",
+  "type": "object"
+}

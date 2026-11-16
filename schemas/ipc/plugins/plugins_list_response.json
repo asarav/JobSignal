@@ -1,0 +1,69 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "plugins": {
+      "items": {
+        "$ref": "#/$defs/PluginsListResponsePluginInfo"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "plugins"
+  ],
+  "title": "PluginsListResponse",
+  "type": "object",
+  "$defs": {
+    "PluginsListResponsePluginInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "plugin_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "api_version": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "health": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "network_hosts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "kind",
+        "version",
+        "api_version",
+        "enabled",
+        "health",
+        "capabilities",
+        "network_hosts",
+        "description"
+      ],
+      "type": "object"
+    }
+  }
+}

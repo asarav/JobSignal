@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "type": "integer"
+    },
+    "ui_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "ui_version"
+  ],
+  "title": "SystemHelloRequest",
+  "type": "object"
+}

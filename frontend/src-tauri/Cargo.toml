@@ -1,0 +1,30 @@
+[package]
+name = "lodestar-tauri"
+version = "0.0.0"
+description = "Lodestar Tauri frontend and worker supervisor"
+authors = ["Lodestar Team"]
+edition = "2021"
+
+[lib]
+name = "lodestar_lib"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+serde_json = "1"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "io-util",
+  "process",
+  "sync",
+  "time",
+] }
+log = "0.4"
+env_logger = "0.11"
+uuid = { version = "1", features = ["v4"] }

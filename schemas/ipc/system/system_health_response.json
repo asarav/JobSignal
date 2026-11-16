@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string"
+    },
+    "app_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "protocol_version": {
+      "type": "integer"
+    },
+    "data_dir": {
+      "type": "string"
+    },
+    "disk_usage_bytes": {
+      "type": "integer"
+    },
+    "plugin_health": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "queue_depth": {
+      "default": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "status",
+    "app_version",
+    "schema_version",
+    "protocol_version",
+    "data_dir",
+    "disk_usage_bytes"
+  ],
+  "title": "SystemHealthResponse",
+  "type": "object"
+}

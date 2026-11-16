@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "type": "integer"
+    },
+    "app_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "plugin_api_version": {
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "app_version",
+    "schema_version",
+    "plugin_api_version",
+    "capabilities"
+  ],
+  "title": "SystemHelloResponse",
+  "type": "object"
+}

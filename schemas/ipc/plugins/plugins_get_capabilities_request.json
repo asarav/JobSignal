@@ -1,0 +1,18 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "plugin_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "PluginsGetCapabilitiesRequest",
+  "type": "object"
+}

@@ -1,0 +1,111 @@
+"""Composition root: builds an immutable Container from typed AppConfig.
+
+Exactly one place in the worker constructs concrete adapters. No service
+locator, no global singletons, no import-time side effects.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+from app.application.config import AppConfig
+from app.application.container import Container
+from app.application.orchestration.task_runner import TaskRunner
+from app.domain.ports.logging import StructuredLogger
+from app.infrastructure.clock import SystemClock
+from app.infrastructure.http.httpx_client import HttpxClient
+from app.infrastructure.ids import UlidGenerator
+from app.infrastructure.logging import configure_logging
+from app.infrastructure.persistence.plugin_state import make_plugin_state_repository
+from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
+from app.plugins._builtin import register_builtin_plugins
+from app.plugins.registry import PluginDeps, PluginRegistry, make_registry
+
+
+class _LoggingEventPublisher:
+    """Fallback publisher for non-IPC contexts (tests, headless use)."""
+
+    def __init__(self, logger: StructuredLogger) -> None:
+        self._logger = logger
+
+    def publish(
+        self,
+        topic: str,
+        payload: dict[str, Any],
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        self._logger.info("event.published", topic=topic, task_id=task_id, payload=payload)
+
+
+def build_container(
+    cfg: AppConfig,
+    *,
+    overrides: dict[str, Any] | None = None,
+    log_dir: str | Path | None = None,
+) -> Container:
+    overrides = overrides or {}
+    clock = overrides.get("clock") or SystemClock()
+    ids = overrides.get("ids") or UlidGenerator()
+    logger = overrides.get("logger") or configure_logging(
+        level=cfg.logging.level,
+        log_dir=log_dir,
+        rotate_files=cfg.logging.rotate_files,
+        rotate_mb=cfg.logging.rotate_mb,
+    )
+
+    uow_factory = overrides.get("uow_factory")
+    if uow_factory is None:
+        data_dir = Path(cfg.paths.data_dir) if cfg.paths.data_dir else Path.cwd()
+        db_path = data_dir / cfg.paths.db_name
+        uow_factory = SqliteUnitOfWorkFactory(db_path=db_path, clock_now=clock.now)
+
+    http = overrides.get("http")
+    if http is None:
+        http = HttpxClient(cfg.http)
+
+    state_repo = overrides.get("plugin_state_repo")
+    if state_repo is None and overrides.get("registry") is None:
+        state_repo = make_plugin_state_repository(uow_factory)
+
+    registry = overrides.get("registry")
+    if registry is None:
+        registry = make_registry(
+            state_repo=state_repo,
+            logger=logger,
+            default_timeout_s=cfg.plugins.call_timeout_s,
+        )
+        register_builtin_plugins(
+            registry,
+            PluginDeps(
+                uow_factory=uow_factory,
+                clock=clock,
+                http=http,
+                logger=logger,
+                config=cfg,
+            ),
+        )
+
+    events = overrides.get("events") or _LoggingEventPublisher(logger)
+
+    base = Container(
+        config=cfg,
+        clock=clock,
+        ids=ids,
+        http=http,
+        uow_factory=uow_factory,
+        events=events,
+        logger=logger,
+        registry=registry,
+        data_dir=cfg.paths.data_dir,
+        schema_version=overrides.get("schema_version", 1),
+        app_version=cfg.app_version,
+        protocol_version=cfg.protocol_version,
+    )
+    runner = TaskRunner(base)
+    return replace(base, task_runner=runner)
+
+
+__all__ = ["PluginRegistry", "build_container"]

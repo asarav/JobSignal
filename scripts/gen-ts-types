@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Generate TypeScript types from JSON Schema source of truth.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if ! command -v npx >/dev/null 2>&1; then
+  echo "npx not found. Install Node.js 18+." >&2
+  exit 1
+fi
+
+if [ ! -d "frontend/node_modules" ]; then
+  echo "Installing frontend dependencies..."
+  cd frontend
+  if [ ! -f package.json ]; then
+    echo '{"name":"lodestar-frontend","private":true,"version":"0.0.0"}' > package.json
+  fi
+  npm install --no-audit --no-fund
+  cd ".."
+fi
+
+if [ ! -d "frontend/node_modules/json-schema-to-typescript" ]; then
+  echo "Installing json-schema-to-typescript..."
+  cd frontend
+  npm install --save-dev json-schema-to-typescript --no-audit --no-fund
+  cd ".."
+fi
+
+echo "Generating TypeScript types from schemas/ipc -> frontend/src/types/generated.ts"
+mkdir -p frontend/src/types
+npx json-schema-to-typescript \
+  schemas/ipc/*.json \
+  schemas/ipc/**/*.json \
+  --output frontend/src/types/generated.ts \
+  --top-level-union \
+  --strictNullChecks
+
+echo "Done."

@@ -1,0 +1,18 @@
+{
+  "properties": {
+    "capabilities": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "capabilities"
+  ],
+  "title": "PluginsGetCapabilitiesResponse",
+  "type": "object"
+}

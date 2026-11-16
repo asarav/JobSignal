@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "plugin_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "plugin_id"
+  ],
+  "title": "PluginsDisableRequest",
+  "type": "object"
+}

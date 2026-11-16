@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Spin up the Lodestar dev environment: worker sidecar + Tauri frontend.
+set -euo pipefail
+
+# 1. Start the worker (requires python >= 3.12 with deps installed)
+if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+  echo "Python 3.12+ is required to run the worker sidecar." >&2
+  exit 1
+fi
+
+DATA_DIR="${LODESTAR_DATA_DIR:-/tmp/lodestar-dev}"
+mkdir -p "$DATA_DIR"
+
+echo "Starting worker with data-dir=$DATA_DIR..."
+python -m app.worker.main --data-dir "$DATA_DIR" &
+WORKER_PID=$!
+
+# 2. Start the frontend (requires node 18+)
+if [ ! -d "frontend/node_modules" ]; then
+  echo "Installing frontend dependencies..."
+  cd frontend
+  if [ ! -f package.json ]; then
+    echo '{"name":"lodestar-frontend","private":true,"version":"0.0.0"}' > package.json
+  fi
+  npm install --no-audit --no-fund
+  cd ..
+fi
+
+echo "Starting frontend (Vite + React + Tauri)..."
+cd frontend
+npm run tauri dev -- --no-sandbox &
+FRONTEND_PID=$!
+
+# 3. Wait for either to exit
+trap "kill $WORKER_PID $FRONTEND_PID 2>/dev/null || true" EXIT
+wait -n
+EXIT_CODE=$?
+kill $WORKER_PID $FRONTEND_PID 2>/dev/null || true
+exit $EXIT_CODE

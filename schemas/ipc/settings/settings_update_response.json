@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "overrides": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "schema_version": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "config",
+    "overrides",
+    "schema_version"
+  ],
+  "title": "SettingsUpdateResponse",
+  "type": "object"
+}

@@ -1,0 +1,1 @@
+"""Application queries: read models."""

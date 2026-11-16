@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "integer"
+    },
+    "url": {
+      "type": "string"
+    },
+    "elapsed_ms": {
+      "type": "integer"
+    },
+    "bytes": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "status",
+    "url",
+    "elapsed_ms",
+    "bytes"
+  ],
+  "title": "DiagnosticsFetchUrlResponse",
+  "type": "object"
+}

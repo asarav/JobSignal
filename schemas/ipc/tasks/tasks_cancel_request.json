@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "title": "TasksCancelRequest",
+  "type": "object"
+}

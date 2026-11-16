@@ -1,0 +1,14 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "patch": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "patch"
+  ],
+  "title": "SettingsUpdateRequest",
+  "type": "object"
+}

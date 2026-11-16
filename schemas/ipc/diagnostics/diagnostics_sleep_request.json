@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "seconds": {
+      "default": 0.05,
+      "type": "number"
+    },
+    "steps": {
+      "default": 2,
+      "type": "integer"
+    }
+  },
+  "title": "DiagnosticsSleepRequest",
+  "type": "object"
+}

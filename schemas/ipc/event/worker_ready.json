@@ -1,0 +1,59 @@
+{
+  "properties": {
+    "v": {
+      "const": 1,
+      "default": 1,
+      "type": "integer"
+    },
+    "type": {
+      "const": "event",
+      "default": "event",
+      "type": "string"
+    },
+    "topic": {
+      "const": "worker.ready",
+      "default": "worker.ready",
+      "type": "string"
+    },
+    "seq": {
+      "default": 0,
+      "type": "integer"
+    },
+    "ts": {
+      "default": "",
+      "type": "string"
+    },
+    "data": {
+      "$ref": "#/$defs/WorkerReadyEventWorkerReadyData"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "WorkerReadyEvent",
+  "type": "object",
+  "$defs": {
+    "WorkerReadyEventWorkerReadyData": {
+      "properties": {
+        "protocol_versions": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "app_version": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol_versions",
+        "app_version",
+        "schema_version"
+      ],
+      "type": "object"
+    }
+  }
+}

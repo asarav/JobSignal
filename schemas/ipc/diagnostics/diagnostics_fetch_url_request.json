@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "url": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "title": "DiagnosticsFetchUrlRequest",
+  "type": "object"
+}
