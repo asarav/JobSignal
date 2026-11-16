@@ -88,6 +88,40 @@ async def test_crawl_skips_unchanged_jobs_on_second_run():
 
 
 @pytest.mark.asyncio
+async def test_missing_job_is_marked_removed():
+    factory = InMemoryUnitOfWorkFactory()
+    http = _board_http()
+    policy = PolicyHttpClient(transport=http)
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://boards.greenhouse.io/acme", kind="ats",
+        connector_id="ats.greenhouse", ats_tenant_key="acme",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    connector = GreenhouseConnector()
+    await run_crawl(source=source, connector=connector, uow_factory=factory, http=policy, clock_now=clock.now)
+
+    empty_http = FakeHttpClient(
+        {
+            "https://boards-api.greenhouse.io/v1/boards/acme/jobs": HttpResponse(
+                status=200, url="https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                headers={"content-type": "application/json"}, body=b'{"jobs": []}', elapsed_ms=5,
+            )
+        }
+    )
+    empty_policy = PolicyHttpClient(transport=empty_http)
+    await run_crawl(source=source, connector=connector, uow_factory=factory, http=empty_policy, clock_now=clock.now)
+
+    async with factory() as uow:
+        jobs = await uow.jobs.list()
+        statuses = {j.get("posting_status") for j in jobs}
+        assert "removed" in statuses
+
+
+@pytest.mark.asyncio
 async def test_failing_source_is_isolated():
     factory = InMemoryUnitOfWorkFactory()
     http = FakeHttpClient(

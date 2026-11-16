@@ -5,6 +5,7 @@ import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
   PluginsListResponsePluginInfo,
   SettingsGetResponse,
+  SourcesListResponseSourceInfo,
 } from "../../types/generated";
 
 interface SettingsConfig {
@@ -17,18 +18,21 @@ interface SettingsConfig {
 export function SettingsRoute() {
   const [settings, setSettings] = useState<SettingsGetResponse | null>(null);
   const [plugins, setPlugins] = useState<PluginsListResponsePluginInfo[]>([]);
+  const [sources, setSources] = useState<SourcesListResponseSourceInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [nextSettings, nextPlugins] = await Promise.all([
+      const [nextSettings, nextPlugins, nextSources] = await Promise.all([
         workerClient.getSettings(),
         workerClient.listPlugins(),
+        workerClient.listSources(),
       ]);
       setSettings(nextSettings);
       setPlugins(nextPlugins.plugins);
+      setSources(nextSources.sources);
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
     }
@@ -37,6 +41,30 @@ export function SettingsRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const toggleSource = async (source: SourcesListResponseSourceInfo) => {
+    setBusy(true);
+    try {
+      await workerClient.setSourceEnabled({ source_id: source.source_id, enabled: !source.enabled });
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteSource = async (sourceId: string) => {
+    setBusy(true);
+    try {
+      await workerClient.deleteSource({ source_id: sourceId });
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const toggle = async (plugin: PluginsListResponsePluginInfo) => {
     setBusy(true);
@@ -129,6 +157,39 @@ export function SettingsRoute() {
             ? Copy.settings.noOverrides
             : Object.keys(overrides).join(", ")}
         </p>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Sources</h2>
+        {sources.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">No sources configured. Add one on the Discover screen.</p>
+        ) : (
+          <ul className="mt-3 divide-y divide-slate-100">
+            {sources.map((source) => (
+              <li key={source.source_id} className="flex items-center justify-between py-2 text-sm">
+                <span className="truncate font-mono text-xs text-slate-700">{source.url}</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void toggleSource(source)}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {source.enabled ? "Disable" : "Enable"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void deleteSource(source.source_id)}
+                    className="rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

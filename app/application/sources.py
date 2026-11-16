@@ -68,6 +68,7 @@ async def run_crawl(
     uow_factory: UnitOfWorkFactory,
     http: PolicyHttpClient,
     clock_now: Any,
+    events: Any = None,
 ) -> dict[str, object]:
     """Run one source crawl. Returns stats. Isolates failures per source."""
 
@@ -78,6 +79,9 @@ async def run_crawl(
     async with uow_factory() as uow:
         await uow.crawl_runs.create(run_id, source.id, started)
         await uow.commit()
+
+    if events is not None:
+        events.publish("crawl.started", {"run_id": run_id, "source_id": source.id}, task_id=run_id)
 
     ctx = ExecutionContext(
         task_id=run_id,
@@ -139,6 +143,8 @@ async def run_crawl(
             )
             await uow.commit()
         stats["error"] = str(exc)
+        if events is not None:
+            events.publish("crawl.failed", {"run_id": run_id, "source_id": source.id, "error": str(exc)}, task_id=run_id)
         return stats
 
     # Not-seen removal logic
@@ -148,6 +154,8 @@ async def run_crawl(
         stats["removed"] = removed
         await uow.crawl_runs.finish(run_id, status="completed", finished_at=clock_now(), stats=stats)
         await uow.commit()
+    if events is not None:
+        events.publish("crawl.completed", {"run_id": run_id, "source_id": source.id, "stats": stats}, task_id=run_id)
     return stats
 
 
