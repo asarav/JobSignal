@@ -2331,8 +2331,9 @@ Search profiles, hard filters, search results with FTS; fingerprints; deduplicat
 ### Milestone 4 — Automatic discovery and daily scheduling
 
 **Deliverables:** `discovery.auto_discover` provider that runs all enabled discovery providers on a daily schedule without user input; auto-registers newly discovered career sites as `SourceConfig` rows; persistent per-source scheduler with cron/interval schedules that survives worker restarts; `discovery.auto_discover` IPC method; daily crawl trigger that runs all enabled sources and records `crawl.completed`/`crawl.failed` events; search profiles (from M3) begin receiving newly discovered jobs automatically.
+The crux of this whole desktop app is that jobs find the user, not that the user needs to search for jobs. The best jobs available at a certain time need to be found for a user to find and apply to a job and maximize their chances of getting a job that they are satisfied with. We want to maximize success and satisfaction and limit manual actions and automate as much as possible to make job searching far less mentally taxing.
 
-**Exit:** auto-discovery finds at least one new career site per run on fixture data; daily scheduler survives worker restart; no user input required to populate sources; jobs flow into search profiles with hard filters applied.
+**Exit:** auto-discovery finds all relevant career sites per run on fixture data without it taking significant amounts of time; daily scheduler survives worker restart; no user input required to populate sources; jobs flow into search profiles with hard filters applied.
 
 ### Milestone 5 — Resume and matching
 
