@@ -445,11 +445,29 @@ class SqliteJobRepository:
         cur = await self._conn.execute(f"SELECT * FROM jobs{where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?", tuple(params))
         return [self._row(r) for r in await cur.fetchall()]
 
+    @staticmethod
+    def _fts5_query(query: str) -> str:
+        """Escape a raw user query for safe use in FTS5 MATCH.
+
+        FTS5 treats characters like ``,()*:^[]~`` as query syntax. Raw user
+        input is split on whitespace and each term is wrapped in double quotes
+        (with inner quotes escaped) so the terms are ANDed together as literal
+        phrases instead of being parsed as FTS5 expressions.
+        """
+        terms = [t for t in query.split() if t]
+        if not terms:
+            return ""
+        return " AND ".join('"' + t.replace('"', '""') + '"' for t in terms)
+
     async def search(self, query, *, limit=50):
         self._conn.row_factory = aiosqlite.Row
+        fts_query = self._fts5_query(query)
+        if not fts_query:
+            return []
         cur = await self._conn.execute(
-            "SELECT jobs.* FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid WHERE jobs_fts MATCH ? ORDER BY rank LIMIT ?",
-            (query, limit),
+            "SELECT jobs.* FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid "
+            "WHERE jobs_fts MATCH ? ORDER BY rank LIMIT ?",
+            (fts_query, limit),
         )
         return [self._row(r) for r in await cur.fetchall()]
 
