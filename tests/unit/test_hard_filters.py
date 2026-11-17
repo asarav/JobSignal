@@ -47,6 +47,7 @@ JOBS = [
         "workplace_type": "remote",
         "employment_type": "full-time",
         "seniority": "mid",
+        "salary": {"min_amount": 90000, "max_amount": 120000},
         "locations": None,
         "posted_at": None,
         "source_id": "src3",
@@ -93,13 +94,13 @@ def test_min_salary_filter():
 def test_max_salary_filter():
     result = apply_hard_filters(JOBS, {"max_salary": 100000})
     ids = {j["id"] for j in result}
-    assert ids == {"j3", "j4"}
+    assert ids == {"j3"}  # j4 max 120k exceeds 100k cap; j1/j2 exceed cap
 
 
 def test_salary_range_filter():
     result = apply_hard_filters(JOBS, {"min_salary": 90000, "max_salary": 160000})
     ids = {j["id"] for j in result}
-    assert ids == {"j1"}  # j2 max 180k exceeds 160k cap; j3/j4 below 90k floor
+    assert ids == {"j1", "j4"}  # j2 max 180k exceeds 160k cap; j3 min 70k below 90k floor
 
 
 def test_location_substring_filter():
@@ -142,7 +143,7 @@ def test_company_id_filter():
 def test_has_salary_true():
     result = apply_hard_filters(JOBS, {"has_salary": True})
     ids = {j["id"] for j in result}
-    assert ids == {"j1", "j2", "j3"}
+    assert ids == {"j1", "j2", "j3", "j4"}
 
 
 def test_all_filters_combined():
