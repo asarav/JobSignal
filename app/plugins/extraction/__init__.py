@@ -28,6 +28,7 @@ from app.plugins.extraction.generic import GenericStrategy
 from app.plugins.extraction.jsonld import JsonLdStrategy
 from app.plugins.extraction.partial import PartialStrategy
 from app.plugins.extraction.public_endpoint import PublicEndpointStrategy
+from app.plugins.extraction.rendered_dom import RenderedDomStrategy
 from app.plugins.extraction.static_html import StaticHtmlStrategy
 
 if TYPE_CHECKING:
@@ -40,6 +41,7 @@ STRATEGY_CLASSES = (
     JsonLdStrategy,
     EmbeddedJsonStrategy,
     StaticHtmlStrategy,
+    RenderedDomStrategy,
     GenericStrategy,
     PartialStrategy,
 )
@@ -64,6 +66,7 @@ DESCRIPTIONS = {
     "extract.jsonld": "Reads schema.org JobPosting markup.",
     "extract.embedded_json": "Reads a job object embedded in the page.",
     "extract.static_html": "Reads well-known ATS markup by class name.",
+    "extract.rendered_dom": "Renders a JavaScript page and reads its DOM (needs a browser).",
     "extract.generic": "Generic heuristics for unknown career pages.",
     "extract.partial": "Always succeeds and records what little is known.",
 }
@@ -101,7 +104,10 @@ class DemoExtractionStrategy:
 def register(registry: PluginRegistry, deps: PluginDeps) -> None:
     """Register every builtin extraction strategy."""
     for strategy_class in STRATEGY_CLASSES:
-        strategy = strategy_class()
+        if strategy_class is RenderedDomStrategy:
+            strategy = RenderedDomStrategy(browser=deps.browser)
+        else:
+            strategy = strategy_class()
         registry.add(
             _make_manifest(strategy.id, strategy.version, DESCRIPTIONS[strategy.id]),
             strategy,

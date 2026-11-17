@@ -80,6 +80,17 @@ def build_container(
     if http is None:
         http = HttpxClient(cfg.http)
 
+    # Optional browser provider for rendered-DOM extraction (M2). Playwright is
+    # an optional dependency, so this stays None when it is not installed.
+    browser = overrides.get("browser")
+    if browser is None:
+        try:
+            from app.infrastructure.browser.playwright import PlaywrightBrowserProvider
+
+            browser = PlaywrightBrowserProvider()
+        except Exception:  # noqa: BLE001 - playwright may not be installed
+            browser = None
+
     state_repo = overrides.get("plugin_state_repo")
     if state_repo is None and overrides.get("registry") is None:
         state_repo = make_plugin_state_repository(uow_factory)
@@ -99,6 +110,7 @@ def build_container(
                 http=http,
                 logger=logger,
                 config=cfg,
+                browser=browser,
             ),
         )
 
@@ -118,6 +130,7 @@ def build_container(
         app_version=cfg.app_version,
         protocol_version=cfg.protocol_version,
         extraction_pipeline=build_extraction_pipeline(registry),
+        extra={"browser": browser},
     )
     runner = TaskRunner(base)
     return replace(base, task_runner=runner)

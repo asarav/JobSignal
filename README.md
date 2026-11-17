@@ -8,43 +8,45 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 1 — Discovery framework and initial connectors.**
+> **Current milestone: 2 — Universal extraction.**
 > The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
-> from Milestone 0. Milestone 1 adds sources, ATS connectors (Greenhouse, Ashby,
-> Lever), a crawl runner with incremental updates, job persistence with full-text
-> search, and a Discover screen.
+> from Milestone 0; sources, ATS connectors and crawls from Milestone 1.
+> Milestone 2 adds a universal extraction pipeline (JSON-LD, embedded JSON,
+> static HTML, rendered DOM, generic heuristics, partial records), field-level
+> merge with confidence and provenance, three more ATS connectors
+> (SmartRecruiters, Workday, iCIMS), and rendered-DOM extraction via an
+> optional Playwright dependency.
 
-## What Milestone 1 includes
+## What Milestone 2 includes
 
-- A **source registry**: add a careers URL, the classifier detects the ATS, and
-  the source is stored with a crawl interval.
-- **ATS connectors** for Greenhouse, Ashby and Lever behind the
-  `JobSourceConnector` port, each with a contract test.
-- A **crawl runner** that lists postings, normalizes them (strategy
-  `normalize.v1`), persists them, appends a snapshot when the content changed,
-  records an observation per posting, and marks disappeared postings as
-  `removed`. Failures are isolated per source.
-- **Incremental updates**: a posting whose content hash did not change is
-  skipped, so repeated crawls do not rewrite history.
-- A **scheduler** that runs each enabled source on its own interval and
-  survives a failing source.
-- **Job persistence** with SQLite tables for jobs, aliases, snapshots,
-  observations and crawl runs, plus an FTS5 index for search.
-- A **Discover screen** (add source, run a crawl, browse the jobs) and
-  **Settings → Sources** (enable, disable, delete, set the crawl interval).
+- A **universal extraction pipeline**: strategies run in order (per-source
+  override supported) and merge their results field by field, keeping the most
+  confident value. Every field carries its strategy as provenance.
+- Six **extraction strategies**: `public_endpoint`, `jsonld`, `embedded_json`,
+  `static_html`, `generic`, `partial`, plus `rendered_dom` when a browser is
+  available.
+- **Rendered-DOM extraction** via an optional Playwright dependency
+  (`pip install "lodestar[render]"` then `playwright install chromium`). A page
+  that disallows crawling, or that is a challenge/CAPTCHA page, is not
+  extracted at all.
+- **Three more ATS connectors**: SmartRecruiters, Workday and iCIMS, all
+  behind the `JobSourceConnector` port and contract-tested.
+- **HTML parsing uses the standard library** (`html.parser`), so no new
+  required dependency.
+- **Provenance** surfaces in the data model and the Discover screen.
+
 
 ## Still not implemented
 
-These are **intentionally absent** in Milestone 1, and the IPC allowlist rejects
+These are **intentionally absent** in Milestone 2, and the IPC allowlist rejects
 them (there is a test for it):
 
-- Rendered-DOM extraction and browser automation (Playwright) — Milestone 2
 - Resume parsing, candidate profiles, keyword extraction — Milestone 4
 - Job matching, scoring, ranking, and saved jobs — Milestone 4
 - Ghost-job / posting-quality risk models — Milestone 6
 - Application tracking, suppression, company intelligence, outcome analytics
 
-No such production code is present.
+No browser automation is installed by default; Playwright is an opt-in extra.
 
 ## Repository layout
 
@@ -341,6 +343,9 @@ constant scoring model, extraction strategy) live in `tests/support/`.
 - [`docs/adr/0002-m1-discovery.md`](docs/adr/0002-m1-discovery.md) — the M1
   discovery framework: source registry, normalizer v1, incremental crawls,
   append-only snapshots/aliases, stable company identity, and the scheduler.
+- [`docs/adr/0004-m2-extraction.md`](docs/adr/0004-m2-extraction.md) — the M2
+  extraction pipeline, field-level merge, rendered-DOM via an optional
+  Playwright dependency, and the isolation shim for connectors.
 
 ## CI
 

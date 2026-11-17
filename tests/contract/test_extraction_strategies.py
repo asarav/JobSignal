@@ -20,7 +20,7 @@ from app.plugins.extraction.jsonld import JsonLdStrategy
 from app.plugins.extraction.partial import PartialStrategy
 from app.plugins.extraction.public_endpoint import PublicEndpointStrategy
 from app.plugins.extraction.static_html import StaticHtmlStrategy
-from tests.support.fakes import FakeClock, FakeStructuredLogger
+from tests.support.fakes import FakeBrowserProvider, FakeClock, FakeStructuredLogger
 
 HTML_WITH_JSONLD = """
 <html><head>
@@ -64,6 +64,47 @@ HTML_GENERIC = """
 <p>You will own our growth experiments across all channels and report on them weekly.</p>
 </body></html>
 """
+
+HTML_RENDERED = """
+<html><body>
+  <h1>Frontend Engineer</h1>
+  <div class="job-description">Build the user-facing web application.</div>
+</body></html>
+"""
+
+
+@pytest.mark.asyncio
+async def test_rendered_dom_reads_a_rendered_page():
+    from app.plugins.extraction.rendered_dom import RenderedDomStrategy
+
+    provider = FakeBrowserProvider(html=HTML_RENDERED)
+    strategy = RenderedDomStrategy(browser=provider)
+    target = _target(url="https://example.com/jobs/42")
+    assert strategy.can_attempt(target) is True
+
+    result = await strategy.extract(target, _ctx())
+    assert isinstance(result, Ok)
+    assert result.value.raw.title == "Frontend Engineer"
+    assert "user-facing" in (result.value.raw.body_text or "")
+
+
+@pytest.mark.asyncio
+async def test_rendered_dom_refuses_a_challenge_page():
+    from app.plugins.extraction.rendered_dom import RenderedDomStrategy
+
+    provider = FakeBrowserProvider(html="<html><body>Just a moment... verifying you are human</body></html>")
+    strategy = RenderedDomStrategy(browser=provider)
+    result = await strategy.extract(_target(url="https://example.com/jobs/42"), _ctx())
+    assert isinstance(result, Err)
+    assert result.error.code == "rendered_dom.challenge_detected"
+
+
+@pytest.mark.asyncio
+async def test_rendered_dom_is_skipped_without_a_browser():
+    from app.plugins.extraction.rendered_dom import RenderedDomStrategy
+
+    strategy = RenderedDomStrategy(browser=None)
+    assert strategy.can_attempt(_target(url="https://example.com/jobs/42")) is False
 
 
 def _ctx() -> ExecutionContext:

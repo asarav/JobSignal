@@ -36,6 +36,7 @@ class PluginDeps:
     http: Any
     logger: StructuredLogger | None
     config: Any
+    browser: Any = None
 
 
 class PluginRegistry:

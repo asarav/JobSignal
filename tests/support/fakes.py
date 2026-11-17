@@ -60,14 +60,18 @@ class FakeBrowserProvider:
     id = "browser.fake"
     version = "1.0.0"
 
-    def __init__(self, form_model=None) -> None:
+    def __init__(self, form_model=None, html: str | None = None) -> None:
         self._form_model = form_model
+        self._html = html
 
     async def open(self, url: str, opts) -> Result:
         from app.domain.models.browser import BrowserPage
         from app.domain.models.common import Ok
 
         return Ok(BrowserPage(session_id="s1", url=url))
+
+    async def rendered_html(self, session_id: str) -> str | None:
+        return self._html
 
     async def close_all(self) -> None:
         return None

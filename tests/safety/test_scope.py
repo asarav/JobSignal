@@ -2,7 +2,7 @@
 
 These are scope guards, not feature tests. They fail if a later milestone's
 production code, dependency, IPC method, or database table leaks into the
-current build (Milestone 1: discovery framework and initial connectors).
+current build (Milestone 2: universal extraction).
 """
 
 from __future__ import annotations
@@ -15,36 +15,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "app"
 
-# Dependencies that belong to later milestones (M2 rendering, M4 resume/ML, ...).
-FORBIDDEN_DEPENDENCIES = (
-    "playwright",
-    "selenium",
-    "scrapy",
-    "beautifulsoup4",
-    "lxml",
-    "selectolax",
-    "pymupdf",
-    "python-docx",
-    "scikit-learn",
-    "onnxruntime",
-    "sentence-transformers",
-)
-
-# Module-level imports that would mean real browsing/parsing landed.
-FORBIDDEN_IMPORTS = (
-    "playwright",
-    "selenium",
-    "scrapy",
-    "bs4",
-    "lxml",
-    "selectolax",
-    "fitz",
-    "docx",
-    "sklearn",
-    "onnxruntime",
-)
-
-# Tables the current milestone is allowed to create.
 ALLOWED_TABLES = {
     "schema_migrations",
     "app_settings",
@@ -69,14 +39,56 @@ ALLOWED_TABLES = {
 }
 
 
-def _production_files() -> list[Path]:
-    return [path for path in APP.rglob("*.py") if "__pycache__" not in path.parts]
+def _dependency_section(text: str) -> str:
+    match = re.search(r"dependencies\s*=\s*\[(.*?)\]", text, re.S)
+    return (match.group(1).lower() if match else "")
+
+
+# Dependencies that belong to later milestones (M3+). Playwright is allowed
+# from M2 onward, but only as an optional dependency.
+FORBIDDEN_DEPENDENCIES = (
+    "selenium",
+    "scrapy",
+    "beautifulsoup4",
+    "lxml",
+    "selectolax",
+    "pymupdf",
+    "python-docx",
+    "scikit-learn",
+    "onnxruntime",
+    "sentence-transformers",
+)
 
 
 @pytest.mark.parametrize("dependency", FORBIDDEN_DEPENDENCIES)
 def test_pyproject_has_no_later_milestone_dependency(dependency):
-    text = (ROOT / "pyproject.toml").read_text("utf-8").lower()
-    assert dependency not in text, f"{dependency} belongs to a later milestone"
+    text = (ROOT / "pyproject.toml").read_text("utf-8")
+    assert dependency not in _dependency_section(text), (
+        f"{dependency} belongs to a later milestone"
+    )
+
+
+def test_playwright_is_only_an_optional_dependency():
+    text = (ROOT / "pyproject.toml").read_text("utf-8")
+    # The core dependency list must not pull in the browser.
+    assert "playwright" not in _dependency_section(text)
+    # If present at all, it must live under the optional-dependencies section.
+    if "playwright" in text.lower():
+        assert "[project.optional-dependencies]" in text
+
+
+# Module-level imports that would mean real browsing/parsing landed.
+FORBIDDEN_IMPORTS = (
+    "selenium",
+    "scrapy",
+    "bs4",
+    "lxml",
+    "selectolax",
+    "fitz",
+    "docx",
+    "sklearn",
+    "onnxruntime",
+)
 
 
 @pytest.mark.parametrize("module", FORBIDDEN_IMPORTS)
@@ -97,6 +109,10 @@ def test_no_form_submission_code():
         if any(token in text for token in ("submit_application", "click_submit", "autofill(")):
             offenders.append(str(path.relative_to(ROOT)))
     assert offenders == [], f"application submission code found in {offenders}"
+
+
+def _production_files() -> list[Path]:
+    return [path for path in APP.rglob("*.py") if "__pycache__" not in path.parts]
 
 
 async def test_migrations_create_only_expected_tables(tmp_path):
@@ -127,7 +143,6 @@ def test_no_forbidden_ipc_methods_are_registered():
 
 
 def test_application_layer_does_not_import_infrastructure():
-    """The application layer must depend on ports, not on adapters."""
     offenders = []
     for path in _production_files():
         parts = path.parts
