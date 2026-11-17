@@ -146,6 +146,7 @@ class SourceInfo(DTO):
     company_id: str | None = None
     enabled: bool = True
     interval_s: float = 0.0
+    extraction_order: list[str] = Field(default_factory=list)
 
 
 class SourceListResult(DTO):

@@ -55,6 +55,12 @@
         "interval_s": {
           "default": 0.0,
           "type": "number"
+        },
+        "extraction_order": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

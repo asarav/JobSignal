@@ -62,4 +62,5 @@ def _to_info(source: SourceConfig) -> SourceInfo:
         company_id=source.company_id,
         enabled=source.enabled,
         interval_s=interval,
+        extraction_order=list(source.extraction_order),
     )

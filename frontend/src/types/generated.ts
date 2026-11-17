@@ -275,6 +275,7 @@ export interface SourcesAddResponse {
   company_id?: string | null;
   enabled?: boolean;
   interval_s?: number;
+  extraction_order?: string[];
 }
 
 // schemas/ipc/sources/sources_delete_request.json
@@ -302,6 +303,7 @@ export interface SourcesListResponseSourceInfo {
   company_id?: string | null;
   enabled?: boolean;
   interval_s?: number;
+  extraction_order?: string[];
 }
 
 // schemas/ipc/sources/sources_set_enabled_request.json

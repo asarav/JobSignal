@@ -48,6 +48,22 @@ export function SettingsRoute() {
     void load();
   }, [load]);
 
+  const toggle = async (plugin: PluginsListResponsePluginInfo) => {
+    setBusy(true);
+    try {
+      if (plugin.enabled) {
+        await workerClient.disablePlugin({ plugin_id: plugin.plugin_id });
+      } else {
+        await workerClient.enablePlugin({ plugin_id: plugin.plugin_id });
+      }
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleSource = async (source: SourcesListResponseSourceInfo) => {
     setBusy(true);
     try {
@@ -81,22 +97,6 @@ export function SettingsRoute() {
         source_id: source.source_id,
         interval_s: value * 60,
       });
-      await load();
-    } catch (exc) {
-      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const toggle = async (plugin: PluginsListResponsePluginInfo) => {
-    setBusy(true);
-    try {
-      if (plugin.enabled) {
-        await workerClient.disablePlugin({ plugin_id: plugin.plugin_id });
-      } else {
-        await workerClient.enablePlugin({ plugin_id: plugin.plugin_id });
-      }
       await load();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -198,9 +198,7 @@ export function SettingsRoute() {
                       type="number"
                       min={0}
                       step={5}
-                      value={
-                        intervals[source.source_id] ?? intervalMinutes(source.interval_s)
-                      }
+                      value={intervals[source.source_id] ?? intervalMinutes(source.interval_s)}
                       onChange={(event) =>
                         setIntervals((current) => ({
                           ...current,
