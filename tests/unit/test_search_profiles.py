@@ -8,7 +8,6 @@ from app.application.dto import (
     SearchProfileParams,
     SearchProfileSaveParams,
 )
-from app.domain.models.candidate import SearchProfile
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
 
 

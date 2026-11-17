@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from app.domain.services.hard_filters import apply_hard_filters
 
-
 JOBS = [
     {
         "id": "j1",

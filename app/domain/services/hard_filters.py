@@ -10,10 +10,11 @@ profile and edited from the UI without a schema change.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 
 
-def apply_hard_filters(jobs: Sequence[Mapping[str, object]], filters: Mapping[str, object]) -> list[Mapping[str, object]]:
+def apply_hard_filters(
+    jobs: Sequence[Mapping[str, object]], filters: Mapping[str, object]
+) -> list[Mapping[str, object]]:
     """Return the jobs that satisfy every filter in ``filters``."""
     if not filters:
         return list(jobs)
@@ -27,28 +28,28 @@ def apply_hard_filters(jobs: Sequence[Mapping[str, object]], filters: Mapping[st
 def _passes(job: Mapping[str, object], filters: Mapping[str, object]) -> bool:
     # Workplace type: allowed values (OR within the list).
     allowed_workplace = filters.get("workplace_types")
-    if allowed_workplace and job.get("workplace_type") not in allowed_workplace:
+    if allowed_workplace and job.get("workplace_type") not in allowed_workplace:  # type: ignore[operator]
         return False
 
     allowed_employment = filters.get("employment_types")
-    if allowed_employment and job.get("employment_type") not in allowed_employment:
+    if allowed_employment and job.get("employment_type") not in allowed_employment:  # type: ignore[operator]
         return False
 
     allowed_seniority = filters.get("seniorities")
-    if allowed_seniority and job.get("seniority") not in allowed_seniority:
+    if allowed_seniority and job.get("seniority") not in allowed_seniority:  # type: ignore[operator]
         return False
 
     # Salary floor/ceiling.
     min_salary = filters.get("min_salary")
     if min_salary is not None:
         salary = _salary_min(job)
-        if salary is None or salary < int(min_salary):
+        if salary is None or salary < int(min_salary):  # type: ignore[operator]
             return False
 
     max_salary = filters.get("max_salary")
     if max_salary is not None:
         salary = _salary_max(job)
-        if salary is not None and salary > int(max_salary):
+        if salary is not None and salary > int(max_salary):  # type: ignore[operator]
             return False
 
     # Location substring (case-insensitive).

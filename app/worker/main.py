@@ -76,6 +76,8 @@ def _build_dispatcher(
         PluginConfigureParams,
         PluginIdParams,
         PluginOptionalIdParams,
+        SearchProfileParams,
+        SearchProfileSaveParams,
         SettingsPatch,
         SleepTaskParams,
         SourceAddParams,
@@ -83,8 +85,6 @@ def _build_dispatcher(
         SourceSetEnabledParams,
         SourceSetExtractionOrderParams,
         SourceSetScheduleParams,
-        SearchProfileParams,
-        SearchProfileSaveParams,
         TaskFilter,
     )
 

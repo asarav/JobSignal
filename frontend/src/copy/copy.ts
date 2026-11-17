@@ -98,7 +98,7 @@ export const Copy = {
   placeholders: {
     discover: {
       title: "Discover Jobs",
-      body: "Discovery providers, crawl scheduling and source management land in Milestone 1.",
+      body: "Automatic discovery and daily scheduling arrive in Milestone 3.5. The app finds companies and career pages on its own, crawls them daily, and surfaces matching jobs without manual setup.",
     },
     searchProfiles: {
       title: "Search Profiles",

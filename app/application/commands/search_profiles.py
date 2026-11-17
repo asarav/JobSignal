@@ -5,9 +5,13 @@ from __future__ import annotations
 import uuid
 
 from app.application.container import Container
-from app.application.dto import SearchProfileInfo, SearchProfileListResult, SearchProfileParams, SearchProfileSaveParams
+from app.application.dto import (
+    SearchProfileInfo,
+    SearchProfileListResult,
+    SearchProfileParams,
+    SearchProfileSaveParams,
+)
 from app.domain.models.candidate import SearchProfile
-from app.domain.ports.repositories import SearchProfileRepository, UnitOfWorkFactory
 
 
 class SearchProfilesUseCase:

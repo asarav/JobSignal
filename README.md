@@ -41,10 +41,15 @@ The repository is named `JobSignal` for historical reasons; the product is named
 These are **intentionally absent** in Milestone 2, and the IPC allowlist rejects
 them (there is a test for it):
 
-- Resume parsing, candidate profiles, keyword extraction — Milestone 4
-- Job matching, scoring, ranking, and saved jobs — Milestone 4
-- Ghost-job / posting-quality risk models — Milestone 6
-- Application tracking, suppression, company intelligence, outcome analytics
+- Search profiles, hard filters, FTS search, job history — Milestone 3
+- Automatic discovery + daily scheduling — Milestone 4
+- Resume parsing, candidate profiles, keyword extraction — Milestone 5
+- Job matching, scoring, ranking, and saved jobs — Milestone 5
+- Application tracking, suppression, company intelligence, outcome analytics — Milestone 6
+- Ghost-job / posting-quality risk models — Milestone 7
+- Outcome feedback and analytics — Milestone 8
+- Posting intelligence UI refinement — Milestone 9
+- Hardening and distribution — Milestone 10
 
 No browser automation is installed by default; Playwright is an opt-in extra.
 

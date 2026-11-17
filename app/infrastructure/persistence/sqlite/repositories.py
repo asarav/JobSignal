@@ -9,8 +9,8 @@ from typing import Any
 
 import aiosqlite
 
-from app.domain.models.enums import TaskStatus
 from app.domain.models.candidate import SearchProfile
+from app.domain.models.enums import TaskStatus
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
 

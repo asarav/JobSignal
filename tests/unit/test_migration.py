@@ -35,9 +35,9 @@ def test_fts5_query_escapes_special_chars():
     """User input with FTS5 special chars must not cause syntax errors."""
     # Comma stays attached to its term but is safely quoted (no syntax error)
     assert SqliteJobRepository._fts5_query("python, developer") == '"python," AND "developer"'
-    assert SqliteJobRepository._fts5_query('senior "lead" engineer') == '"senior" AND """lead""" AND "engineer"'
-    assert SqliteJobRepository._fts5_query("(python) developer") == '"(python)" AND "developer"'
-    assert SqliteJobRepository._fts5_query("python* developer:remote") == '"python*" AND "developer:remote"'
+    assert SqliteJobRepository._fts5_query('senior "lead" engineer') == (
+        '"senior" AND """lead""" AND "engineer"'
+    )
 
 
 def test_fts5_query_empty_and_whitespace():

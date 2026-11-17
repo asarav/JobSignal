@@ -53,7 +53,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are us
 18. Security and privacy
 19. Testing strategy
 20. Default configuration
-21. Implementation roadmap (Milestones 0–8)
+21. Implementation roadmap (Milestones 0–10)
 22. Development practices and ADR process
 23. Final acceptance criteria
 24. Initial coding-agent prompt
@@ -761,8 +761,9 @@ Discovery finds **sources**; connectors/extraction obtain **jobs**. They share o
 | `discovery.company_names` | User supplies company names; resolver tries careers-page heuristics (`/careers`, `/jobs`, homepage link scan) and common ATS tenant slugs (`{slug}` on supported ATS public endpoints), each candidate verified by a request before registration | public GETs | on |
 | `discovery.local_lists` | Import CSV/JSON/OPML of employers/career URLs | none | on |
 | `discovery.sitemap` | Reads `robots.txt` sitemap entries and job-related sitemaps for registered career sites | public GETs | on |
-| `discovery.search_engine` | Optional: queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`) | sends query text to the engine | **off**; requires explicit enable + disclosure |
-| `discovery.ats_directory` | Optional local seed lists of known public ATS tenants shipped as data files | none | on |
+| `discovery.search_engine` | Queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`); enabled by default but respects `external_plugins` feature flag | sends query text to the engine | on |
+| `discovery.ats_directory` | Local seed lists of known public ATS tenants shipped as data files | none | on |
+| `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default); registers newly discovered career sites as sources without user input | public GETs + search engine queries | on |
 
 Rules:
 
@@ -2322,29 +2323,52 @@ SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_h
 **Exit:** unknown-ATS fixture sites yield complete or partial records; every strategy contract-tested; rendered DOM obeys robots/challenge rules.
 
 ### Milestone 3 — Search and job history
+
 Search profiles, hard filters, search results with FTS; fingerprints; deduplication and identity resolution; repost detection and events; snapshots/material-change logic; historical observation views; manual merge/unmerge; "Seen/Duplicates" view.
+
 **Exit:** all repost tests (§19.6) green; no over-merging of simultaneous openings.
 
-### Milestone 4 — Resume and matching
+### Milestone 4 — Automatic discovery and daily scheduling
+
+**Deliverables:** `discovery.auto_discover` provider that runs all enabled discovery providers on a daily schedule without user input; auto-registers newly discovered career sites as `SourceConfig` rows; persistent per-source scheduler with cron/interval schedules that survives worker restarts; `discovery.auto_discover` IPC method; daily crawl trigger that runs all enabled sources and records `crawl.completed`/`crawl.failed` events; search profiles (from M3) begin receiving newly discovered jobs automatically.
+
+**Exit:** auto-discovery finds at least one new career site per run on fixture data; daily scheduler survives worker restart; no user input required to populate sources; jobs flow into search profiles with hard filters applied.
+
+### Milestone 5 — Resume and matching
+
 Resume import/versions, parsers (PDF/DOCX/TXT), sectioner and entity extraction, keyword taxonomy v1, extractors/normalizers, candidate profile and manual overrides, matching strategies + `fit.weighted_v1`, explanations, ranking UI, weights editor, Resume Manager.
+
 **Exit:** golden resume/job fixtures produce expected dimensions; unavailable dimensions handled; privacy network-denied test passes.
 
-### Milestone 5 — Applications and autofill
+### Milestone 6 — Applications and autofill
+
 Application tracking, events, company history, suppression engine and policy UI, Suppressed/Seen view, Playwright `BrowserProvider`, `FormInspector`, generic `FormFiller`, review panel, `SubmissionGuard` layers, fixture application site, safety suite.
+
 **Exit:** all §19.5 safety tests green; cooldown tests (save/dismiss do not trigger) green; **no code path capable of submitting**.
 
-### Milestone 6 — Posting intelligence
+### Milestone 7 — Posting intelligence
+
 Observation recorders, endpoint verifier, all signal providers (§9.3), `risk.heuristic_v1`, classification, assessments and history, company summaries and tiers, ranking policies (credibility), Posting Intelligence UI with evidence and "How this works".
+
 **Exit:** all §19.7 tests green; reproducibility golden test; cautious-language lint passes. Start with explainable heuristics; no ML.
 
-### Milestone 7 — Outcome feedback and analytics
+### Milestone 8 — Outcome feedback and analytics
+
 Outcomes capture (+ proposed no-response flow), response/interview/no-response analytics with intervals, calibration view and proposal flow, company-level statistics, keyword prevalence (distinct-job counting), resume coverage and missing-skills UI, trends.
+
 **Exit:** §19.8 tests green; prevalence counts verified against golden datasets with reposts/duplicates.
 
-### Milestone 8 — Hardening and distribution
-Performance tuning to §17 budgets, reliability (restart/interrupt recovery, integrity checks), backup/export/import, migration upgrade tests, error-recovery UX, installers (Windows MSI/NSIS, macOS signed dmg/notarized, Linux AppImage/deb), auto-update decision (ADR; off by default or user-initiated), documentation (user guide, "How scoring works", privacy), security review (§18.3).
-**Exit:** benchmarks meet budgets; installers smoke-tested on clean machines; security checklist signed off.
+### Milestone 9 — Posting intelligence UI refinement
 
+Ghost-job signal UI, "How this works" explanations per job, credibility badges, risk tier filtering, company hiring trend charts.
+
+**Exit:** §19.7 tests green for UI layer; all ghost-risk explanations verified against golden datasets.
+
+### Milestone 10 — Hardening and distribution
+
+Performance tuning to §17 budgets, reliability (restart/interrupt recovery, integrity checks), backup/export/import, migration upgrade tests, error-recovery UX, installers (Windows MSI/NSIS, macOS signed dmg/notarized, Linux AppImage/deb), auto-update decision (ADR; off by default or user-initiated), documentation (user guide, "How scoring works", privacy), security review (§18.3).
+
+**Exit:** benchmarks meet budgets; installers smoke-tested on clean machines; security checklist signed off.
 ---
 
 ## 22. Development practices and ADR process
