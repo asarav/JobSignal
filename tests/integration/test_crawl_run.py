@@ -59,7 +59,7 @@ class _StaticConnector:
 
         return gen()
 
-    async def fetch_job(self, ref: RawJobRef, ctx: ExecutionContext):
+    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext):
 
         return Ok(
             RawJob(
@@ -269,7 +269,7 @@ async def test_crawl_extracts_fields_from_html_through_the_pipeline():
     """
 
     class _HtmlConnector(_StaticConnector):
-        async def fetch_job(self, ref, ctx):
+        async def fetch_job(self, ref, source, ctx):
             from app.domain.models.common import Ok
 
             return Ok(

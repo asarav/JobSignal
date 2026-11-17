@@ -8,9 +8,12 @@ KNOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("greenhouse.io", "ats.greenhouse"),
     ("boards.greenhouse.io", "ats.greenhouse"),
     ("jobs.ashbyhq.com", "ats.ashby"),
+    ("ashbyhq.com", "ats.ashby"),
     ("jobs.lever.co", "ats.lever"),
+    ("lever.co", "ats.lever"),
     ("smartrecruiters.com", "ats.smartrecruiters"),
     ("myworkdayjobs.com", "ats.workday"),
+    ("myworkdaysite.com", "ats.workday"),
     ("icims.com", "ats.icims"),
 )
 

@@ -51,18 +51,18 @@ class GreenhouseConnector:
         return gen()
 
     async def fetch_job(
-        self, ref: RawJobRef, ctx: ExecutionContext
+        self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext
     ) -> Result[RawJob, PortError]:
-        if ref.source_posting_id:
-            token = _tenant_from_url(ref.url) or ""
-            if token:
-                url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs/{ref.source_posting_id}"
-                response = await ctx.http.send(HttpRequest(method="GET", url=url))
-                if isinstance(response, Ok):
-                    try:
-                        data = json.loads(response.value.body.decode("utf-8", errors="replace"))
-                    except (ValueError, json.JSONDecodeError):
-                        data = {}
+        token = _tenant_from_url(ref.url) or (source.ats_tenant_key or "")
+        if token and ref.source_posting_id:
+            detail_url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs/{ref.source_posting_id}"
+            response = await ctx.http.send(HttpRequest(method="GET", url=detail_url))
+            if isinstance(response, Ok):
+                try:
+                    data = json.loads(response.value.body.decode("utf-8", errors="replace"))
+                except ValueError:
+                    data = {}
+                if data.get("title"):
                     return Ok(
                         RawJob(
                             ref=ref,
@@ -72,6 +72,25 @@ class GreenhouseConnector:
                             payload=data,
                         )
                     )
+            # Fall back to the board list, which carries the title + location.
+            list_url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
+            response = await ctx.http.send(HttpRequest(method="GET", url=list_url))
+            if isinstance(response, Ok):
+                try:
+                    data = json.loads(response.value.body.decode("utf-8", errors="replace"))
+                except ValueError:
+                    data = {}
+                for job in data.get("jobs", []):
+                    if str(job.get("id")) == str(ref.source_posting_id):
+                        return Ok(
+                            RawJob(
+                                ref=ref,
+                                title=job.get("title"),
+                                body_text=job.get("content"),
+                                body_html=job.get("content"),
+                                payload=job,
+                            )
+                        )
         return Ok(RawJob(ref=ref, title=None, body_text=None, body_html=None, payload={}))
 
 

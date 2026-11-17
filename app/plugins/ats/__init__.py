@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING
 from app.plugins.ats.ashby import AshbyConnector
 from app.plugins.ats.career_site import CareerSiteConnector
 from app.plugins.ats.greenhouse import GreenhouseConnector
+from app.plugins.ats.icims import IcmsConnector
 from app.plugins.ats.lever import LeverConnector
+from app.plugins.ats.smartrecruiters import SmartRecruitersConnector
+from app.plugins.ats.workday import WorkdayConnector
 
 if TYPE_CHECKING:
     from app.plugins.registry import PluginDeps, PluginRegistry
@@ -22,6 +25,9 @@ CONNECTOR_CLASSES = (
     GreenhouseConnector,
     AshbyConnector,
     LeverConnector,
+    SmartRecruitersConnector,
+    WorkdayConnector,
+    IcmsConnector,
     CareerSiteConnector,
 )
 
@@ -29,6 +35,9 @@ DESCRIPTIONS = {
     "ats.greenhouse": "Greenhouse job boards (boards.greenhouse.io).",
     "ats.ashby": "Ashby job boards (jobs.ashbyhq.com).",
     "ats.lever": "Lever job boards (jobs.lever.co).",
+    "ats.smartrecruiters": "SmartRecruiters job boards (api.smartrecruiters.com).",
+    "ats.workday": "Workday job boards (myworkdayjobs.com).",
+    "ats.icims": "iCIMS career sites (icims.com).",
     "ats.career_site": "Generic career page: fetches the page for the extraction pipeline.",
 }
 

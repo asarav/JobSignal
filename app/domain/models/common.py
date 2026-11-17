@@ -22,7 +22,7 @@ class Err[E]:
 Result = Ok[T] | Err[E]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class PortError(Exception):
     code: str
     message: str

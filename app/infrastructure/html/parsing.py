@@ -31,17 +31,27 @@ class HeadingBlock:
     text: str
 
 
+@dataclass
+class LinkBlock:
+    """An anchor with its href and its text."""
+
+    href: str
+    text: str
+
+
 class _Collector(HTMLParser):
-    """Collects scripts, meta tags, headings and text blocks in one pass."""
+    """Collects scripts, meta tags, headings, links and text blocks in one pass."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.scripts: list[ScriptBlock] = []
         self.meta: dict[str, str] = {}
         self.headings: list[HeadingBlock] = []
+        self.links: list[LinkBlock] = []
         self.blocks: list[str] = []
         self._script: ScriptBlock | None = None
         self._heading: HeadingBlock | None = None
+        self._link: LinkBlock | None = None
         self._text: list[str] = []
         self._skip_depth = 0
 
@@ -58,6 +68,9 @@ class _Collector(HTMLParser):
             if name and content:
                 self.meta.setdefault(name.lower(), content)
             return
+        if tag == "a":
+            self._link = LinkBlock(href=attributes.get("href", ""), text="")
+            return
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             self._heading = HeadingBlock(level=int(tag[1]), text="")
             return
@@ -70,6 +83,12 @@ class _Collector(HTMLParser):
             if tag == "script" and self._script is not None:
                 self.scripts.append(self._script)
                 self._script = None
+            return
+        if tag == "a":
+            if self._link is not None:
+                if self._link.text.strip() or self._link.href:
+                    self.links.append(self._link)
+                self._link = None
             return
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             if self._heading is not None and self._heading.text.strip():
@@ -90,6 +109,9 @@ class _Collector(HTMLParser):
             return
         if self._heading is not None:
             self._heading.text = f"{self._heading.text} {text}".strip()
+            return
+        if self._link is not None:
+            self._link.text = f"{self._link.text} {text}".strip()
             return
         self._text.append(text)
 
@@ -124,6 +146,10 @@ def meta_tags(html: str) -> dict[str, str]:
 
 def headings(html: str) -> list[HeadingBlock]:
     return collect(html).headings
+
+
+def links(html: str) -> list[LinkBlock]:
+    return collect(html).links
 
 
 def text_blocks(html: str) -> list[str]:

@@ -21,5 +21,11 @@ class JobSourceConnector(Protocol):
     ) -> AsyncIterator[RawJobRef]: ...
 
     async def fetch_job(
-        self, ref: RawJobRef, ctx: ExecutionContext
-    ) -> Result[RawJob, PortError]: ...
+        self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext
+    ) -> Result[RawJob, PortError]:
+        """Fetch one posting.
+
+        The source is passed in because a connector often needs the board's
+        tenant (or company) to build the request URL.
+        """
+        ...

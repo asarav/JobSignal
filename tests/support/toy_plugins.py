@@ -27,7 +27,7 @@ class ToyAtsConnector:
 
         return gen()
 
-    async def fetch_job(self, ref, ctx):
+    async def fetch_job(self, ref, source, ctx):
         from app.domain.models.common import Ok
         from app.domain.models.job import RawJob
 

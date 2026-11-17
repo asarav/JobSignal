@@ -45,5 +45,5 @@ class LeverConnector:
 
         return gen()
 
-    async def fetch_job(self, ref: RawJobRef, ctx: ExecutionContext) -> Result[RawJob, PortError]:
+    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext) -> Result[RawJob, PortError]:
         return Ok(RawJob(ref=ref, title=None, body_text=None, body_html=None, payload={}))

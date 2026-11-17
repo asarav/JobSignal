@@ -184,6 +184,7 @@ async def run_crawl(
                 source.connector_id,
                 connector.fetch_job,
                 ref,
+                source,
                 ctx,
             )
             if not isinstance(result, Ok):

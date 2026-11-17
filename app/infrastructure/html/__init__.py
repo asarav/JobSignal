@@ -3,6 +3,7 @@
 from app.infrastructure.html.parsing import (
     collect,
     headings,
+    links,
     meta_tags,
     plain_text,
     scripts,
@@ -12,6 +13,7 @@ from app.infrastructure.html.parsing import (
 __all__ = [
     "collect",
     "headings",
+    "links",
     "meta_tags",
     "plain_text",
     "scripts",

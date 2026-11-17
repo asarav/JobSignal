@@ -71,7 +71,8 @@ async def test_greenhouse_fetch_job_returns_raw():
     from app.domain.models.job import RawJobRef
 
     ref = RawJobRef(source_id="s1", url="https://boards.greenhouse.io/acme/jobs/1", source_posting_id="1")
-    result = await connector.fetch_job(ref, _ctx(http))
+    source = SourceConfig(id="s1", url="https://boards.greenhouse.io/acme", kind="ats", connector_id="ats.greenhouse", ats_tenant_key="acme")
+    result = await connector.fetch_job(ref, source, _ctx(http))
     from app.domain.models.common import Ok
 
     assert isinstance(result, Ok)

@@ -38,7 +38,7 @@ class CareerSiteConnector:
 
         return gen()
 
-    async def fetch_job(self, ref: RawJobRef, ctx: ExecutionContext) -> Result[RawJob, PortError]:
+    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext) -> Result[RawJob, PortError]:
         response = await ctx.http.send(HttpRequest(method="GET", url=ref.url))
         if not isinstance(response, Ok):
             return response

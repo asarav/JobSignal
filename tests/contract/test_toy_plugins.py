@@ -48,7 +48,7 @@ async def test_toy_connector_shape():
     refs = [ref async for ref in await connector.list_jobs(source, _ctx())]
     assert len(refs) == 1
 
-    result = await connector.fetch_job(refs[0], _ctx())
+    result = await connector.fetch_job(refs[0], None, _ctx())
     assert isinstance(result, Ok)
     assert result.value.title == "Toy Job"
 
