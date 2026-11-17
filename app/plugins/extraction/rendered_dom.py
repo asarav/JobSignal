@@ -55,7 +55,7 @@ class RenderedDomStrategy(StrategyBase):
                 )
             )
         # Robots: a disallowed URL is not fetched, even for rendering.
-        if not getattr(self._browser, "robots_allowed", lambda _u: True)(target.url):
+        if not await self._browser.robots_allowed(target.url):
             return Err(
                 PortError(
                     code="robots.disallowed",

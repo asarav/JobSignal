@@ -60,9 +60,15 @@ class FakeBrowserProvider:
     id = "browser.fake"
     version = "1.0.0"
 
-    def __init__(self, form_model=None, html: str | None = None) -> None:
+    def __init__(
+        self,
+        form_model=None,
+        html: str | None = None,
+        robots_allowed: bool = True,
+    ) -> None:
         self._form_model = form_model
         self._html = html
+        self._robots_allowed = robots_allowed
 
     async def open(self, url: str, opts) -> Result:
         from app.domain.models.browser import BrowserPage
@@ -72,6 +78,9 @@ class FakeBrowserProvider:
 
     async def rendered_html(self, session_id: str) -> str | None:
         return self._html
+
+    async def robots_allowed(self, url: str) -> bool:
+        return self._robots_allowed
 
     async def close_all(self) -> None:
         return None

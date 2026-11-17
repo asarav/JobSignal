@@ -9,9 +9,48 @@ back to the static strategies.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 from app.domain.models.browser import BrowserPage, OpenOptions
 from app.domain.models.common import Err, Ok, PortError, Result
+
+
+class _RobotsRules:
+    """Minimal robots.txt parser: only ``User-agent: *`` Disallow rules."""
+
+    def __init__(self, disallowed: list[str]) -> None:
+        self._disallowed = disallowed
+
+    @classmethod
+    def allow_all(cls) -> _RobotsRules:
+        return cls([])
+
+    @classmethod
+    def parse(cls, text: str) -> _RobotsRules:
+        disallowed: list[str] = []
+        active = False
+        for raw_line in text.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "user-agent":
+                active = value == "*"
+            elif key == "disallow" and active and value:
+                disallowed.append(value)
+        return cls(disallowed)
+
+    def is_allowed(self, path: str) -> bool:
+        for rule in self._disallowed:
+            if rule == "/":
+                return False
+            if path.startswith(rule):
+                return False
+        return True
 
 
 class PlaywrightBrowserProvider:
@@ -25,6 +64,7 @@ class PlaywrightBrowserProvider:
         self._playwright: Any = None
         self._browser: Any = None
         self._pages: dict[str, Any] = {}
+        self._robots_cache: dict[str, _RobotsRules] = {}
 
     async def open(self, url: str, opts: OpenOptions) -> Result[BrowserPage, PortError]:
         try:
@@ -39,7 +79,7 @@ class PlaywrightBrowserProvider:
             )
         try:
             page = await self._browser.new_page()
-            await page.goto(url, timeout=int(opts.timeout_s * 1000), wait_until="networkidle")
+            await page.goto(url, timeout=int(opts.timeout_s * 1000), wait_until="domcontentloaded")
             session_id = str(id(page))
             self._pages[session_id] = page
             return Ok(BrowserPage(session_id=session_id, url=page.url))
@@ -51,6 +91,35 @@ class PlaywrightBrowserProvider:
                     retryable=True,
                 )
             )
+
+    async def rendered_html(self, session_id: str) -> str | None:
+        page = self._pages.get(session_id)
+        if page is None:
+            return None
+        return await page.content()
+
+    async def robots_allowed(self, url: str) -> bool:
+        parsed = urlparse(url)
+        host = parsed.netloc
+        if host in self._robots_cache:
+            return self._robots_cache[host].is_allowed(parsed.path or "/")
+        allowed = _RobotsRules.allow_all()
+        if self._browser is not None:
+            try:
+                temp_page = await self._browser.new_page()
+                try:
+                    robots_url = f"{parsed.scheme or 'https'}://{host}/robots.txt"
+                    response = await temp_page.request.get(robots_url)
+                    if response.status == 200:
+                        body = await response.text()
+                        if body:
+                            allowed = _RobotsRules.parse(body)
+                finally:
+                    await temp_page.close()
+            except Exception:  # noqa: BLE001
+                allowed = _RobotsRules.allow_all()
+        self._robots_cache[host] = allowed
+        return allowed.is_allowed(parsed.path or "/")
 
     async def close_all(self) -> None:
         for page in list(self._pages.values()):
@@ -71,13 +140,6 @@ class PlaywrightBrowserProvider:
             except Exception:  # noqa: BLE001
                 pass
             self._playwright = None
-
-    async def rendered_html(self, session_id: str) -> str | None:
-        """Return the fully rendered DOM of an open page."""
-        page = self._pages.get(session_id)
-        if page is None:
-            return None
-        return await page.content()
 
     async def _ensure_playwright(self) -> Any:
         if self._playwright is not None:

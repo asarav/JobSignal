@@ -100,6 +100,17 @@ async def test_rendered_dom_refuses_a_challenge_page():
 
 
 @pytest.mark.asyncio
+async def test_rendered_dom_respects_robots():
+    from app.plugins.extraction.rendered_dom import RenderedDomStrategy
+
+    provider = FakeBrowserProvider(html=HTML_RENDERED, robots_allowed=False)
+    strategy = RenderedDomStrategy(browser=provider)
+    result = await strategy.extract(_target(url="https://example.com/jobs/42"), _ctx())
+    assert isinstance(result, Err)
+    assert result.error.code == "robots.disallowed"
+
+
+@pytest.mark.asyncio
 async def test_rendered_dom_is_skipped_without_a_browser():
     from app.plugins.extraction.rendered_dom import RenderedDomStrategy
 
