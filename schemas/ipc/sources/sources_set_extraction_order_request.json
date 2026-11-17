@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "source_id": {
+      "type": "string"
+    },
+    "order": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_id"
+  ],
+  "title": "SourcesSetExtractionOrderRequest",
+  "type": "object"
+}

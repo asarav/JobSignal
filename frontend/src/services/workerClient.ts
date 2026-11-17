@@ -33,9 +33,11 @@ import type {
   SourcesListRequest,
   SourcesListResponse,
   SourcesSetEnabledRequest,
+  SourcesSetEnabledResponse,
+  SourcesSetExtractionOrderRequest,
+  SourcesSetExtractionOrderResponse,
   SourcesSetScheduleRequest,
   SourcesSetScheduleResponse,
-  SourcesSetEnabledResponse,
   SystemHealthRequest,
   SystemHealthResponse,
   SystemHelloRequest,
@@ -68,6 +70,7 @@ export type WorkerMethod =
   | "sources.list"
   | "sources.add"
   | "sources.set_enabled"
+  | "sources.set_extraction_order"
   | "sources.set_schedule"
   | "sources.delete"
   | "jobs.list"
@@ -165,6 +168,10 @@ export class WorkerClient {
 
   addSource(request: SourcesAddRequest): Promise<SourcesAddResponse> {
     return this.request("sources.add", { ...request });
+  }
+
+  setSourceExtractionOrder(request: SourcesSetExtractionOrderRequest): Promise<SourcesSetExtractionOrderResponse> {
+    return this.request("sources.set_extraction_order", { ...request });
   }
 
   setSourceEnabled(request: SourcesSetEnabledRequest): Promise<SourcesSetEnabledResponse> {

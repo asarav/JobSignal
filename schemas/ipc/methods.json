@@ -110,6 +110,12 @@
       "response_schema": "schemas/ipc/sources/sources_set_enabled_response.json"
     },
     {
+      "method": "sources.set_extraction_order",
+      "long_running": false,
+      "request_schema": "schemas/ipc/sources/sources_set_extraction_order_request.json",
+      "response_schema": "schemas/ipc/sources/sources_set_extraction_order_response.json"
+    },
+    {
       "method": "sources.set_schedule",
       "long_running": false,
       "request_schema": "schemas/ipc/sources/sources_set_schedule_request.json",

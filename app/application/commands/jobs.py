@@ -1,6 +1,7 @@
 """Job listing/search use cases (M1)."""
 
-from typing import cast
+from collections.abc import Mapping
+from typing import Any, cast
 
 from app.application.container import Container
 from app.application.dto import JobFilter, JobListResult, JobSearchParams, JobSummary
@@ -29,6 +30,7 @@ class JobsUseCase:
                     canonical_url=cast(str, r.get("canonical_url")) if r.get("canonical_url") is not None else None,
                     posting_status=str(r.get("posting_status") or "active"),
                     source_id=cast(str, r.get("source_id")) if r.get("source_id") is not None else None,
+                    provenance=_provenance_strategies(r),
                 )
                 for r in rows
             ],
@@ -48,8 +50,30 @@ class JobsUseCase:
                     canonical_url=cast(str, r.get("canonical_url")) if r.get("canonical_url") is not None else None,
                     posting_status=str(r.get("posting_status") or "active"),
                     source_id=cast(str, r.get("source_id")) if r.get("source_id") is not None else None,
+                    provenance=_provenance_strategies(r),
                 )
                 for r in rows
             ],
             total=len(rows),
         )
+
+
+def _provenance_strategies(row: Mapping[str, Any]) -> list[str]:
+    """The strategies that contributed to a job, in pipeline order."""
+    raw = row.get("provenance")
+    if isinstance(raw, str):
+        try:
+            import json
+
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(raw, list):
+        return []
+    seen: list[str] = []
+    for entry in raw:
+        if isinstance(entry, Mapping):
+            strategy = entry.get("strategy_id")
+            if isinstance(strategy, str) and strategy not in seen:
+                seen.append(strategy)
+    return seen

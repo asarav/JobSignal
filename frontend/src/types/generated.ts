@@ -124,6 +124,7 @@ export interface JobsListResponseJobSummary {
   canonical_url?: string | null;
   posting_status?: string;
   source_id?: string | null;
+  provenance?: string[];
 }
 
 // schemas/ipc/jobs/jobs_search_request.json
@@ -144,6 +145,7 @@ export interface JobsSearchResponseJobSummary {
   canonical_url?: string | null;
   posting_status?: string;
   source_id?: string | null;
+  provenance?: string[];
 }
 
 // schemas/ipc/plugins/plugins_configure_request.json
@@ -310,6 +312,17 @@ export interface SourcesSetEnabledRequest {
 
 // schemas/ipc/sources/sources_set_enabled_response.json
 export interface SourcesSetEnabledResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/sources/sources_set_extraction_order_request.json
+export interface SourcesSetExtractionOrderRequest {
+  source_id: string;
+  order?: string[];
+}
+
+// schemas/ipc/sources/sources_set_extraction_order_response.json
+export interface SourcesSetExtractionOrderResponse {
   ok?: boolean;
 }
 

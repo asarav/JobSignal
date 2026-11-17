@@ -63,6 +63,12 @@
             }
           ],
           "default": null
+        },
+        "provenance": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

@@ -168,6 +168,11 @@ class SourceSetEnabledParams(DTO):
     enabled: bool
 
 
+class SourceSetExtractionOrderParams(DTO):
+    source_id: str
+    order: list[str] = Field(default_factory=list)
+
+
 class SourceSetScheduleParams(DTO):
     source_id: str
     interval_s: float = Field(ge=0, le=86400)
@@ -180,6 +185,7 @@ class JobSummary(DTO):
     canonical_url: str | None = None
     posting_status: str = "active"
     source_id: str | None = None
+    provenance: list[str] = Field(default_factory=list)
 
 
 class JobListResult(DTO):

@@ -109,6 +109,11 @@ export function DiscoverRoute() {
               <li key={job.job_id} className="py-2">
                 <div className="font-medium text-slate-900">{job.title}</div>
                 <div className="text-xs text-slate-500">{job.canonical_url}</div>
+                {job.provenance && job.provenance.length > 0 ? (
+                  <div className="mt-1 text-xs text-slate-400">
+                    extracted by: {job.provenance.join(" → ")}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

@@ -80,6 +80,7 @@ def _build_dispatcher(
         SourceAddParams,
         SourceIdParams,
         SourceSetEnabledParams,
+        SourceSetExtractionOrderParams,
         SourceSetScheduleParams,
         TaskFilter,
     )
@@ -128,6 +129,11 @@ def _build_dispatcher(
         "sources.set_enabled", discovery.sources.set_enabled, params_model=SourceSetEnabledParams
     )
     dispatcher.register(
+        "sources.set_extraction_order",
+        discovery.sources.set_extraction_order,
+        params_model=SourceSetExtractionOrderParams,
+    )
+    dispatcher.register(
         "sources.set_schedule", discovery.sources.set_schedule, params_model=SourceSetScheduleParams
     )
     dispatcher.register("sources.delete", discovery.sources.delete, params_model=SourceIdParams)
@@ -153,7 +159,7 @@ class DiscoveryWiring:
 
     async def sync_scheduler(self) -> None:
         """(Re)schedule every enabled source that declares an interval."""
-        enabled = await self.registry.list(enabled_only=True)
+        enabled = await self.registry.list_sources(enabled_only=True)
         self.scheduler.schedule_sources(
             list(enabled), lambda source: self.run_source(source.id)
         )

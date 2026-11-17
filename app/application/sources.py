@@ -94,7 +94,7 @@ class SourceRegistry:
             await uow.commit()
         return source
 
-    async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
+    async def list_sources(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
         async with self._uow_factory() as uow:
             return await uow.sources.list(enabled_only=enabled_only)
 
@@ -105,6 +105,16 @@ class SourceRegistry:
     async def set_enabled(self, source_id: str, enabled: bool) -> None:
         async with self._uow_factory() as uow:
             await uow.sources.set_enabled(source_id, enabled)
+            await uow.commit()
+
+    async def set_extraction_order(self, source_id: str, order: list[str]) -> None:
+        async with self._uow_factory() as uow:
+            source = await uow.sources.get(source_id)
+            if source is None:
+                return
+            from dataclasses import replace
+
+            await uow.sources.save(replace(source, extraction_order=tuple(order)))
             await uow.commit()
 
     async def set_schedule(self, source_id: str, interval_s: float) -> None:

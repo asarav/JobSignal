@@ -9,6 +9,7 @@ from app.application.dto import (
     SourceInfo,
     SourceListResult,
     SourceSetEnabledParams,
+    SourceSetExtractionOrderParams,
     SourceSetScheduleParams,
 )
 from app.application.sources import SourceRegistry
@@ -21,7 +22,7 @@ class SourcesUseCase:
         self._registry = registry
 
     async def list(self) -> SourceListResult:
-        sources = await self._registry.list()
+        sources = await self._registry.list_sources()
         return SourceListResult(
             sources=[_to_info(s) for s in sources]
         )
@@ -37,6 +38,9 @@ class SourcesUseCase:
 
     async def set_enabled(self, params: SourceSetEnabledParams) -> None:
         await self._registry.set_enabled(params.source_id, params.enabled)
+
+    async def set_extraction_order(self, params: SourceSetExtractionOrderParams) -> None:
+        await self._registry.set_extraction_order(params.source_id, params.order)
 
     async def set_schedule(self, params: SourceSetScheduleParams) -> None:
         """Change how often the source is crawled (0 disables scheduling)."""

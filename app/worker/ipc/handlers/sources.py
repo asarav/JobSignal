@@ -8,6 +8,7 @@ from app.application.dto import (
     SourceAddParams,
     SourceIdParams,
     SourceSetEnabledParams,
+    SourceSetExtractionOrderParams,
     SourceSetScheduleParams,
 )
 
@@ -24,6 +25,10 @@ class SourcesHandlers:
 
     async def set_enabled(self, params: SourceSetEnabledParams) -> dict:
         await self._sources.set_enabled(params)
+        return {"ok": True}
+
+    async def set_extraction_order(self, params: SourceSetExtractionOrderParams) -> dict:
+        await self._sources.set_extraction_order(params)
         return {"ok": True}
 
     async def set_schedule(self, params: SourceSetScheduleParams) -> dict:
