@@ -9,6 +9,7 @@ export function DiscoverRoute() {
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lastRun, setLastRun] = useState<Record<string, unknown> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -32,7 +33,7 @@ export function DiscoverRoute() {
     setBusy(true);
     setError(null);
     try {
-      await workerClient.addSource({ url: url.trim() });
+      await workerClient.addSource({ url: url.trim(), interval_s: 3600 });
       setUrl("");
       await load();
     } catch (exc) {
@@ -45,8 +46,10 @@ export function DiscoverRoute() {
   const runDiscovery = async (sourceId: string) => {
     setBusy(true);
     setError(null);
+    setLastRun(null);
     try {
-      await workerClient.runDiscovery({ source_id: sourceId });
+      const result = await workerClient.runDiscovery({ source_id: sourceId });
+      setLastRun(result as Record<string, unknown>);
       await load();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -78,7 +81,7 @@ export function DiscoverRoute() {
             disabled={busy}
             className="rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
-            Add source
+            {busy ? "Adding..." : "Add source"}
           </button>
         </div>
         <ul className="mt-3 space-y-2">
@@ -91,13 +94,21 @@ export function DiscoverRoute() {
                 disabled={busy}
                 className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
-                Run
+                {busy ? "Running..." : "Run"}
               </button>
             </li>
           ))}
           {sources.length === 0 ? <li className="text-sm text-slate-500">No sources yet.</li> : null}
         </ul>
       </section>
+
+      {lastRun ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          Last run: {String(lastRun.discovered ?? 0)} discovered, {String(lastRun.new ?? 0)} new,
+          {" "}{String(lastRun.updated ?? 0)} updated, {String(lastRun.skipped ?? 0)} skipped,
+          {" "}{String(lastRun.removed ?? 0)} removed, {String(lastRun.errors ?? 0)} errors.
+        </div>
+      ) : null}
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Jobs ({jobs.length})</h2>
