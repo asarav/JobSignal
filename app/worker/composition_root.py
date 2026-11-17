@@ -12,6 +12,7 @@ from typing import Any
 
 from app.application.config import AppConfig
 from app.application.container import Container
+from app.application.extraction import ExtractionPipeline
 from app.application.orchestration.task_runner import TaskRunner
 from app.domain.ports.logging import StructuredLogger
 from app.infrastructure.clock import SystemClock
@@ -38,6 +39,19 @@ class _LoggingEventPublisher:
         task_id: str | None = None,
     ) -> None:
         self._logger.info("event.published", topic=topic, task_id=task_id, payload=payload)
+
+
+def build_extraction_pipeline(registry: PluginRegistry) -> ExtractionPipeline:
+    """Build the extraction pipeline from the registered extraction plugins.
+
+    Smoke-test strategies are registered but never run, so they are skipped.
+    """
+    strategies = [
+        entry.instance
+        for entry in registry.list_by_kind("extraction")
+        if not getattr(entry.instance, "excluded_from_pipeline", False)
+    ]
+    return ExtractionPipeline(strategies)
 
 
 def build_container(
@@ -103,6 +117,7 @@ def build_container(
         schema_version=overrides.get("schema_version", 1),
         app_version=cfg.app_version,
         protocol_version=cfg.protocol_version,
+        extraction_pipeline=build_extraction_pipeline(registry),
     )
     runner = TaskRunner(base)
     return replace(base, task_runner=runner)

@@ -246,6 +246,51 @@ async def test_same_posting_under_a_new_url_creates_an_alias():
 
 
 @pytest.mark.asyncio
+async def test_crawl_extracts_fields_from_html_through_the_pipeline():
+    from app.application.extraction import ExtractionPipeline
+    from app.plugins.extraction import STRATEGY_CLASSES
+
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://careers.example.com/jobs/1", kind="career_site",
+        connector_id="ats.career_site",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    html = """
+    <html><head><script type="application/ld+json">
+    {"@type":"JobPosting","title":"Reliability Engineer",
+     "description":"Keep the platform healthy.",
+     "hiringOrganization":{"name":"Example Co"}}
+    </script></head><body></body></html>
+    """
+
+    class _HtmlConnector(_StaticConnector):
+        async def fetch_job(self, ref, ctx):
+            from app.domain.models.common import Ok
+
+            return Ok(
+                RawJob(ref=ref, title=None, body_text=None, body_html=html, payload={})
+            )
+
+    pipeline = ExtractionPipeline([cls() for cls in STRATEGY_CLASSES if cls.id != "extract.demo"])
+    stats = await run_crawl(
+        source=source, connector=_HtmlConnector("ignored", "ignored"), uow_factory=factory,
+        http=PolicyHttpClient(transport=FakeHttpClient()), clock_now=clock.now, pipeline=pipeline,
+    )
+
+    assert stats["new"] == 1
+    async with factory() as uow:
+        jobs = await uow.jobs.list()
+        assert len(jobs) == 1
+        assert jobs[0]["title"] == "Reliability Engineer"
+        assert "Keep the platform healthy." in jobs[0]["description_text"]
+
+
+@pytest.mark.asyncio
 async def test_failing_source_is_isolated():
     factory = InMemoryUnitOfWorkFactory()
     http = FakeHttpClient(

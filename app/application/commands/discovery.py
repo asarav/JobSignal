@@ -42,6 +42,8 @@ class DiscoveryUseCase:
             http=self._http,
             clock_now=self._container.clock.now,
             events=self._container.events,
+            pipeline=self._container.extraction_pipeline,
+            invoker=self._registry.invoker,
         )
 
     async def _registry_get(self, source_id: str) -> SourceConfig | None:

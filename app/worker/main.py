@@ -13,7 +13,7 @@ import contextlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from app.application.commands.diagnostics import FetchUrlUseCase
 from app.application.commands.discovery import DiscoveryUseCase
@@ -33,9 +33,7 @@ from app.infrastructure.http import PolicyHttpClient
 from app.infrastructure.ids import UlidGenerator
 from app.infrastructure.persistence.sqlite.migrator import migrate
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
-from app.plugins.ats.ashby import AshbyConnector
-from app.plugins.ats.greenhouse import GreenhouseConnector
-from app.plugins.ats.lever import LeverConnector
+from app.plugins.registry import PluginRegistry
 from app.worker.composition_root import build_container
 from app.worker.ipc.dispatcher import Dispatcher, validate_request
 from app.worker.ipc.envelope import PROTOCOL_VERSION, error_envelope, event_envelope, ok_envelope
@@ -165,9 +163,12 @@ class DiscoveryWiring:
 
 
 def _build_discovery(container: Any) -> DiscoveryWiring:
-    connectors = [GreenhouseConnector(), AshbyConnector(), LeverConnector()]
+    # Connectors are plugins: they come from the registry, which also provides
+    # the isolation shim used to call them.
+    plugin_registry = cast(PluginRegistry, container.registry)
+    connectors = [entry.instance for entry in plugin_registry.list_by_kind("connector")]
     policy_http = PolicyHttpClient(transport=container.http)
-    registry = SourceRegistry(container.uow_factory, connectors)
+    registry = SourceRegistry(container.uow_factory, connectors, invoker=plugin_registry)
     discovery_use_case = DiscoveryUseCase(container, registry, policy_http)
     return DiscoveryWiring(
         registry=registry,

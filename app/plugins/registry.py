@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -131,6 +131,17 @@ class PluginRegistry:
             logger=self._logger,
             on_change=on_change,
         )
+
+    async def invoke(
+        self, plugin_id: str, fn: Callable[..., Awaitable[Any]], *args: Any
+    ) -> Any:
+        """Call a plugin through its isolation shim.
+
+        The shim applies the timeout, captures exceptions and feeds the
+        circuit breaker, so a hanging or failing plugin is contained.
+        """
+        shim = self.shim_for(plugin_id)
+        return await shim.call(fn, *args)
 
     def capabilities(self, plugin_id: str | None = None) -> dict[str, frozenset[str]]:
         if plugin_id is not None:

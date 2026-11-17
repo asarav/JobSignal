@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 # (module path, register function name) pairs.  Keep this list flat.
 BUILTIN_PLUGINS: list[tuple[str, str]] = [
     ("app.plugins.extraction", "register"),
+    ("app.plugins.ats", "register"),
 ]
 
 

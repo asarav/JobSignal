@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -51,4 +51,16 @@ class PluginRegistryPort(Protocol):
     def reset_circuit(self, plugin_id: str) -> None: ...
 
     def capabilities(self, plugin_id: str | None = None) -> dict[str, frozenset[str]]: ...
+
+
+class PluginInvoker(Protocol):
+    """Calls a plugin through its isolation shim.
+
+    The shim applies the timeout, captures exceptions and feeds the circuit
+    breaker, so a hanging or failing plugin cannot take the worker down.
+    """
+
+    async def invoke(
+        self, plugin_id: str, fn: Callable[..., Awaitable[Any]], *args: Any
+    ) -> Any: ...
 

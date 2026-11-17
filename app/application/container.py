@@ -46,4 +46,7 @@ class Container:
     app_version: str = "0.0.0"
     protocol_version: int = 1
     task_runner: TaskRunner | None = None
+    #: The extraction pipeline (M2). Built by the composition root from the
+    #: registered ``extraction`` plugins.
+    extraction_pipeline: Any = None
     extra: dict[str, Any] = field(default_factory=dict)

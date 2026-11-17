@@ -19,10 +19,11 @@ import asyncio
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from app.domain.models.common import Ok
 from app.domain.models.context import CancellationToken, ExecutionContext
+from app.domain.models.extraction import ExtractionTarget, MergedExtraction
 from app.domain.models.source import SourceConfig
 from app.domain.ports.connectors import JobSourceConnector
 from app.domain.ports.http import HttpClient
@@ -37,19 +38,32 @@ from app.domain.services.normalizer import (
 
 DEFAULT_CRAWL_INTERVAL_S = 3600.0
 
+#: Connector used when the classifier cannot recognise an ATS.
+FALLBACK_CONNECTOR_ID = "ats.career_site"
+
 
 class SourceRegistry:
     """Stores sources and maps them to the connector that can read them."""
 
     def __init__(
-        self, uow_factory: UnitOfWorkFactory, connectors: Sequence[JobSourceConnector]
+        self,
+        uow_factory: UnitOfWorkFactory,
+        connectors: Sequence[JobSourceConnector],
+        invoker: Any = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._connectors = {c.id: c for c in connectors}
+        #: Optional isolation shim used to call connectors safely.
+        self._invoker = invoker
+
+    @property
+    def invoker(self) -> Any:
+        return self._invoker
 
     def connector_for(self, connector_id: str | None) -> JobSourceConnector | None:
+        """The connector for an id, or the generic career-site fallback."""
         if connector_id is None:
-            return None
+            return self._connectors.get(FALLBACK_CONNECTOR_ID)
         return self._connectors.get(connector_id)
 
     def classify(self, url: str) -> str | None:
@@ -65,11 +79,12 @@ class SourceRegistry:
         interval_s: float = DEFAULT_CRAWL_INTERVAL_S,
     ) -> SourceConfig:
         if connector_id is None:
-            connector_id = self.classify(url)
+            # Unknown ATS: fall back to the generic career-site connector.
+            connector_id = self.classify(url) or FALLBACK_CONNECTOR_ID
         source = SourceConfig(
             id=f"src_{uuid.uuid4().hex[:12]}",
             url=url,
-            kind="ats" if connector_id else "career_site",
+            kind="ats" if connector_id != FALLBACK_CONNECTOR_ID else "career_site",
             company_id=company_id,
             connector_id=connector_id,
             schedule={"interval_s": interval_s},
@@ -123,6 +138,8 @@ async def run_crawl(
     http: HttpClient,
     clock_now: Any,
     events: Any = None,
+    pipeline: Any = None,
+    invoker: Any = None,
 ) -> dict[str, object]:
     """Run one source crawl and return its stats."""
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -155,20 +172,31 @@ async def run_crawl(
         config={},
     )
 
-    company_name = company_name_for_source(source)
-    company_id = company_id_for(company_name)
+    default_company = company_name_for_source(source)
     seen_ids: list[str] = []
 
     try:
-        async for ref in await connector.list_jobs(source, ctx):
+        refs = await _collect_refs(connector, source, ctx, invoker, source.connector_id)
+        for ref in refs:
             stats["discovered"] = int(str(stats["discovered"])) + 1
-            result = await connector.fetch_job(ref, ctx)
+            result = await _call_connector(
+                invoker,
+                source.connector_id,
+                connector.fetch_job,
+                ref,
+                ctx,
+            )
             if not isinstance(result, Ok):
                 stats["errors"] = int(str(stats["errors"])) + 1
                 continue
 
+            raw = result.value
+            merged = await _extract(raw, source, ctx, pipeline)
+            # The page may name the company more precisely than the board URL.
+            company_name = str(merged.value("company_name") or default_company)
+            company_id = company_id_for(company_name)
             job = normalize_job(
-                result.value, source, company_name=company_name, now=clock_now()
+                merged.raw, source, company_name=company_name, now=clock_now()
             )
             content_hash = content_hash_for(job.title, job.description_text)
             job_id, outcome = await _persist_job(
@@ -294,6 +322,60 @@ async def _persist_job(
         )
         await uow.commit()
         return job_id, ("new" if is_new else "updated")
+
+
+async def _collect_refs(
+    connector: JobSourceConnector,
+    source: SourceConfig,
+    ctx: ExecutionContext,
+    invoker: Any,
+    connector_id: str | None,
+) -> list[Any]:
+    """List the postings of a source, through the isolation shim when possible.
+
+    The listing is materialized first so the shim's timeout covers the whole
+    operation, not only the creation of the iterator.
+    """
+
+    async def collect() -> list[Any]:
+        return [ref async for ref in await connector.list_jobs(source, ctx)]
+
+    return list(await _call_connector(invoker, connector_id, collect))
+
+
+async def _call_connector(
+    invoker: Any,
+    connector_id: str | None,
+    fn: Any,
+    *args: Any,
+) -> Any:
+    """Call a connector directly, or through the plugin isolation shim."""
+    if invoker is None or connector_id is None:
+        return await fn(*args)
+    return await invoker.invoke(connector_id, fn, *args)
+
+
+async def _extract(
+    raw: Any,
+    source: SourceConfig,
+    ctx: ExecutionContext,
+    pipeline: Any,
+) -> MergedExtraction:
+    """Run the extraction pipeline over the material a connector returned.
+
+    Without a pipeline the raw posting is used as-is, which keeps the crawler
+    usable in tests and in headless setups.
+    """
+    if pipeline is None:
+        return MergedExtraction(raw=raw, fields={}, strategies_used=())
+    target = ExtractionTarget(
+        url=raw.ref.url,
+        source_id=source.id,
+        html=raw.body_html,
+        json_payload=dict(raw.payload) if raw.payload else None,
+    )
+    merged = await pipeline.extract(target, ctx, order=source.extraction_order)
+    return cast(MergedExtraction, merged)
 
 
 class _ClockAdapter:
