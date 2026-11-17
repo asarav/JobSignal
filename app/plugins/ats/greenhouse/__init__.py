@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 from app.domain.models.common import Ok, PortError, Result
 from app.domain.models.context import ExecutionContext
@@ -95,17 +96,23 @@ class GreenhouseConnector:
 
 
 def _tenant_from_url(url: str) -> str:
-    parts = url.rstrip("/").split("/")
-    # https://boards.greenhouse.io/<token>/jobs/<id>
-    if "boards.greenhouse.io" in url:
-        try:
-            idx = parts.index("boards.greenhouse.io")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-        except ValueError:
-            pass
-    # https://boards-api.greenhouse.io/v1/boards/<token>/jobs/<id>
-    for i, part in enumerate(parts):
-        if part == "boards" and i + 1 < len(parts):
-            return parts[i + 1]
-    return ""
+    """Extract the board token from a Greenhouse URL.
+
+    Greenhouse boards live under several hosts (``boards.greenhouse.io``,
+    ``job-boards.greenhouse.io`` and ``boards-api.greenhouse.io``); the token
+    is always the first path segment after the host.
+    """
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if "greenhouse.io" not in host:
+        return ""
+    segments = [part for part in parsed.path.split("/") if part]
+    if not segments:
+        return ""
+    # boards-api.greenhouse.io/v1/boards/<token>/...
+    if "boards" in segments:
+        idx = segments.index("boards")
+        if idx + 1 < len(segments):
+            return segments[idx + 1]
+    # boards.greenhouse.io/<token>/... or job-boards.greenhouse.io/<token>/...
+    return segments[0]

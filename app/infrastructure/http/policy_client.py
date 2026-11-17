@@ -20,7 +20,7 @@ from app.domain.ports.http import HttpClient
 
 @dataclass
 class RateLimiter:
-    min_interval_s: float = 1.0
+    min_interval_s: float = 0.1
     _last: dict[str, float] = field(default_factory=dict)
 
     async def acquire(self, host: str) -> None:
