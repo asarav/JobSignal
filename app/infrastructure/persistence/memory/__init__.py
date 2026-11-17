@@ -4,6 +4,7 @@ import copy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.domain.models.candidate import SearchProfile
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
 
@@ -323,6 +324,7 @@ class InMemoryUnitOfWork:
         crawl_runs=None,
         snapshots=None,
         aliases=None,
+        search_profiles=None,
     ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
@@ -335,6 +337,7 @@ class InMemoryUnitOfWork:
         self._crawl_runs_store = crawl_runs if crawl_runs is not None else {}
         self._snapshots_store = snapshots if snapshots is not None else []
         self._aliases_store = aliases if aliases is not None else {}
+        self._search_profiles_store = search_profiles if search_profiles is not None else {}
         self.jobs = InMemoryJobRepository(self._jobs_store)
         self.companies = InMemoryCompanyRepository(self._companies_store)
         self.applications = _Unimplemented()
@@ -349,6 +352,7 @@ class InMemoryUnitOfWork:
         self.crawl_runs = InMemoryCrawlRunRepository(self._crawl_runs_store)
         self.snapshots = InMemorySnapshotRepository(self._snapshots_store)
         self.aliases = InMemoryAliasRepository(self._aliases_store)
+        self.search_profiles = InMemorySearchProfileRepository(self._search_profiles_store)
         self.committed = False
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
@@ -375,6 +379,7 @@ class InMemoryUnitOfWorkFactory:
         self.crawl_runs: dict[str, dict[str, object]] = {}
         self.snapshots: list[dict[str, object]] = []
         self.aliases: dict[str, dict[str, object]] = {}
+        self.search_profiles: dict[str, SearchProfile] = {}
 
     def __call__(self) -> InMemoryUnitOfWork:
         return InMemoryUnitOfWork(
@@ -389,4 +394,25 @@ class InMemoryUnitOfWorkFactory:
             self.crawl_runs,
             self.snapshots,
             self.aliases,
+            self.search_profiles,
         )
+
+
+class InMemorySearchProfileRepository:
+    def __init__(self, store: dict[str, SearchProfile]) -> None:
+        self._store = store
+
+    async def add(self, profile: SearchProfile) -> None:
+        self._store[profile.id] = profile
+
+    async def get(self, profile_id: str) -> SearchProfile | None:
+        return self._store.get(profile_id)
+
+    async def list(self) -> Sequence[SearchProfile]:
+        return sorted(self._store.values(), key=lambda p: p.name)
+
+    async def save(self, profile: SearchProfile) -> None:
+        self._store[profile.id] = profile
+
+    async def delete(self, profile_id: str) -> None:
+        self._store.pop(profile_id, None)

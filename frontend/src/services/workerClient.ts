@@ -22,6 +22,11 @@ import type {
   PluginsListRequest,
   PluginsListResponse,
   PluginsResetCircuitRequest,
+  SearchProfilesDeleteRequest,
+  SearchProfilesListRequest,
+  SearchProfilesListResponse,
+  SearchProfilesSaveRequest,
+  SearchProfilesSaveResponse,
   SettingsGetRequest,
   SettingsGetResponse,
   SettingsUpdateRequest,
@@ -76,6 +81,9 @@ export type WorkerMethod =
   | "jobs.list"
   | "jobs.search"
   | "crawl_runs.list"
+  | "search_profiles.list"
+  | "search_profiles.save"
+  | "search_profiles.delete"
   | "discovery.run";
 
 export class WorkerError extends Error {
@@ -196,6 +204,18 @@ export class WorkerClient {
 
   listCrawlRuns(request: CrawlRunsListRequest = {}): Promise<CrawlRunsListResponse> {
     return this.request("crawl_runs.list", { ...request });
+  }
+
+  listSearchProfiles(request: SearchProfilesListRequest = {}): Promise<SearchProfilesListResponse> {
+    return this.request("search_profiles.list", { ...request });
+  }
+
+  saveSearchProfile(request: SearchProfilesSaveRequest): Promise<SearchProfilesSaveResponse> {
+    return this.request("search_profiles.save", { ...request });
+  }
+
+  deleteSearchProfile(request: SearchProfilesDeleteRequest): Promise<{ ok: boolean }> {
+    return this.request("search_profiles.delete", { ...request });
   }
 
   runDiscovery(request: DiscoveryRunRequest): Promise<DiscoveryRunResponse> {

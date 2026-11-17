@@ -16,6 +16,13 @@ def test_0001_has_checksum():
     assert migration_checksum(target)
 
 
+def test_0003_has_checksum():
+    files = list_migration_files()
+    assert any(f.name == "0003_search.sql" for f in files)
+    target = next(f for f in files if f.name == "0003_search.sql")
+    assert migration_checksum(target)
+
+
 def test_migrate_creates_db(tmp_path):
     db = tmp_path / "test.sqlite"
     version = asyncio.run(migrate(db))

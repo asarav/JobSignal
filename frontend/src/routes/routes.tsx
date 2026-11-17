@@ -4,6 +4,7 @@ import { DiagnosticsRoute } from "../features/diagnostics/DiagnosticsRoute";
 import { DiscoverRoute } from "../features/discover/DiscoverRoute";
 import { HomeRoute } from "../features/home/HomeRoute";
 import { PlaceholderRoute } from "../features/placeholder/PlaceholderRoute";
+import { SearchRoute } from "../features/search/SearchRoute";
 import { SettingsRoute } from "../features/settings/SettingsRoute";
 
 export interface NavigationItem {
@@ -31,7 +32,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<HomeRoute />} />
       <Route path="/discover" element={<DiscoverRoute />} />
-      <Route path="/search-profiles" element={<PlaceholderRoute screen="searchProfiles" />} />
+      <Route path="/search-profiles" element={<SearchRoute />} />
       <Route path="/saved" element={<PlaceholderRoute screen="saved" />} />
       <Route path="/applications" element={<PlaceholderRoute screen="applications" />} />
       <Route path="/companies" element={<PlaceholderRoute screen="companies" />} />

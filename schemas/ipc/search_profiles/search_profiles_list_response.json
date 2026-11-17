@@ -1,0 +1,61 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profiles": {
+      "items": {
+        "$ref": "#/$defs/SearchProfilesListResponseSearchProfileInfo"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "profiles"
+  ],
+  "title": "SearchProfilesListResponse",
+  "type": "object",
+  "$defs": {
+    "SearchProfilesListResponseSearchProfileInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "candidate_profile_id": {
+          "default": "",
+          "type": "string"
+        },
+        "scoring_config_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ranking_policy": {
+          "default": "deprioritize",
+          "type": "string"
+        },
+        "hard_filters": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "preferences": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile_id",
+        "name"
+      ],
+      "type": "object"
+    }
+  }
+}

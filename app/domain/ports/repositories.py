@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.models.candidate import SearchProfile
 from app.domain.models.job import JobView, NormalizedJob
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
@@ -21,7 +22,17 @@ class SettingsRepository(Protocol):
     ) -> None: ...
 
 
-class TaskRepository(Protocol):
+class SearchProfileRepository(Protocol):
+    async def add(self, profile: SearchProfile) -> None: ...
+
+    async def get(self, profile_id: str) -> SearchProfile | None: ...
+
+    async def list(self) -> Sequence[SearchProfile]: ...
+
+    async def save(self, profile: SearchProfile) -> None: ...
+
+    async def delete(self, profile_id: str) -> None: ...
+
     async def add(self, task: BackgroundTask) -> None: ...
 
     async def get(self, task_id: str) -> BackgroundTask | None: ...
@@ -222,6 +233,7 @@ class UnitOfWork(Protocol):
     crawl_runs: CrawlRunRepository
     snapshots: SnapshotRepository
     aliases: AliasRepository
+    search_profiles: SearchProfileRepository
 
     async def __aenter__(self) -> UnitOfWork: ...
 

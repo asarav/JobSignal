@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from app.domain.models.candidate import SearchProfile
 from app.domain.models.tasks import BackgroundTask, TaskStatus
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
@@ -64,3 +65,96 @@ async def test_task_cancel_noop_unknown(kind, tmp_path):
         await uow.tasks.get("does-not-exist")  # returns None, no error
         listed = await uow.tasks.list()
         assert listed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_search_profile_add_get_list(kind, tmp_path):
+    factory = await _make_uow_factory(kind, tmp_path)
+    profile = SearchProfile(
+        id="sp_1",
+        name="Python Remote",
+        candidate_profile_id="cp_1",
+        scoring_config_id="sc_1",
+        ranking_policy="deprioritize",
+        hard_filters={"workplace_types": ["remote"]},
+        preferences={"key": "value"},
+    )
+    async with factory() as uow:
+        await uow.search_profiles.add(profile)
+        await uow.commit()
+
+    async with factory() as uow:
+        got = await uow.search_profiles.get("sp_1")
+        assert got is not None
+        assert got.name == "Python Remote"
+        assert got.hard_filters == {"workplace_types": ["remote"]}
+        assert got.preferences == {"key": "value"}
+
+        listed = await uow.search_profiles.list()
+        assert len(listed) == 1
+        assert listed[0].name == "Python Remote"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_search_profile_save_update(kind, tmp_path):
+    factory = await _make_uow_factory(kind, tmp_path)
+    profile = SearchProfile(
+        id="sp_1",
+        name="Original",
+        candidate_profile_id="",
+        hard_filters={},
+        preferences={},
+    )
+    async with factory() as uow:
+        await uow.search_profiles.add(profile)
+        await uow.commit()
+
+    async with factory() as uow:
+        got = await uow.search_profiles.get("sp_1")
+        assert got is not None
+        got = SearchProfile(
+            id=got.id,
+            name="Updated",
+            candidate_profile_id=got.candidate_profile_id,
+            scoring_config_id=got.scoring_config_id,
+            ranking_policy=got.ranking_policy,
+            hard_filters={"employment_types": ["contract"]},
+            preferences=got.preferences,
+        )
+        await uow.search_profiles.save(got)
+        await uow.commit()
+
+    async with factory() as uow:
+        got = await uow.search_profiles.get("sp_1")
+        assert got is not None
+        assert got.name == "Updated"
+        assert got.hard_filters == {"employment_types": ["contract"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_search_profile_delete(kind, tmp_path):
+    factory = await _make_uow_factory(kind, tmp_path)
+    profile = SearchProfile(id="sp_1", name="To Delete", candidate_profile_id="")
+    async with factory() as uow:
+        await uow.search_profiles.add(profile)
+        await uow.commit()
+
+    async with factory() as uow:
+        await uow.search_profiles.delete("sp_1")
+        await uow.commit()
+        got = await uow.search_profiles.get("sp_1")
+        assert got is None
+        listed = await uow.search_profiles.list()
+        assert listed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_search_profile_get_unknown(kind, tmp_path):
+    factory = await _make_uow_factory(kind, tmp_path)
+    async with factory() as uow:
+        got = await uow.search_profiles.get("does-not-exist")
+        assert got is None

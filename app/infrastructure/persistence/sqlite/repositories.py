@@ -10,6 +10,7 @@ from typing import Any
 import aiosqlite
 
 from app.domain.models.enums import TaskStatus
+from app.domain.models.candidate import SearchProfile
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
 
@@ -735,3 +736,78 @@ class SqliteAliasRepository:
             "SELECT * FROM job_aliases WHERE job_id = ? ORDER BY created_at DESC", (job_id,)
         )
         return [dict(r) for r in await cur.fetchall()]
+
+
+class SqliteSearchProfileRepository:
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    def _ts(self):
+        return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _row(self, row):
+        self._conn.row_factory = aiosqlite.Row
+        return SearchProfile(
+            id=row["id"],
+            name=row["name"],
+            candidate_profile_id=row["candidate_profile_id"] or "",
+            scoring_config_id=row["scoring_config_id"],
+            ranking_policy=row["ranking_policy"],
+            hard_filters=json.loads(row["hard_filters_json"] or "{}"),
+            preferences=json.loads(row["preferences_json"] or "{}"),
+        )
+
+    async def add(self, profile):
+        now = self._ts()
+        await self._conn.execute(
+            "INSERT INTO search_profiles(id, name, candidate_profile_id, scoring_config_id, "
+            "ranking_policy, hard_filters_json, preferences_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                profile.id,
+                profile.name,
+                profile.candidate_profile_id,
+                profile.scoring_config_id,
+                profile.ranking_policy,
+                json.dumps(dict(profile.hard_filters), sort_keys=True),
+                json.dumps(dict(profile.preferences), sort_keys=True),
+                now,
+                now,
+            ),
+        )
+
+    async def get(self, profile_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM search_profiles WHERE id = ?", (profile_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return self._row(row)
+
+    async def list(self):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute("SELECT * FROM search_profiles ORDER BY name")
+        rows = await cur.fetchall()
+        return [self._row(r) for r in rows]
+
+    async def save(self, profile):
+        now = self._ts()
+        await self._conn.execute(
+            "UPDATE search_profiles SET name=?, candidate_profile_id=?, scoring_config_id=?, "
+            "ranking_policy=?, hard_filters_json=?, preferences_json=?, updated_at=? "
+            "WHERE id=?",
+            (
+                profile.name,
+                profile.candidate_profile_id,
+                profile.scoring_config_id,
+                profile.ranking_policy,
+                json.dumps(dict(profile.hard_filters), sort_keys=True),
+                json.dumps(dict(profile.preferences), sort_keys=True),
+                now,
+                profile.id,
+            ),
+        )
+
+    async def delete(self, profile_id):
+        await self._conn.execute("DELETE FROM search_profiles WHERE id = ?", (profile_id,))

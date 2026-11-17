@@ -150,6 +150,24 @@
       "long_running": false,
       "request_schema": "schemas/ipc/discovery/discovery_run_request.json",
       "response_schema": "schemas/ipc/discovery/discovery_run_response.json"
+    },
+    {
+      "method": "search_profiles.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/search_profiles/search_profiles_list_request.json",
+      "response_schema": "schemas/ipc/search_profiles/search_profiles_list_response.json"
+    },
+    {
+      "method": "search_profiles.save",
+      "long_running": false,
+      "request_schema": "schemas/ipc/search_profiles/search_profiles_save_request.json",
+      "response_schema": "schemas/ipc/search_profiles/search_profiles_save_response.json"
+    },
+    {
+      "method": "search_profiles.delete",
+      "long_running": false,
+      "request_schema": "schemas/ipc/search_profiles/search_profiles_delete_request.json",
+      "response_schema": "schemas/ipc/search_profiles/search_profiles_delete_response.json"
     }
   ],
   "forbidden_prefixes": [
@@ -158,7 +176,6 @@
     "posting_intelligence.",
     "resume.",
     "keywords.",
-    "browser.",
-    "search_profiles."
+    "browser."
   ]
 }

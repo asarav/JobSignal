@@ -108,6 +108,10 @@ export interface WorkerReadyEventWorkerReadyData {
 export interface JobsListRequest {
   source_id?: string | null;
   company_id?: string | null;
+  query?: string | null;
+  filters?: {
+    [k: string]: unknown;
+  };
   limit?: number;
   offset?: number;
 }
@@ -224,6 +228,67 @@ export interface PluginsResetCircuitRequest {
 // schemas/ipc/plugins/plugins_reset_circuit_response.json
 export interface PluginsResetCircuitResponse {
   ok?: boolean;
+}
+
+// schemas/ipc/search_profiles/search_profiles_delete_request.json
+export interface SearchProfilesDeleteRequest {
+  profile_id: string;
+}
+
+// schemas/ipc/search_profiles/search_profiles_delete_response.json
+export interface SearchProfilesDeleteResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/search_profiles/search_profiles_list_request.json
+export interface SearchProfilesListRequest {}
+
+// schemas/ipc/search_profiles/search_profiles_list_response.json
+export interface SearchProfilesListResponse {
+  profiles: SearchProfilesListResponseSearchProfileInfo[];
+}
+export interface SearchProfilesListResponseSearchProfileInfo {
+  profile_id: string;
+  name: string;
+  candidate_profile_id?: string;
+  scoring_config_id?: string | null;
+  ranking_policy?: string;
+  hard_filters?: {
+    [k: string]: unknown;
+  };
+  preferences?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/search_profiles/search_profiles_save_request.json
+export interface SearchProfilesSaveRequest {
+  profile_id?: string | null;
+  name: string;
+  candidate_profile_id?: string;
+  scoring_config_id?: string | null;
+  ranking_policy?: string;
+  hard_filters?: {
+    [k: string]: unknown;
+  };
+  preferences?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/search_profiles/search_profiles_save_response.json
+export interface SearchProfilesSaveResponse {
+  profile_id: string;
+  name: string;
+  candidate_profile_id?: string;
+  scoring_config_id?: string | null;
+  ranking_policy?: string;
+  hard_filters?: {
+    [k: string]: unknown;
+  };
+  preferences?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/settings/settings_get_request.json

@@ -16,6 +16,7 @@ from app.domain.ports.repositories import (
     MatchRepository,
     ObservationRepository,
     ResumeRepository,
+    SearchProfileRepository,
     SnapshotRepository,
     SourceRepository,
 )
@@ -27,6 +28,7 @@ from app.infrastructure.persistence.sqlite.repositories import (
     SqliteJobRepository,
     SqliteObservationRepository,
     SqlitePluginStateRepository,
+    SqliteSearchProfileRepository,
     SqliteSettingsRepository,
     SqliteSnapshotRepository,
     SqliteSourceRepository,
@@ -44,10 +46,11 @@ class SqliteUnitOfWork:
         self._db_path = db_path
         self._clock_now = clock_now
         self._conn: aiosqlite.Connection | None = None
-        self.sources: SourceRepository = _Unimplemented()  # type: ignore[assignment]
-        self.crawl_runs: CrawlRunRepository = _Unimplemented()  # type: ignore[assignment]
+        self.search_profiles: SearchProfileRepository = _Unimplemented()  # type: ignore[assignment]
         self.snapshots: SnapshotRepository = _Unimplemented()  # type: ignore[assignment]
         self.aliases: AliasRepository = _Unimplemented()  # type: ignore[assignment]
+        self.sources: SourceRepository = _Unimplemented()  # type: ignore[assignment]
+        self.crawl_runs: CrawlRunRepository = _Unimplemented()  # type: ignore[assignment]
         self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
         self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
         self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
@@ -72,6 +75,7 @@ class SqliteUnitOfWork:
         self.observations = SqliteObservationRepository(self._conn, self._clock_now)
         self.crawl_runs = SqliteCrawlRunRepository(self._conn, self._clock_now)
         self.snapshots = SqliteSnapshotRepository(self._conn, self._clock_now)
+        self.search_profiles = SqliteSearchProfileRepository(self._conn, self._clock_now)
         self.aliases = SqliteAliasRepository(self._conn, self._clock_now)
         return self
 

@@ -1,10 +1,13 @@
-"""Job listing/search use cases (M1)."""
+"""Job listing/search use cases (M3)."""
+
+from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, cast
 
 from app.application.container import Container
 from app.application.dto import JobFilter, JobListResult, JobSearchParams, JobSummary
+from app.domain.services.hard_filters import apply_hard_filters
 
 
 class JobsUseCase:
@@ -13,14 +16,21 @@ class JobsUseCase:
 
     async def list(self, params: JobFilter) -> JobListResult:
         async with self._container.uow_factory() as uow:
-            rows = await uow.jobs.list(
-                source_id=params.source_id,
-                company_id=params.company_id,
-                limit=params.limit,
-                offset=params.offset,
-            )
+            if params.query:
+                rows = await uow.jobs.search(params.query, limit=params.limit)
+            else:
+                rows = await uow.jobs.list(
+                    source_id=params.source_id,
+                    company_id=params.company_id,
+                    limit=params.limit,
+                    offset=params.offset,
+                )
             total = await uow.jobs.count()
             await uow.commit()
+
+        if params.filters:
+            rows = apply_hard_filters(rows, params.filters)
+
         return JobListResult(
             jobs=[
                 JobSummary(
@@ -34,7 +44,7 @@ class JobsUseCase:
                 )
                 for r in rows
             ],
-            total=total,
+            total=total if not params.filters else len(rows),
         )
 
     async def search(self, params: JobSearchParams) -> JobListResult:

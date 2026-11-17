@@ -23,6 +23,21 @@
       ],
       "default": null
     },
+    "query": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "filters": {
+      "additionalProperties": true,
+      "type": "object"
+    },
     "limit": {
       "default": 50,
       "type": "integer"

@@ -35,6 +35,10 @@ from app.application.dto import (
     PluginIdParams,
     PluginListResult,
     PluginOptionalIdParams,
+    SearchProfileInfo,
+    SearchProfileListResult,
+    SearchProfileParams,
+    SearchProfileSaveParams,
     SettingsPatch,
     SettingsResult,
     SleepTaskParams,
@@ -130,6 +134,10 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("jobs.search", JobSearchParams, JobListResult),
     MethodSpec("crawl_runs.list", EmptyParams, CrawlRunListResult),
     MethodSpec("discovery.run", DiscoveryRunParams, OkResult),
+    # M3: search profiles
+    MethodSpec("search_profiles.list", EmptyParams, SearchProfileListResult),
+    MethodSpec("search_profiles.save", SearchProfileSaveParams, SearchProfileInfo),
+    MethodSpec("search_profiles.delete", SearchProfileParams, OkResult),
 )
 
 MILESTONE_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in MILESTONE_METHODS)
@@ -144,5 +152,4 @@ FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = (
     "resume.",
     "keywords.",
     "browser.",
-    "search_profiles.",
 )

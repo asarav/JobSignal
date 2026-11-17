@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id"
+  ],
+  "title": "SearchProfilesDeleteRequest",
+  "type": "object"
+}

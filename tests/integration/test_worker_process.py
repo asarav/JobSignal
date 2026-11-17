@@ -172,7 +172,6 @@ async def test_invalid_params_are_mapped(tmp_path):
         "companies.list",
         "posting_intelligence.evaluate",
         "keywords.extract",
-        "search_profiles.list",
         "totally.unknown",
     ],
 )
@@ -324,3 +323,71 @@ async def test_graceful_shutdown(tmp_path):
     await asyncio.wait_for(worker.proc.wait(), timeout=TIMEOUT)
     assert worker.proc.returncode == 0
     worker._stderr_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_search_profiles_lifecycle(tmp_path):
+    worker = await spawn_worker(tmp_path / "data")
+    try:
+        # Initially empty
+        listed = await worker.request("search_profiles.list", {})
+        assert listed["ok"] is True
+        assert listed["result"]["profiles"] == []
+
+        # Save a profile
+        saved = await worker.request(
+            "search_profiles.save",
+            {
+                "name": "Python Remote Jobs",
+                "hard_filters": {"workplace_types": ["remote"], "employment_types": ["full-time"]},
+                "preferences": {"sort": "newest"},
+            },
+        )
+        assert saved["ok"] is True
+        profile_id = saved["result"]["profile_id"]
+        assert profile_id is not None
+        assert saved["result"]["name"] == "Python Remote Jobs"
+        assert saved["result"]["hard_filters"]["workplace_types"] == ["remote"]
+
+        # List should now contain it
+        listed = await worker.request("search_profiles.list", {})
+        assert listed["ok"] is True
+        assert len(listed["result"]["profiles"]) == 1
+        assert listed["result"]["profiles"][0]["profile_id"] == profile_id
+        assert listed["result"]["profiles"][0]["name"] == "Python Remote Jobs"
+
+        # Save again with same id -> update
+        updated = await worker.request(
+            "search_profiles.save",
+            {
+                "profile_id": profile_id,
+                "name": "Python Remote Jobs (Updated)",
+                "hard_filters": {"workplace_types": ["remote"]},
+            },
+        )
+        assert updated["ok"] is True
+        assert updated["result"]["profile_id"] == profile_id
+        assert updated["result"]["name"] == "Python Remote Jobs (Updated)"
+
+        listed = await worker.request("search_profiles.list", {})
+        assert len(listed["result"]["profiles"]) == 1
+        assert listed["result"]["profiles"][0]["name"] == "Python Remote Jobs (Updated)"
+
+        # Delete
+        deleted = await worker.request(
+            "search_profiles.delete", {"profile_id": profile_id}
+        )
+        assert deleted["ok"] is True
+        assert deleted["result"]["ok"] is True
+
+        listed = await worker.request("search_profiles.list", {})
+        assert listed["ok"] is True
+        assert listed["result"]["profiles"] == []
+
+        # Deleting unknown is a no-op success
+        deleted = await worker.request(
+            "search_profiles.delete", {"profile_id": "does-not-exist"}
+        )
+        assert deleted["ok"] is True
+    finally:
+        await worker.close()

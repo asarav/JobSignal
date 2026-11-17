@@ -129,6 +129,34 @@ class TaskAcceptedResult(DTO):
     task_id: str
 
 
+class SearchProfileInfo(DTO):
+    profile_id: str
+    name: str
+    candidate_profile_id: str = ""
+    scoring_config_id: str | None = None
+    ranking_policy: str = "deprioritize"
+    hard_filters: dict[str, Any] = Field(default_factory=dict)
+    preferences: dict[str, Any] = Field(default_factory=dict)
+
+
+class SearchProfileListResult(DTO):
+    profiles: list[SearchProfileInfo]
+
+
+class SearchProfileParams(DTO):
+    profile_id: str
+
+
+class SearchProfileSaveParams(DTO):
+    profile_id: str | None = None
+    name: str
+    candidate_profile_id: str = ""
+    scoring_config_id: str | None = None
+    ranking_policy: str = "deprioritize"
+    hard_filters: dict[str, Any] = Field(default_factory=dict)
+    preferences: dict[str, Any] = Field(default_factory=dict)
+
+
 class OkResult(DTO):
     ok: bool = True
 
@@ -197,6 +225,8 @@ class JobSearchParams(DTO):
 class JobFilter(DTO):
     source_id: str | None = None
     company_id: str | None = None
+    query: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
     limit: int = 50
     offset: int = 0
 

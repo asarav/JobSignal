@@ -20,6 +20,7 @@ from app.application.commands.discovery import DiscoveryUseCase
 from app.application.commands.hello import HealthUseCase, HelloUseCase
 from app.application.commands.jobs import JobsUseCase
 from app.application.commands.plugins import PluginsUseCase
+from app.application.commands.search_profiles import SearchProfilesUseCase
 from app.application.commands.settings import SettingsUseCase
 from app.application.commands.sources import SourcesUseCase
 from app.application.commands.tasks import TasksUseCase
@@ -41,6 +42,7 @@ from app.worker.ipc.handlers.diagnostics import DiagnosticsHandlers
 from app.worker.ipc.handlers.discovery import DiscoveryHandlers
 from app.worker.ipc.handlers.jobs import JobsHandlers
 from app.worker.ipc.handlers.plugins import PluginsHandlers
+from app.worker.ipc.handlers.search_profiles import SearchProfilesHandlers
 from app.worker.ipc.handlers.settings import SettingsHandlers
 from app.worker.ipc.handlers.sources import SourcesHandlers
 from app.worker.ipc.handlers.system import SystemHandlers
@@ -81,6 +83,8 @@ def _build_dispatcher(
         SourceSetEnabledParams,
         SourceSetExtractionOrderParams,
         SourceSetScheduleParams,
+        SearchProfileParams,
+        SearchProfileSaveParams,
         TaskFilter,
     )
 
@@ -142,6 +146,11 @@ def _build_dispatcher(
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("crawl_runs.list", discovery.discovery.list_runs, params_model=EmptyParams)
+
+    profiles = SearchProfilesHandlers(SearchProfilesUseCase(container))
+    dispatcher.register("search_profiles.list", profiles.list, params_model=EmptyParams)
+    dispatcher.register("search_profiles.save", profiles.save, params_model=SearchProfileSaveParams)
+    dispatcher.register("search_profiles.delete", profiles.delete, params_model=SearchProfileParams)
     return dispatcher
 
 
