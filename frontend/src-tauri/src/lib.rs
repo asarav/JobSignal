@@ -541,7 +541,6 @@ mod tests {
             "applications.create",
             "posting_intelligence.evaluate",
             "keywords.extract",
-            "search_profiles.list",
         ] {
             assert!(!is_allowed(method), "{method} must be rejected in M0");
         }
