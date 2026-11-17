@@ -261,6 +261,7 @@ export interface SourcesAddRequest {
   url: string;
   connector_id?: string | null;
   company_id?: string | null;
+  interval_s?: number;
 }
 
 // schemas/ipc/sources/sources_add_response.json
@@ -271,6 +272,7 @@ export interface SourcesAddResponse {
   connector_id?: string | null;
   company_id?: string | null;
   enabled?: boolean;
+  interval_s?: number;
 }
 
 // schemas/ipc/sources/sources_delete_request.json
@@ -297,6 +299,7 @@ export interface SourcesListResponseSourceInfo {
   connector_id?: string | null;
   company_id?: string | null;
   enabled?: boolean;
+  interval_s?: number;
 }
 
 // schemas/ipc/sources/sources_set_enabled_request.json
@@ -307,6 +310,17 @@ export interface SourcesSetEnabledRequest {
 
 // schemas/ipc/sources/sources_set_enabled_response.json
 export interface SourcesSetEnabledResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/sources/sources_set_schedule_request.json
+export interface SourcesSetScheduleRequest {
+  source_id: string;
+  interval_s: number;
+}
+
+// schemas/ipc/sources/sources_set_schedule_response.json
+export interface SourcesSetScheduleResponse {
   ok?: boolean;
 }
 

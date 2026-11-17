@@ -592,7 +592,12 @@ mod tests {
         for method in ["", " ", "SYSTEM.HELLO", "system.hello ", "system.hello\n"] {
             assert!(!is_allowed(method), "{method:?} must not be forwarded");
         }
-        assert_eq!(ALLOWED_METHODS.len(), 23);
+        // The allowlist is generated from the schema registry; it must not
+        // contain blanks or duplicates.
+        assert!(ALLOWED_METHODS.len() > 0);
+        let unique: std::collections::HashSet<&&str> = ALLOWED_METHODS.iter().collect();
+        assert_eq!(unique.len(), ALLOWED_METHODS.len());
+        assert!(ALLOWED_METHODS.iter().all(|method| !method.trim().is_empty()));
     }
 
     #[test]

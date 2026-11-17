@@ -145,6 +145,7 @@ class SourceInfo(DTO):
     connector_id: str | None = None
     company_id: str | None = None
     enabled: bool = True
+    interval_s: float = 0.0
 
 
 class SourceListResult(DTO):
@@ -155,6 +156,7 @@ class SourceAddParams(DTO):
     url: str
     connector_id: str | None = None
     company_id: str | None = None
+    interval_s: float = Field(default=3600.0, ge=0, le=86400)
 
 
 class SourceIdParams(DTO):
@@ -164,6 +166,11 @@ class SourceIdParams(DTO):
 class SourceSetEnabledParams(DTO):
     source_id: str
     enabled: bool
+
+
+class SourceSetScheduleParams(DTO):
+    source_id: str
+    interval_s: float = Field(ge=0, le=86400)
 
 
 class JobSummary(DTO):

@@ -178,7 +178,11 @@ class InMemoryJobRepository:
             "source_id": source_id,
             "content_hash": content_hash,
             "title": getattr(job, "title", None),
+            "normalized_title": getattr(job, "normalized_title", None),
             "canonical_url": getattr(job, "canonical_url", None),
+            "source_posting_id": getattr(job, "source_posting_id", None),
+            "description_text": getattr(job, "description_text", ""),
+            "posting_status": "active",
         }
 
     async def get(self, job_id: str) -> Mapping[str, object] | None:
@@ -187,6 +191,15 @@ class InMemoryJobRepository:
     async def find_by_canonical_url(self, canonical_url: str) -> str | None:
         for jid, j in self._store.items():
             if j.get("canonical_url") == canonical_url:
+                return jid
+        return None
+
+    async def find_by_source_posting(self, source_id: str, source_posting_id: str) -> str | None:
+        for jid, j in self._store.items():
+            if (
+                j.get("source_id") == source_id
+                and j.get("source_posting_id") == source_posting_id
+            ):
                 return jid
         return None
 
@@ -247,6 +260,55 @@ class InMemoryCrawlRunRepository:
             items = [r for r in items if r.get("source_id") == source_id]
         return items[:limit]
 
+    async def mark_interrupted(self) -> int:
+        changed = 0
+        for run in self._store.values():
+            if run.get("status") == "running":
+                run["status"] = "interrupted"
+                changed += 1
+        return changed
+
+class InMemorySnapshotRepository:
+    def __init__(self, store: list[dict[str, object]]) -> None:
+        self._store = store
+
+    async def add(self, *, job_id, content_hash, snapshot, created_at) -> None:
+        self._store.append(
+            {
+                "job_id": job_id,
+                "content_hash": content_hash,
+                "snapshot": dict(snapshot),
+                "created_at": created_at,
+            }
+        )
+
+    async def list_for_job(self, job_id: str):
+        return [s for s in self._store if s["job_id"] == job_id]
+
+
+class InMemoryAliasRepository:
+    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+        self._store = store
+
+    async def add(self, *, job_id, alias_url, alias_source_id, created_at) -> None:
+        self._store.setdefault(
+            alias_url,
+            {
+                "job_id": job_id,
+                "alias_url": alias_url,
+                "alias_source_id": alias_source_id,
+                "created_at": created_at,
+            },
+        )
+
+    async def find_by_url(self, alias_url: str) -> str | None:
+        entry = self._store.get(alias_url)
+        return str(entry["job_id"]) if entry else None
+
+    async def list_for_job(self, job_id: str):
+        return [a for a in self._store.values() if a["job_id"] == job_id]
+
+
 class InMemoryUnitOfWork:
     def __init__(
         self,
@@ -259,6 +321,8 @@ class InMemoryUnitOfWork:
         jobs=None,
         observations=None,
         crawl_runs=None,
+        snapshots=None,
+        aliases=None,
     ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
@@ -269,6 +333,8 @@ class InMemoryUnitOfWork:
         self._jobs_store = jobs if jobs is not None else {}
         self._observations_store = observations if observations is not None else []
         self._crawl_runs_store = crawl_runs if crawl_runs is not None else {}
+        self._snapshots_store = snapshots if snapshots is not None else []
+        self._aliases_store = aliases if aliases is not None else {}
         self.jobs = InMemoryJobRepository(self._jobs_store)
         self.companies = InMemoryCompanyRepository(self._companies_store)
         self.applications = _Unimplemented()
@@ -281,6 +347,8 @@ class InMemoryUnitOfWork:
         self.plugins = InMemoryPluginStateRepository(self._plugins_store, self._configs_store)
         self.sources = InMemorySourceRepository(self._sources_store)
         self.crawl_runs = InMemoryCrawlRunRepository(self._crawl_runs_store)
+        self.snapshots = InMemorySnapshotRepository(self._snapshots_store)
+        self.aliases = InMemoryAliasRepository(self._aliases_store)
         self.committed = False
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
@@ -305,6 +373,8 @@ class InMemoryUnitOfWorkFactory:
         self.jobs: dict[str, dict[str, object]] = {}
         self.observations: list[dict[str, object]] = []
         self.crawl_runs: dict[str, dict[str, object]] = {}
+        self.snapshots: list[dict[str, object]] = []
+        self.aliases: dict[str, dict[str, object]] = {}
 
     def __call__(self) -> InMemoryUnitOfWork:
         return InMemoryUnitOfWork(
@@ -317,4 +387,6 @@ class InMemoryUnitOfWorkFactory:
             self.jobs,
             self.observations,
             self.crawl_runs,
+            self.snapshots,
+            self.aliases,
         )

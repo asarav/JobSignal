@@ -35,6 +35,10 @@
     "enabled": {
       "default": true,
       "type": "boolean"
+    },
+    "interval_s": {
+      "default": 0.0,
+      "type": "number"
     }
   },
   "required": [

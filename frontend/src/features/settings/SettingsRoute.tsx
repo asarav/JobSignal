@@ -15,10 +15,16 @@ interface SettingsConfig {
   protocol_version?: number;
 }
 
+/** Crawl interval in whole minutes, as shown in the input. */
+function intervalMinutes(intervalS: number | undefined): string {
+  return String(Math.round((intervalS ?? 0) / 60));
+}
+
 export function SettingsRoute() {
   const [settings, setSettings] = useState<SettingsGetResponse | null>(null);
   const [plugins, setPlugins] = useState<PluginsListResponsePluginInfo[]>([]);
   const [sources, setSources] = useState<SourcesListResponseSourceInfo[]>([]);
+  const [intervals, setIntervals] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -58,6 +64,23 @@ export function SettingsRoute() {
     setBusy(true);
     try {
       await workerClient.deleteSource({ source_id: sourceId });
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveInterval = async (source: SourcesListResponseSourceInfo, minutes: string) => {
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value < 0) return;
+    setBusy(true);
+    try {
+      await workerClient.setSourceSchedule({
+        source_id: source.source_id,
+        interval_s: value * 60,
+      });
       await load();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -166,9 +189,42 @@ export function SettingsRoute() {
         ) : (
           <ul className="mt-3 divide-y divide-slate-100">
             {sources.map((source) => (
-              <li key={source.source_id} className="flex items-center justify-between py-2 text-sm">
+              <li key={source.source_id} className="flex items-center justify-between gap-3 py-2 text-sm">
                 <span className="truncate font-mono text-xs text-slate-700">{source.url}</span>
-                <div className="flex gap-2">
+                <div className="flex shrink-0 items-center gap-2">
+                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                    every
+                    <input
+                      type="number"
+                      min={0}
+                      step={5}
+                      value={
+                        intervals[source.source_id] ?? intervalMinutes(source.interval_s)
+                      }
+                      onChange={(event) =>
+                        setIntervals((current) => ({
+                          ...current,
+                          [source.source_id]: event.target.value,
+                        }))
+                      }
+                      className="w-16 rounded border border-slate-300 px-2 py-1 text-xs"
+                      aria-label={`Crawl interval in minutes for ${source.url}`}
+                    />
+                    min
+                  </label>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void saveInterval(
+                        source,
+                        intervals[source.source_id] ?? intervalMinutes(source.interval_s),
+                      )
+                    }
+                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
                   <button
                     type="button"
                     disabled={busy}

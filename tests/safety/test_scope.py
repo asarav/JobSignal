@@ -1,7 +1,8 @@
-"""Safety: Milestone 0 ships no crawling, ATS, resume, matching, or browser code.
+"""Safety: the shipped milestone never contains later-milestone code.
 
 These are scope guards, not feature tests. They fail if a later milestone's
-production code, dependency, IPC method, or database table leaks into M0.
+production code, dependency, IPC method, or database table leaks into the
+current build (Milestone 1: discovery framework and initial connectors).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "app"
 
+# Dependencies that belong to later milestones (M2 rendering, M4 resume/ML, ...).
 FORBIDDEN_DEPENDENCIES = (
     "playwright",
     "selenium",
@@ -28,7 +30,7 @@ FORBIDDEN_DEPENDENCIES = (
     "sentence-transformers",
 )
 
-# Module-level imports that would mean real crawling/browsing/parsing landed.
+# Module-level imports that would mean real browsing/parsing landed.
 FORBIDDEN_IMPORTS = (
     "playwright",
     "selenium",
@@ -42,6 +44,7 @@ FORBIDDEN_IMPORTS = (
     "onnxruntime",
 )
 
+# Tables the current milestone is allowed to create.
 ALLOWED_TABLES = {
     "schema_migrations",
     "app_settings",
@@ -67,11 +70,7 @@ ALLOWED_TABLES = {
 
 
 def _production_files() -> list[Path]:
-    return [
-        path
-        for path in APP.rglob("*.py")
-        if "__pycache__" not in path.parts
-    ]
+    return [path for path in APP.rglob("*.py") if "__pycache__" not in path.parts]
 
 
 @pytest.mark.parametrize("dependency", FORBIDDEN_DEPENDENCIES)
@@ -100,7 +99,7 @@ def test_no_form_submission_code():
     assert offenders == [], f"application submission code found in {offenders}"
 
 
-async def test_migration_0001_creates_only_infrastructure_tables(tmp_path):
+async def test_migrations_create_only_expected_tables(tmp_path):
     from app.infrastructure.persistence.sqlite.migrator import migrate
 
     db = tmp_path / "scope.sqlite"
@@ -118,7 +117,23 @@ async def test_migration_0001_creates_only_infrastructure_tables(tmp_path):
 
 
 def test_no_forbidden_ipc_methods_are_registered():
-    from app.worker.ipc.method_catalog import FORBIDDEN_METHOD_PREFIXES, MILESTONE_METHOD_NAMES
+    from app.worker.ipc.method_catalog import (
+        FORBIDDEN_METHOD_PREFIXES,
+        MILESTONE_METHOD_NAMES,
+    )
 
     for method in MILESTONE_METHOD_NAMES:
         assert not any(method.startswith(prefix) for prefix in FORBIDDEN_METHOD_PREFIXES), method
+
+
+def test_application_layer_does_not_import_infrastructure():
+    """The application layer must depend on ports, not on adapters."""
+    offenders = []
+    for path in _production_files():
+        parts = path.parts
+        if "application" not in parts:
+            continue
+        text = path.read_text("utf-8")
+        if re.search(r"^\s*from app\.infrastructure", text, re.MULTILINE):
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == [], f"application layer imports infrastructure: {offenders}"

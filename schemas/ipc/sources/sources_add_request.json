@@ -25,6 +25,12 @@
         }
       ],
       "default": null
+    },
+    "interval_s": {
+      "default": 3600.0,
+      "maximum": 86400,
+      "minimum": 0,
+      "type": "number"
     }
   },
   "required": [

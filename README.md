@@ -8,59 +8,71 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 0 — Architecture and desktop foundation.**
-> This build ships the desktop shell, IPC contract, SQLite infrastructure,
-> plugin registry, Settings, and Diagnostics. It is not a job search product yet.
+> **Current milestone: 1 — Discovery framework and initial connectors.**
+> The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
+> from Milestone 0. Milestone 1 adds sources, ATS connectors (Greenhouse, Ashby,
+> Lever), a crawl runner with incremental updates, job persistence with full-text
+> search, and a Discover screen.
 
-## What Milestone 0 includes
+## What Milestone 1 includes
 
-- Tauri 2 desktop shell with a supervised Python worker (`python -m app.worker.main`).
-- NDJSON IPC protocol v1 with generated JSON Schemas and typed TypeScript clients.
-- Hexagonal Python core: domain models and `typing.Protocol` ports, immutable
-  composition-root `Container`, application use cases, infrastructure adapters.
-- SQLite migration `0001_infrastructure.sql` with `schema_migrations`,
-  `app_settings`, `plugin_registry`, `plugin_config`, and `background_tasks`.
-- Plugin registry with duplicate-ID/API-version checks, per-plugin timeouts,
-  exception capture, and a circuit breaker with persisted health.
-- A real Settings screen (data dir, feature flags, plugin registry) and a real
-  Diagnostics screen (health, recent tasks, progress/cancel, event feed).
-- Unit, contract, integration, and swapability (S1–S9) tests.
-- CI on Windows, macOS, and Ubuntu for Python, frontend, Rust, and schema drift.
+- A **source registry**: add a careers URL, the classifier detects the ATS, and
+  the source is stored with a crawl interval.
+- **ATS connectors** for Greenhouse, Ashby and Lever behind the
+  `JobSourceConnector` port, each with a contract test.
+- A **crawl runner** that lists postings, normalizes them (strategy
+  `normalize.v1`), persists them, appends a snapshot when the content changed,
+  records an observation per posting, and marks disappeared postings as
+  `removed`. Failures are isolated per source.
+- **Incremental updates**: a posting whose content hash did not change is
+  skipped, so repeated crawls do not rewrite history.
+- A **scheduler** that runs each enabled source on its own interval and
+  survives a failing source.
+- **Job persistence** with SQLite tables for jobs, aliases, snapshots,
+  observations and crawl runs, plus an FTS5 index for search.
+- A **Discover screen** (add source, run a crawl, browse the jobs) and
+  **Settings → Sources** (enable, disable, delete, set the crawl interval).
 
-## Not yet implemented
+## Still not implemented
 
-These are **intentionally absent** in Milestone 0, and the IPC allowlist rejects
+These are **intentionally absent** in Milestone 1, and the IPC allowlist rejects
 them (there is a test for it):
 
-- Job crawling, discovery providers, search-engine discovery, crawl scheduling
-- ATS connectors and job-source integrations
-- Resume parsing, candidate profiles, keyword extraction
-- Job matching, scoring, ranking, and saved jobs
-- Ghost-job / posting-quality risk models
-- Browser automation, form inspection, and autofill/Playwright
+- Rendered-DOM extraction and browser automation (Playwright) — Milestone 2
+- Resume parsing, candidate profiles, keyword extraction — Milestone 4
+- Job matching, scoring, ranking, and saved jobs — Milestone 4
+- Ghost-job / posting-quality risk models — Milestone 6
 - Application tracking, suppression, company intelligence, outcome analytics
 
-No such production code is present. Only test-only toy plugins and one builtin
-extraction *registration smoke* plugin (`extract.demo`) exist.
+No such production code is present.
 
 ## Repository layout
 
 ```text
 app/
-  domain/              # models, enums, policies, ports (Protocols)
+  domain/              # models, enums, policies, ports (Protocols), services
   application/         # commands, DTOs, orchestration, configuration, container
   infrastructure/      # SQLite, in-memory twins, HTTP, logging, clock, ids
-  plugins/             # registry, isolation shim, builtin registration hook
+  plugins/             # registry, isolation shim, builtin + ATS connectors
   worker/              # composition root, IPC dispatcher/transport, entrypoint
 frontend/
   src/                 # React 19 + TypeScript routes, stores, services, copy
   src-tauri/           # Tauri 2 shell + Python supervisor + generated allowlist
 schemas/ipc/           # generated JSON Schemas; methods.json is the allowlist
-scripts/               # gen_schemas.py, gen-ts-types.mjs
+scripts/               # gen_schemas.py, gen-ts-types.mjs, dev.ps1
 tests/
   unit/ contract/ integration/ safety/ swapability/ support/
 docs/adr/              # architecture decision records
 .github/workflows/     # CI matrix
+```
+
+Where the discovery code lives:
+
+```text
+app/domain/services/     # classifier.py, normalizer.py  (pure domain logic)
+app/application/         # sources.py (registry + crawl runner), commands/
+app/plugins/ats/         # greenhouse/, ashby/, lever/
+app/infrastructure/      # persistence (sources, jobs, snapshots, crawl runs)
 ```
 
 ### Dependency rule
@@ -266,6 +278,15 @@ retryable, details}`.
 | `plugins.reset_circuit` | reset a plugin's circuit breaker |
 | `diagnostics.fetch_url` | one sandboxed HTTP request (not a crawler) |
 | `diagnostics.sleep` | no-op long-running task used to test progress/cancel/events |
+| `sources.list` | configured job sources with their connector and interval |
+| `sources.add` | classify a URL, store it as a source |
+| `sources.set_enabled` | pause/resume a source |
+| `sources.set_schedule` | change the crawl interval (0 disables scheduling) |
+| `sources.delete` | remove a source |
+| `jobs.list` | persisted jobs, optionally filtered by source or company |
+| `jobs.search` | full-text search over jobs (FTS5) |
+| `crawl_runs.list` | crawl history with per-run stats |
+| `discovery.run` | crawl one source now, returning its stats |
 
 The authoritative catalogue is
 `app/worker/ipc/method_catalog.py`. It generates:
@@ -281,6 +302,7 @@ interprets payloads; it enforces the generated allowlist and envelope size.
 
 Long-running work emits `task.queued`, `task.progress`, `task.completed`,
 `task.cancelled`, and `task.failed` events with an optional `task_id`.
+Crawls emit `crawl.started`, `crawl.completed`, and `crawl.failed`.
 
 ## Settings model
 
@@ -313,9 +335,12 @@ constant scoring model, extraction strategy) live in `tests/support/`.
 
 ## Architecture decisions
 
-See [`docs/adr/0001-m0-foundation.md`](docs/adr/0001-m0-foundation.md) for the
-M0 scope decisions, the deliberately narrow `0001` migration, the diagnostics
-`FetchUrl` swapability subject, and the browser preview bridge.
+- [`docs/adr/0001-m0-foundation.md`](docs/adr/0001-m0-foundation.md) — M0 scope
+  decisions, the deliberately narrow `0001` migration, the diagnostics
+  `FetchUrl` swapability subject, and the browser preview bridge.
+- [`docs/adr/0002-m1-discovery.md`](docs/adr/0002-m1-discovery.md) — the M1
+  discovery framework: source registry, normalizer v1, incremental crawls,
+  append-only snapshots/aliases, stable company identity, and the scheduler.
 
 ## CI
 

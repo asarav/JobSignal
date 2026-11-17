@@ -8,6 +8,7 @@ from app.application.dto import (
     SourceAddParams,
     SourceIdParams,
     SourceSetEnabledParams,
+    SourceSetScheduleParams,
 )
 
 
@@ -23,6 +24,10 @@ class SourcesHandlers:
 
     async def set_enabled(self, params: SourceSetEnabledParams) -> dict:
         await self._sources.set_enabled(params)
+        return {"ok": True}
+
+    async def set_schedule(self, params: SourceSetScheduleParams) -> dict:
+        await self._sources.set_schedule(params)
         return {"ok": True}
 
     async def delete(self, params: SourceIdParams) -> dict:

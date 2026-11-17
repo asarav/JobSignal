@@ -7,6 +7,7 @@ from typing import Any, cast
 from app.application.container import Container
 from app.application.dto import CrawlRunListResult, CrawlRunSummary, DiscoveryRunParams
 from app.application.sources import SourceRegistry, run_crawl
+from app.domain.models.common import PortError
 from app.domain.models.source import SourceConfig
 from app.domain.ports.http import HttpClient
 
@@ -25,10 +26,15 @@ class DiscoveryUseCase:
     async def run(self, params: DiscoveryRunParams) -> dict[str, object]:
         source = await self._registry_get(params.source_id)
         if source is None:
-            raise ValueError(f"unknown source: {params.source_id}")
+            raise PortError(
+                code="not_found", message=f"unknown source: {params.source_id}"
+            )
         connector = self._registry.connector_for(source.connector_id)
         if connector is None:
-            raise ValueError(f"no connector for source {source.id}")
+            raise PortError(
+                code="plugin.unavailable",
+                message=f"no connector for source {source.id}",
+            )
         return await run_crawl(
             source=source,
             connector=connector,

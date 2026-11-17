@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -410,11 +411,20 @@ class SqliteJobRepository:
         self._conn.row_factory = aiosqlite.Row
         cur = await self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
         row = await cur.fetchone()
-        return dict(row) if row else None
+        return self._row(row) if row else None
 
     async def find_by_canonical_url(self, canonical_url):
         self._conn.row_factory = aiosqlite.Row
         cur = await self._conn.execute("SELECT id FROM jobs WHERE canonical_url = ?", (canonical_url,))
+        row = await cur.fetchone()
+        return str(row["id"]) if row else None
+
+    async def find_by_source_posting(self, source_id, source_posting_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT id FROM jobs WHERE source_id = ? AND source_posting_id = ?",
+            (source_id, source_posting_id),
+        )
         row = await cur.fetchone()
         return str(row["id"]) if row else None
 
@@ -431,7 +441,7 @@ class SqliteJobRepository:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.extend([limit, offset])
         cur = await self._conn.execute(f"SELECT * FROM jobs{where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?", tuple(params))
-        return [dict(r) for r in await cur.fetchall()]
+        return [self._row(r) for r in await cur.fetchall()]
 
     async def search(self, query, *, limit=50):
         self._conn.row_factory = aiosqlite.Row
@@ -439,7 +449,41 @@ class SqliteJobRepository:
             "SELECT jobs.* FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid WHERE jobs_fts MATCH ? ORDER BY rank LIMIT ?",
             (query, limit),
         )
-        return [dict(r) for r in await cur.fetchall()]
+        return [self._row(r) for r in await cur.fetchall()]
+
+    def _row(self, row: aiosqlite.Row) -> dict[str, object]:
+        """Return the job with its JSON columns decoded."""
+        return {
+            "id": row["id"],
+            "company_id": row["company_id"],
+            "title": row["title"],
+            "normalized_title": row["normalized_title"],
+            "title_family": row["title_family"],
+            "description_text": row["description_text"],
+            "description_html": row["description_html"],
+            "locations": json.loads(row["locations_json"] or "[]"),
+            "workplace_type": row["workplace_type"],
+            "employment_type": row["employment_type"],
+            "seniority": row["seniority"],
+            "salary": json.loads(row["salary_json"]) if row["salary_json"] else None,
+            "posted_at": row["posted_at"],
+            "source_id": row["source_id"],
+            "source_posting_id": row["source_posting_id"],
+            "canonical_url": row["canonical_url"],
+            "original_urls": json.loads(row["original_urls_json"] or "[]"),
+            "department": row["department"],
+            "required_skills": json.loads(row["required_skills_json"] or "[]"),
+            "preferred_skills": json.loads(row["preferred_skills_json"] or "[]"),
+            "extraction_status": row["extraction_status"],
+            "extraction_confidence": row["extraction_confidence"],
+            "field_confidence": json.loads(row["field_confidence_json"] or "{}"),
+            "provenance": json.loads(row["provenance_json"] or "[]"),
+            "posting_status": row["posting_status"],
+            "content_hash": row["content_hash"],
+            "first_seen_at": row["first_seen_at"],
+            "last_seen_at": row["last_seen_at"],
+            "fetched_at": row["fetched_at"],
+        }
 
     async def count(self):
         cur = await self._conn.execute("SELECT COUNT(*) FROM jobs")
@@ -463,7 +507,6 @@ class SqliteObservationRepository:
         self._now = clock_now
 
     async def add(self, *, job_id, source_id, observed_at, posting_status, details=None):
-        import uuid
         await self._conn.execute(
             "INSERT INTO job_observations(id, job_id, source_id, observed_at, posting_status, details_json) VALUES (?,?,?,?,?,?)",
             (str(uuid.uuid4()), job_id, source_id, observed_at.strftime("%Y-%m-%dT%H:%M:%SZ"), posting_status, json.dumps(dict(details or {}), sort_keys=True)),
@@ -499,7 +542,7 @@ class SqliteCrawlRunRepository:
         self._conn.row_factory = aiosqlite.Row
         cur = await self._conn.execute("SELECT * FROM crawl_runs WHERE id = ?", (run_id,))
         row = await cur.fetchone()
-        return dict(row) if row else None
+        return self._row(row) if row else None
 
     async def list(self, *, source_id=None, limit=50):
         self._conn.row_factory = aiosqlite.Row
@@ -507,7 +550,27 @@ class SqliteCrawlRunRepository:
             cur = await self._conn.execute("SELECT * FROM crawl_runs WHERE source_id = ? ORDER BY started_at DESC LIMIT ?", (source_id, limit))
         else:
             cur = await self._conn.execute("SELECT * FROM crawl_runs ORDER BY started_at DESC LIMIT ?", (limit,))
-        return [dict(r) for r in await cur.fetchall()]
+        return [self._row(r) for r in await cur.fetchall()]
+
+    async def mark_interrupted(self) -> int:
+        """Close crawl runs that were running when the worker stopped."""
+        cur = await self._conn.execute(
+            "UPDATE crawl_runs SET status = 'interrupted', finished_at = ? WHERE status = 'running'",
+            (self._now().strftime("%Y-%m-%dT%H:%M:%SZ"),),
+        )
+        return cur.rowcount or 0
+
+    def _row(self, row: aiosqlite.Row) -> dict[str, object]:
+        """Return the run with decoded stats (the column is ``stats_json``)."""
+        return {
+            "id": row["id"],
+            "source_id": row["source_id"],
+            "status": row["status"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "stats": json.loads(row["stats_json"] or "{}"),
+            "error": row["error"],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +671,66 @@ class SqliteSourceRepository:
         )
 
 
-# The remaining M1 repositories (Company, Job, Observation, CrawlRun) are added
-# in the next slice. For now they remain _Unimplemented in the UoW so the
-# discovery slice can land without breaking existing tests.
+class SqliteSnapshotRepository:
+    """Append-only snapshots: one row per observed content change."""
+
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    async def add(self, *, job_id, content_hash, snapshot, created_at):
+        await self._conn.execute(
+            "INSERT INTO job_snapshots(id, job_id, content_hash, snapshot_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                f"snap_{uuid.uuid4().hex[:12]}",
+                job_id,
+                content_hash,
+                json.dumps(dict(snapshot), sort_keys=True, default=str),
+                created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+        )
+
+    async def list_for_job(self, job_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT * FROM job_snapshots WHERE job_id = ? ORDER BY created_at DESC",
+            (job_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+class SqliteAliasRepository:
+    """Alternative URLs that point at the same job."""
+
+    def __init__(self, conn, clock_now):
+        self._conn = conn
+        self._now = clock_now
+
+    async def add(self, *, job_id, alias_url, alias_source_id, created_at):
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO job_aliases(id, job_id, alias_url, alias_source_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                f"alias_{uuid.uuid4().hex[:12]}",
+                job_id,
+                alias_url,
+                alias_source_id,
+                created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+        )
+
+    async def find_by_url(self, alias_url):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT job_id FROM job_aliases WHERE alias_url = ?", (alias_url,)
+        )
+        row = await cur.fetchone()
+        return str(row["job_id"]) if row else None
+
+    async def list_for_job(self, job_id):
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT * FROM job_aliases WHERE job_id = ? ORDER BY created_at DESC", (job_id,)
+        )
+        return [dict(r) for r in await cur.fetchall()]

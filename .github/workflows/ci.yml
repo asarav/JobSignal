@@ -116,6 +116,10 @@ jobs:
         working-directory: frontend/src-tauri
         run: cargo test --lib
 
+      - name: Cargo clippy (warnings are errors)
+        working-directory: frontend/src-tauri
+        run: cargo clippy --lib -- -D warnings
+
   schema:
     name: Schema and type freshness
     runs-on: ubuntu-latest

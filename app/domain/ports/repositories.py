@@ -78,6 +78,10 @@ class JobRepository(Protocol):
 
     async def find_by_canonical_url(self, canonical_url: str) -> str | None: ...
 
+    async def find_by_source_posting(
+        self, source_id: str, source_posting_id: str
+    ) -> str | None: ...
+
     async def list(
         self,
         *,
@@ -110,6 +114,38 @@ class ObservationRepository(Protocol):
     async def list_for_job(self, job_id: str) -> Sequence[Mapping[str, object]]: ...
 
 
+class SnapshotRepository(Protocol):
+    """Append-only history of a job's content (spec §23.8)."""
+
+    async def add(
+        self,
+        *,
+        job_id: str,
+        content_hash: str,
+        snapshot: Mapping[str, object],
+        created_at: datetime,
+    ) -> None: ...
+
+    async def list_for_job(self, job_id: str) -> Sequence[Mapping[str, object]]: ...
+
+
+class AliasRepository(Protocol):
+    """Alternative URLs that resolve to the same job."""
+
+    async def add(
+        self,
+        *,
+        job_id: str,
+        alias_url: str,
+        alias_source_id: str | None,
+        created_at: datetime,
+    ) -> None: ...
+
+    async def find_by_url(self, alias_url: str) -> str | None: ...
+
+    async def list_for_job(self, job_id: str) -> Sequence[Mapping[str, object]]: ...
+
+
 class CrawlRunRepository(Protocol):
     async def create(self, run_id: str, source_id: str, started_at: datetime) -> None: ...
 
@@ -128,6 +164,10 @@ class CrawlRunRepository(Protocol):
     async def list(
         self, *, source_id: str | None = None, limit: int = 50
     ) -> Sequence[Mapping[str, object]]: ...
+
+    async def mark_interrupted(self) -> int:
+        """Close crawl runs that were still running when the worker stopped."""
+        ...
 
 
 class ResumeRepository(Protocol): ...
@@ -180,6 +220,8 @@ class UnitOfWork(Protocol):
     plugins: PluginStateRepository
     sources: SourceRepository
     crawl_runs: CrawlRunRepository
+    snapshots: SnapshotRepository
+    aliases: AliasRepository
 
     async def __aenter__(self) -> UnitOfWork: ...
 

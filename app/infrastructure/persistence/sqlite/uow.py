@@ -7,6 +7,7 @@ from typing import Any
 import aiosqlite
 
 from app.domain.ports.repositories import (
+    AliasRepository,
     ApplicationRepository,
     CompanyRepository,
     CrawlRunRepository,
@@ -15,16 +16,19 @@ from app.domain.ports.repositories import (
     MatchRepository,
     ObservationRepository,
     ResumeRepository,
+    SnapshotRepository,
     SourceRepository,
 )
 from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrate
 from app.infrastructure.persistence.sqlite.repositories import (
+    SqliteAliasRepository,
     SqliteCompanyRepository,
     SqliteCrawlRunRepository,
     SqliteJobRepository,
     SqliteObservationRepository,
     SqlitePluginStateRepository,
     SqliteSettingsRepository,
+    SqliteSnapshotRepository,
     SqliteSourceRepository,
     SqliteTaskRepository,
 )
@@ -42,6 +46,8 @@ class SqliteUnitOfWork:
         self._conn: aiosqlite.Connection | None = None
         self.sources: SourceRepository = _Unimplemented()  # type: ignore[assignment]
         self.crawl_runs: CrawlRunRepository = _Unimplemented()  # type: ignore[assignment]
+        self.snapshots: SnapshotRepository = _Unimplemented()  # type: ignore[assignment]
+        self.aliases: AliasRepository = _Unimplemented()  # type: ignore[assignment]
         self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
         self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
         self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
@@ -65,6 +71,8 @@ class SqliteUnitOfWork:
         self.jobs = SqliteJobRepository(self._conn, self._clock_now)
         self.observations = SqliteObservationRepository(self._conn, self._clock_now)
         self.crawl_runs = SqliteCrawlRunRepository(self._conn, self._clock_now)
+        self.snapshots = SqliteSnapshotRepository(self._conn, self._clock_now)
+        self.aliases = SqliteAliasRepository(self._conn, self._clock_now)
         return self
 
     async def __aexit__(self, *exc: object) -> None:

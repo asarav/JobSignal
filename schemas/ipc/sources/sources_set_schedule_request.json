@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "source_id": {
+      "type": "string"
+    },
+    "interval_s": {
+      "maximum": 86400,
+      "minimum": 0,
+      "type": "number"
+    }
+  },
+  "required": [
+    "source_id",
+    "interval_s"
+  ],
+  "title": "SourcesSetScheduleRequest",
+  "type": "object"
+}

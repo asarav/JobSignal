@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import contextlib
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from app.application.commands.settings import SettingsUseCase
 from app.application.commands.sources import SourcesUseCase
 from app.application.commands.tasks import TasksUseCase
 from app.application.config import SETTINGS_KEY, AppConfig
+from app.application.dto import DiscoveryRunParams
+from app.application.orchestration.scheduler import CrawlScheduler
 from app.application.sources import SourceRegistry
 from app.domain.models.common import PortError
 from app.infrastructure.clock import SystemClock
@@ -60,7 +63,9 @@ async def _load_config(uow_factory: SqliteUnitOfWorkFactory, data_dir: Path) -> 
         raise SystemExit(f"stored settings are invalid: {exc}") from exc
 
 
-def _build_dispatcher(container: Any) -> Dispatcher:
+def _build_dispatcher(
+    container: Any, wiring: DiscoveryWiring | None = None
+) -> Dispatcher:
     from app.application.dto import (
         CancelTaskParams,
         DiscoveryRunParams,
@@ -77,6 +82,7 @@ def _build_dispatcher(container: Any) -> Dispatcher:
         SourceAddParams,
         SourceIdParams,
         SourceSetEnabledParams,
+        SourceSetScheduleParams,
         TaskFilter,
     )
 
@@ -117,23 +123,60 @@ def _build_dispatcher(container: Any) -> Dispatcher:
     dispatcher.register("diagnostics.sleep", diagnostics.sleep, params_model=SleepTaskParams)
 
     # M1: discovery + sources + jobs + crawl runs
+    discovery = wiring or _build_discovery(container)
+    dispatcher.register("sources.list", discovery.sources.list, params_model=EmptyParams)
+    dispatcher.register("sources.add", discovery.sources.add, params_model=SourceAddParams)
+    dispatcher.register(
+        "sources.set_enabled", discovery.sources.set_enabled, params_model=SourceSetEnabledParams
+    )
+    dispatcher.register(
+        "sources.set_schedule", discovery.sources.set_schedule, params_model=SourceSetScheduleParams
+    )
+    dispatcher.register("sources.delete", discovery.sources.delete, params_model=SourceIdParams)
+
+    dispatcher.register("jobs.list", discovery.jobs.list, params_model=JobFilter)
+    dispatcher.register("jobs.search", discovery.jobs.search, params_model=JobSearchParams)
+
+    dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
+    dispatcher.register("crawl_runs.list", discovery.discovery.list_runs, params_model=EmptyParams)
+    return dispatcher
+
+
+@dataclass
+class DiscoveryWiring:
+    """The M1 discovery pieces, built once and shared by the worker."""
+
+    registry: SourceRegistry
+    sources: SourcesHandlers
+    jobs: JobsHandlers
+    discovery: DiscoveryHandlers
+    discovery_use_case: DiscoveryUseCase
+    scheduler: CrawlScheduler
+
+    async def sync_scheduler(self) -> None:
+        """(Re)schedule every enabled source that declares an interval."""
+        enabled = await self.registry.list(enabled_only=True)
+        self.scheduler.schedule_sources(
+            list(enabled), lambda source: self.run_source(source.id)
+        )
+
+    async def run_source(self, source_id: str) -> dict[str, object]:
+        return await self.discovery_use_case.run(DiscoveryRunParams(source_id=source_id))
+
+
+def _build_discovery(container: Any) -> DiscoveryWiring:
     connectors = [GreenhouseConnector(), AshbyConnector(), LeverConnector()]
     policy_http = PolicyHttpClient(transport=container.http)
     registry = SourceRegistry(container.uow_factory, connectors)
-    sources = SourcesHandlers(SourcesUseCase(container, registry))
-    dispatcher.register("sources.list", sources.list, params_model=EmptyParams)
-    dispatcher.register("sources.add", sources.add, params_model=SourceAddParams)
-    dispatcher.register("sources.set_enabled", sources.set_enabled, params_model=SourceSetEnabledParams)
-    dispatcher.register("sources.delete", sources.delete, params_model=SourceIdParams)
-
-    jobs = JobsHandlers(JobsUseCase(container))
-    dispatcher.register("jobs.list", jobs.list, params_model=JobFilter)
-    dispatcher.register("jobs.search", jobs.search, params_model=JobSearchParams)
-
-    discovery = DiscoveryHandlers(DiscoveryUseCase(container, registry, policy_http))
-    dispatcher.register("discovery.run", discovery.run, params_model=DiscoveryRunParams)
-    dispatcher.register("crawl_runs.list", discovery.list_runs, params_model=EmptyParams)
-    return dispatcher
+    discovery_use_case = DiscoveryUseCase(container, registry, policy_http)
+    return DiscoveryWiring(
+        registry=registry,
+        sources=SourcesHandlers(SourcesUseCase(container, registry)),
+        jobs=JobsHandlers(JobsUseCase(container)),
+        discovery=DiscoveryHandlers(discovery_use_case),
+        discovery_use_case=discovery_use_case,
+        scheduler=CrawlScheduler(),
+    )
 
 
 async def main() -> int:
@@ -154,9 +197,10 @@ async def main() -> int:
     schema_version = await migrate(db_path)
     uow_factory = SqliteUnitOfWorkFactory(db_path=db_path, clock_now=clock.now)
 
-    # Tasks left running by a previous process are marked interrupted on startup.
+    # Tasks and crawl runs left running by a previous process are closed on startup.
     async with uow_factory() as uow:
         await uow.tasks.mark_interrupted()
+        await uow.crawl_runs.mark_interrupted()
         await uow.commit()
 
     cfg = await _load_config(uow_factory, data_dir)
@@ -181,7 +225,9 @@ async def main() -> int:
     if runner is not None:
         await runner.start()
 
-    dispatcher = _build_dispatcher(container)
+    wiring = _build_discovery(container)
+    dispatcher = _build_dispatcher(container, wiring)
+    await wiring.sync_scheduler()
     transport = NdjsonTransport(sys.stdin, sys.stdout)
     writer_task = asyncio.create_task(event_writer(publisher.queue, transport.write))
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -220,6 +266,10 @@ async def main() -> int:
                     details=dict(exc.details),
                 ).to_dict()
             await transport.write(response)
+            # Sources changed: the schedule may have changed with them.
+            method = envelope.get("method")
+            if isinstance(method, str) and method.startswith("sources."):
+                await wiring.sync_scheduler()
 
     shutdown = False
     try:
@@ -252,6 +302,7 @@ async def main() -> int:
             task.cancel()
         if inflight:
             await asyncio.gather(*inflight, return_exceptions=True)
+        wiring.scheduler.cancel_all()
         if runner is not None:
             await runner.stop()
         await registry.persist_state()
