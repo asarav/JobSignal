@@ -98,6 +98,7 @@ class SqliteUnitOfWorkFactory:
         self._clock_now = clock_now
 
     async def initialize(self) -> int:
+        """Apply pending migrations and return the resulting schema version."""
         return await migrate(self._db_path)
 
     def __call__(self) -> SqliteUnitOfWork:

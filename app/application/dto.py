@@ -6,7 +6,6 @@ worker accepts/returns. Domain models remain the source of truth for meaning.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,10 +41,6 @@ class HealthResult(DTO):
     disk_usage_bytes: int
     plugin_health: list[dict[str, Any]] = Field(default_factory=list)
     queue_depth: int = 0
-
-
-class SettingsGetParams(DTO):
-    pass
 
 
 class SettingsPatch(DTO):
@@ -241,7 +236,3 @@ def task_summary(task: Any) -> TaskSummary:
         finished_at=iso(task.finished_at),
         parent_task_id=task.parent_task_id,
     )
-
-
-def mapping_json(value: Mapping[str, Any]) -> dict[str, Any]:
-    return dict(value)

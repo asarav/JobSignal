@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from collections.abc import Mapping, Sequence
@@ -319,11 +320,11 @@ class SqliteJobRepository:
             title_family = job.title_family
             description_text = job.description_text
             description_html = job.description_html
-            locations = [loc.__dict__ for loc in job.locations]
+            locations = [dataclasses.asdict(loc) for loc in job.locations]
             workplace_type = job.workplace_type.value
             employment_type = job.employment_type.value
             seniority = job.seniority.value
-            salary = job.salary.__dict__ if job.salary else None
+            salary = dataclasses.asdict(job.salary) if job.salary else None
             posted_at = job.posted_at.strftime("%Y-%m-%dT%H:%M:%SZ") if job.posted_at else None
             source_posting_id = job.source_posting_id
             canonical_url = job.canonical_url
@@ -334,7 +335,7 @@ class SqliteJobRepository:
             extraction_status = job.extraction_status.value
             extraction_confidence = job.extraction_confidence
             field_confidence = dict(job.field_confidence)
-            provenance = [p.__dict__ for p in job.provenance]
+            provenance = [dataclasses.asdict(p) for p in job.provenance]
             posting_status = job.posting_status_hint.value
             fetched_at = job.fetched_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
@@ -388,7 +389,7 @@ class SqliteJobRepository:
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, canonical_url, json.dumps(original_urls), department,
                  json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
-                 json.dumps(field_confidence), json.dumps(provenance), posting_status, content_hash, now, now, fetched_at, now, now),
+                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, now, fetched_at, now, now),
             )
         else:
             await self._conn.execute(
@@ -404,7 +405,7 @@ class SqliteJobRepository:
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, json.dumps(original_urls), department,
                  json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
-                 json.dumps(field_confidence), json.dumps(provenance), posting_status, content_hash, now, fetched_at, now, canonical_url),
+                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, fetched_at, now, canonical_url),
             )
 
     async def get(self, job_id):

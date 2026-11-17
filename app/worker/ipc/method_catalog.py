@@ -33,7 +33,6 @@ from app.application.dto import (
     OkResult,
     PluginConfigureParams,
     PluginIdParams,
-    PluginInfo,
     PluginListResult,
     PluginOptionalIdParams,
     SettingsPatch,
@@ -147,18 +146,3 @@ FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = (
     "browser.",
     "search_profiles.",
 )
-
-
-def result_models() -> tuple[type[BaseModel], ...]:
-    seen: set[str] = set()
-    models: list[type[BaseModel]] = []
-    for spec in MILESTONE_METHODS:
-        for model in (spec.params, spec.result):
-            name = model.__name__
-            if name not in seen:
-                seen.add(name)
-                models.append(model)
-    # Nested list model used by PluginListResult.
-    if PluginInfo.__name__ not in seen:
-        models.append(PluginInfo)
-    return models

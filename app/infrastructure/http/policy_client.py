@@ -77,7 +77,3 @@ class PolicyHttpClient:
         if last_error is None:
             last_error = PortError(code="http.failed", message="request failed", retryable=False)
         return Err(last_error)
-
-    def robots_allowed(self, url: str) -> bool:
-        # M1: conservative allow; full robots parser lands in M8.
-        return True

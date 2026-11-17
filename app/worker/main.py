@@ -31,7 +31,6 @@ from app.domain.models.common import PortError
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.http import PolicyHttpClient
 from app.infrastructure.ids import UlidGenerator
-from app.infrastructure.persistence.sqlite.migrator import migrate
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
 from app.plugins.registry import PluginRegistry
 from app.worker.composition_root import build_container
@@ -201,8 +200,8 @@ async def main() -> int:
     clock = SystemClock()
     ids = UlidGenerator()
     db_path = data_dir / AppConfig().paths.db_name
-    schema_version = await migrate(db_path)
     uow_factory = SqliteUnitOfWorkFactory(db_path=db_path, clock_now=clock.now)
+    schema_version = await uow_factory.initialize()
 
     # Tasks and crawl runs left running by a previous process are closed on startup.
     async with uow_factory() as uow:

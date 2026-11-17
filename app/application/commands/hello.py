@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from app.application.container import Container
@@ -57,8 +56,13 @@ class HealthUseCase:
     async def execute(self) -> HealthResult:
         disk_used = 0
         if self._container.data_dir:
-            usage = shutil.disk_usage(Path(self._container.data_dir))
-            disk_used = usage.used
+            data_path = Path(self._container.data_dir)
+            if data_path.exists():
+                disk_used = sum(
+                    path.stat().st_size
+                    for path in data_path.rglob("*")
+                    if path.is_file()
+                )
 
         registry = self._container.registry
         plugin_health = registry.describe() if registry is not None else []

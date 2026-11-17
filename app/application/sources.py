@@ -188,6 +188,7 @@ async def run_crawl(
     try:
         refs = await _collect_refs(connector, source, ctx, invoker, source.connector_id)
         for ref in refs:
+            ctx.cancel.throw_if_cancelled()
             stats["discovered"] = int(str(stats["discovered"])) + 1
             result = await _call_connector(
                 invoker,
@@ -349,7 +350,11 @@ async def _collect_refs(
     """
 
     async def collect() -> list[Any]:
-        return [ref async for ref in await connector.list_jobs(source, ctx)]
+        refs: list[Any] = []
+        async for ref in await connector.list_jobs(source, ctx):
+            ctx.cancel.throw_if_cancelled()
+            refs.append(ref)
+        return refs
 
     return list(await _call_connector(invoker, connector_id, collect))
 
