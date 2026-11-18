@@ -35,6 +35,10 @@ def _candidate(url: str) -> DiscoveredSource:
     )
 
 
+def _row(url: str) -> dict[str, str]:
+    return {"url": url, "status": "200", "timestamp": "20260203081435"}
+
+
 class _Provider:
     """A discovery provider yielding a fixed list of career-site URLs."""
 
@@ -221,7 +225,7 @@ async def test_auto_discover_skips_disabled_providers():
 
 @pytest.mark.asyncio
 async def test_a_failing_provider_does_not_stop_the_run():
-    _, wiring = _wire(
+    container, wiring = _wire(
         {
             "discovery.broken": _BrokenProvider(),
             "discovery.fake": _Provider(["https://jobs.example.com/a"]),
@@ -233,6 +237,10 @@ async def test_a_failing_provider_does_not_stop_the_run():
     assert result.discovered == 1
     assert result.registered == 1
     assert result.crawled == 1
+    # The failing provider holds the cursor so its slice is retried next pass.
+    async with container.uow_factory() as uow:
+        state = await uow.settings.get(AUTO_DISCOVER_STATE_KEY)
+    assert isinstance(state, dict) and state.get("rotation_cursor") == 0
 
 
 @pytest.mark.asyncio
@@ -296,29 +304,31 @@ async def test_a_pass_discovers_without_seeds_from_fixture_index_data():
     and the real ``discovery.web_index`` provider is pointed at a stub of the
     public URL index, so the pass must still register and attempt boards.
     """
-    import json as _json
+    import json
 
     from app.domain.models.http import HttpResponse
 
-    fixture = _json.dumps(
-        [
-            ["original"],
-            ["https://boards.greenhouse.io/acme"],
-            ["https://boards.greenhouse.io/acme/jobs/1"],
-            ["https://boards.greenhouse.io/beta"],
-        ]
+    fixture_rows = "".join(
+        json.dumps(row) + "\n"
+        for row in (
+            _row("https://boards.greenhouse.io/acme"),
+            _row("https://boards.greenhouse.io/acme/jobs/1"),
+            _row("https://boards.greenhouse.io/beta"),
+        )
     ).encode()
+    collinfo = json.dumps([{"id": "CC-MAIN-2026-43"}]).encode()
+
+    from app.domain.models.common import Ok
 
     class _IndexStub(FakeHttpClient):
         async def send(self, req):
             self.sent.append(req)
+            body = collinfo if "/collinfo" in req.url else fixture_rows
             return Ok(
                 HttpResponse(
-                    status=200, url=req.url, headers={}, body=fixture, elapsed_ms=1
+                    status=200, url=req.url, headers={}, body=body, elapsed_ms=1
                 )
             )
-
-    from app.domain.models.common import Ok
 
     http = _IndexStub()
     container = build_test_container(http=http, clock=FakeClock())

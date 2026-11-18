@@ -21,11 +21,14 @@ The repository is named `JobSignal` for historical reasons; the product is named
 ## What Milestone 4 adds
 
 - **Seed-free discovery** (`app/plugins/discovery/web_index.py`):
-  `discovery.web_index` enumerates ATS tenant boards from a public web URL
-  index (Internet Archive CDX API) — no API key, no bundled list, no user
-  input. Each pass walks one `(ATS host, leading-character bucket)` slice of
-  the tenant space, so coverage grows every day and wraps around to refresh.
-  Design and trade-offs: [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
+  `discovery.web_index` enumerates ATS tenant boards from public web URL
+  indexes — Common Crawl's index server primary, the Internet Archive CDX API
+  as fallback — with no API key, no bundled list, no user input. Each pass
+  walks one `(ATS host, leading-character bucket)` slice of the tenant space,
+  so coverage grows every day and wraps around to refresh. A slice whose
+  indexes are all unreachable is retried next pass (the rotation cursor is
+  held). Design and trade-offs:
+  [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
 - **The seed file is a bootstrap, not the engine.**
   `discovery.ats_directory` ships eight public boards as package data so a
   cold install has something to crawl immediately and tests do not need the

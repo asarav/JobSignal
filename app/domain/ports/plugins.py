@@ -49,7 +49,8 @@ class PluginRegistryPort(Protocol):
     def is_enabled(self, plugin_id: str) -> bool: ...
 
     async def invoke(
-        self, plugin_id: str, fn: Callable[..., Awaitable[Any]], *args: Any
+        self, plugin_id: str, fn: Callable[..., Awaitable[Any]], *args: Any,
+        timeout_s: float | None = None,
     ) -> Any: ...
 
     def require(self, plugin_id: str) -> Any: ...

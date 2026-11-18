@@ -134,14 +134,18 @@ class PluginRegistry:
         )
 
     async def invoke(
-        self, plugin_id: str, fn: Callable[..., Awaitable[Any]], *args: Any
+        self, plugin_id: str, fn: Callable[..., Awaitable[Any]], *args: Any,
+        timeout_s: float | None = None,
     ) -> Any:
         """Call a plugin through its isolation shim.
 
         The shim applies the timeout, captures exceptions and feeds the
         circuit breaker, so a hanging or failing plugin is contained.
+        ``timeout_s`` overrides the registry default for this call (used by
+        the slow discovery pass, whose index queries legitimately take a
+        minute).
         """
-        shim = self.shim_for(plugin_id)
+        shim = self.shim_for(plugin_id, timeout_s=timeout_s)
         return await shim.call(fn, *args)
 
     def capabilities(self, plugin_id: str | None = None) -> dict[str, frozenset[str]]:

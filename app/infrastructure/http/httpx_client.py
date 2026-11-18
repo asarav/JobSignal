@@ -29,7 +29,7 @@ class HttpxClient:
                     message="only http/https URLs are supported",
                 )
             )
-        timeout = min(req.timeout_s, self._config.timeout_s)
+        timeout = min(req.timeout_s, self._config.max_timeout_s)
         max_bytes = min(req.max_bytes, self._config.max_bytes)
         headers = {"User-Agent": self._config.user_agent, **dict(req.headers)}
         try:

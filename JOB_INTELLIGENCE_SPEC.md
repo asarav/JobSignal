@@ -762,7 +762,7 @@ Discovery finds **sources**; connectors/extraction obtain **jobs**. They share o
 | `discovery.local_lists` | Import CSV/JSON/OPML of employers/career URLs | none | on |
 | `discovery.sitemap` | Reads `robots.txt` sitemap entries and job-related sitemaps for registered career sites | public GETs | on |
 | `discovery.search_engine` | Queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`); enabled by default but respects `external_plugins` feature flag | sends query text to the engine | on |
-| `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Internet Archive CDX API). Each run walks one `(ATS host, leading-character bucket)` slice of the tenant space, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
+| `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Common Crawl's index server, with the Internet Archive CDX API as fallback). Each run walks one `(ATS host, leading-character bucket)` slice of the tenant space, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
 | `discovery.ats_directory` | Offline **bootstrap** seed list of public ATS tenants shipped as a data file. Cold start and test fixture only - never the sole discovery mechanism | none | on |
 | `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default), advances the providers' rotation cursor, registers newly discovered career sites as sources without user input, and crawls the sources that are due | public GETs + search engine queries | on |
 
@@ -781,7 +781,7 @@ The crux of the product is that **jobs find the user**. Discovery therefore has 
 
 How one automatic pass works (`discovery.auto_discover`):
 
-1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for one `(ATS host, leading-character bucket)` pair (for example "tenants starting with `s` on `boards.greenhouse.io`"). The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file.
+1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for one `(ATS host, leading-character bucket)` pair (for example "tenants starting with `s` on `boards.greenhouse.io`"). The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file. If the primary index (Common Crawl) cannot serve the slice, the Internet Archive CDX API is queried as fallback; if every index fails, the slice is retried next pass.
 2. **Rotate.** The pass persists an integer rotation cursor in `app_settings` (`auto_discover_state`) and advances it by one. Hosts are walked before buckets, so consecutive passes cover different tenants, and the cursor wraps once the whole space has been visited - a later pass re-checks it with fresher index data.
 3. **Register.** Candidates are deduped by canonical URL against existing sources and capped by `discovery.max_new_sources_per_run` (default 50). Each new row gets the default per-source schedule with jitter.
 4. **Crawl what is due.** Sources are crawled oldest-attempt-first, bounded by `discovery.max_crawl_sources_per_run` (default 40) and gated by the global crawl concurrency cap, so a pass stays bounded no matter how many sources exist. A source is "due" when it has never been crawled or when its own interval has elapsed.
@@ -2280,8 +2280,8 @@ discovery:
   auto_discover_interval_hours: 24 # cadence of the automatic pass
   max_new_sources_per_run: 50      # registration budget per pass
   max_crawl_sources_per_run: 40    # crawl budget per pass (oldest attempt first)
-  web_index_limit: 60              # tenant URLs requested per index query
-  web_index_lookback_days: 540     # ignore index captures older than this
+  web_index_limit: 100             # tenant URLs requested per index query
+  provider_timeout_s: 120          # call budget for one discovery provider
 extraction:
   order: [extract.public_api, extract.public_endpoint, extract.jsonld, extract.embedded_json,
           extract.static_html, extract.rendered_dom, extract.generic, extract.partial]

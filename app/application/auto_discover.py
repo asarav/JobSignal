@@ -4,7 +4,8 @@ One run does four things:
 
 1. asks every *enabled* discovery provider for candidate career sites,
    advancing the providers' rotation cursor so repeated runs explore new
-   ground instead of the same handful of seeds,
+   ground instead of the same handful of seeds (a failed provider holds the
+   cursor so its slice is retried next pass),
 2. registers up to ``discovery.max_new_sources_per_run`` unknown career sites
    as ``SourceConfig`` rows,
 3. crawls the sources that are actually *due* (never crawled, or last attempt
@@ -52,6 +53,9 @@ AUTO_DISCOVER_STARTUP_DELAY_S = 60.0
 DEFAULT_MAX_NEW_SOURCES_PER_RUN = 50
 DEFAULT_MAX_CRAWL_SOURCES_PER_RUN = 40
 
+#: Shim timeout for a discovery provider call (index queries are slow).
+DEFAULT_PROVIDER_TIMEOUT_S = 120.0
+
 
 class _NoGate:
     async def __aenter__(self) -> None:
@@ -82,11 +86,13 @@ class AutoDiscoverUseCase:
         """Discover new career sites, register them, then crawl what is due."""
         state = await self._state()
         cursor = _as_int(state.get("rotation_cursor"), 0)
-        discovered = await self._discover(cursor)
+        discovered, providers_ok = await self._discover(cursor)
         registered = await self._register(discovered)
         crawled, failed = await self._crawl_due()
 
-        state["rotation_cursor"] = cursor + 1
+        # A provider that failed to answer holds the cursor, so the same slice
+        # is retried next pass instead of being skipped forever.
+        state["rotation_cursor"] = cursor + 1 if providers_ok else cursor
         state["last_run_at"] = self._container.clock.now().isoformat()
         await self._save_state(state)
 
@@ -118,20 +124,30 @@ class AutoDiscoverUseCase:
 
     # ------------------------------------------------------------------ discovery
 
-    async def _discover(self, cursor: int) -> list[DiscoveredSource]:
-        """Collect candidates from every enabled provider, deduped by URL."""
+    async def _discover(self, cursor: int) -> tuple[list[DiscoveredSource], bool]:
+        """Collect candidates from every enabled provider, deduped by URL.
+
+        Returns the candidates and whether every provider answered; a failed
+        provider must not advance the rotation cursor (see ``run``).
+        """
         plugin_registry = self._container.registry
         discovered: list[DiscoveredSource] = []
         seen: set[str] = set()
+        all_answered = True
         for entry in plugin_registry.list_by_kind("discovery"):
             plugin_id = str(entry.manifest.id)
             if not plugin_registry.is_enabled(plugin_id):
                 continue
             try:
                 candidates = await plugin_registry.invoke(
-                    plugin_id, self._collect_provider, entry.instance, cursor
+                    plugin_id,
+                    self._collect_provider,
+                    entry.instance,
+                    cursor,
+                    timeout_s=self._provider_timeout_s(),
                 )
             except Exception as exc:  # noqa: BLE001 - one provider must not break the run
+                all_answered = False
                 self._container.logger.warning(
                     "discovery.provider_failed", plugin_id=plugin_id, error=str(exc)
                 )
@@ -142,7 +158,7 @@ class AutoDiscoverUseCase:
                     continue
                 seen.add(key)
                 discovered.append(source)
-        return discovered
+        return discovered, all_answered
 
     async def _collect_provider(
         self, provider: Any, cursor: int
@@ -277,6 +293,23 @@ class AutoDiscoverUseCase:
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 return value
         return default
+
+    def _provider_timeout_s(self) -> float:
+        """Shim timeout for one discovery provider call.
+
+        Index queries legitimately take tens of seconds, so discovery gets a
+        longer leash than the default plugin timeout.
+        """
+        settings = getattr(self._container.config, "discovery", None)
+        if isinstance(settings, dict):
+            value = settings.get("provider_timeout_s")
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and value > 0
+            ):
+                return float(value)
+        return DEFAULT_PROVIDER_TIMEOUT_S
 
     def _make_ctx(self) -> ExecutionContext:
         return ExecutionContext(

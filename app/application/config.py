@@ -39,6 +39,10 @@ class PathsConfig(StrictModel):
 class HttpConfig(StrictModel):
     user_agent: str = "Lodestar/0.0.0 (+local-desktop)"
     timeout_s: float = 20.0
+    #: Hard ceiling for any single request; a caller may ask for more than
+    #: ``timeout_s`` (the slow public-index queries in discovery do) but never
+    #: more than this.
+    max_timeout_s: float = 120.0
     max_bytes: int = 5_000_000
     max_redirects: int = 5
 

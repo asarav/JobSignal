@@ -6,39 +6,53 @@ import json
 
 import pytest
 from app.domain.models.common import Err, Ok, PortError
-from app.domain.models.context import CancellationToken
+from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.discovery import DiscoveryQuery
 from app.domain.models.http import HttpRequest, HttpResponse
 from app.plugins.discovery.web_index import BUCKETS, WebIndexProvider
 from tests.support.fakes import FakeClock, FakeHttpClient, FakeStructuredLogger
 
-ENDPOINT = "https://index.example/cdx"
+COLL_ID = "CC-MAIN-2026-43"
+OLDER_ID = "CC-MAIN-2026-30"
 
 
 class _StubHttp(FakeHttpClient):
-    """Returns one canned index body and records the URLs it was asked for."""
+    """Serves a canned crawl-index listing and index bodies by URL."""
 
-    def __init__(self, body: bytes | None = None, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        index_body: bytes | None = None,
+        *,
+        fail: bool = False,
+        collinfo_body: bytes | None = None,
+        bodies_by_url: dict[str, bytes] | None = None,
+    ) -> None:
         super().__init__()
-        self._body = body
         self._fail = fail
+        self._index_body = index_body
+        self._collinfo_body = collinfo_body
+        self._bodies_by_url = bodies_by_url or {}
         self.urls: list[str] = []
 
     async def send(self, req: HttpRequest):
         self.urls.append(req.url)
         if self._fail:
             return Err(PortError(code="http.transport", message="index is down"))
-        assert self._body is not None
+        if "/collinfo" in req.url:
+            body = self._collinfo_body or json.dumps(
+                [{"id": COLL_ID}, {"id": OLDER_ID}]
+            ).encode()
+        else:
+            body = self._bodies_by_url.get(req.url, self._index_body)
+        assert body is not None
         return Ok(
             HttpResponse(
-                status=200, url=req.url, headers={}, body=self._body, elapsed_ms=1
+                status=200, url=req.url, headers={}, body=body, elapsed_ms=1
             )
         )
 
 
 def _ctx(http) -> object:
-    from app.domain.models.context import ExecutionContext
-
     return ExecutionContext(
         task_id="test",
         clock=FakeClock(),
@@ -50,27 +64,32 @@ def _ctx(http) -> object:
     )
 
 
-def _body(rows: list[list[str]]) -> bytes:
-    return json.dumps([["original"], *rows]).encode()
+def _ndjson(rows: list[dict[str, str]]) -> bytes:
+    return "".join(json.dumps(row) + "\n" for row in rows).encode()
+
+
+def _row(url: str, status: str = "200") -> dict[str, str]:
+    return {"url": url, "status": status, "timestamp": "20260203081435"}
 
 
 def _provider(**kwargs) -> WebIndexProvider:
-    return WebIndexProvider(endpoint=ENDPOINT, **kwargs)
+    return WebIndexProvider(**kwargs)
 
 
 @pytest.mark.asyncio
 async def test_index_rows_become_board_roots():
     http = _StubHttp(
-        _body(
+        _ndjson(
             [
-                ["https://boards.greenhouse.io/acme"],
-                ["https://boards.greenhouse.io/acme/jobs/123"],
-                ["https://boards.greenhouse.io/acme/jobs/456?utm_source=x"],
-                ["https://boards.greenhouse.io/search"],
-                ["https://boards.greenhouse.io/jobs"],
-                ["https://boards.greenhouse.io/"],
-                ["https://jobs.lever.co/acme"],
-                ["https://boards.greenhouse.io/Beta-Corp"],
+                _row("https://boards.greenhouse.io/acme"),
+                _row("https://boards.greenhouse.io/acme/jobs/123"),
+                _row("https://boards.greenhouse.io/acme/jobs/456?utm_source=x"),
+                _row("https://boards.greenhouse.io/search"),
+                _row("https://boards.greenhouse.io/jobs"),
+                _row("https://boards.greenhouse.io/"),
+                _row("https://jobs.lever.co/acme"),
+                _row("https://boards.greenhouse.io/Beta-Corp"),
+                _row("https://boards.greenhouse.io/redirected", status="301"),
             ]
         )
     )
@@ -88,25 +107,87 @@ async def test_index_rows_become_board_roots():
     assert sources[0].company_hint == "Acme"
     assert sources[0].confidence < 1.0
     assert sources[0].evidence and sources[0].evidence[0].kind == "web_index"
-    assert http.urls and "boards.greenhouse.io%2Fa" in http.urls[0]
-    assert "limit=" in http.urls[0]
+    # First the crawl listing, then the slice query for the current cursor.
+    assert "/collinfo" in http.urls[0]
+    assert "boards.greenhouse.io/a*" in http.urls[1]
+    assert "limit=" in http.urls[1]
 
 
 @pytest.mark.asyncio
-async def test_index_failure_yields_nothing():
-    http = _StubHttp(fail=True)
+async def test_collinfo_failure_falls_back_to_cdx():
+    """Common Crawl down entirely: the CDX API still serves the slice."""
+
+    class _CollInfoDown(FakeHttpClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.urls: list[str] = []
+
+        async def send(self, req: HttpRequest):
+            self.urls.append(req.url)
+            if "/collinfo" in req.url:
+                return Err(PortError(code="http.transport", message="down"))
+            return Ok(
+                HttpResponse(
+                    status=200,
+                    url=req.url,
+                    headers={},
+                    body=(
+                        json.dumps(
+                            [
+                                ["original"],
+                                ["https://boards.greenhouse.io/acme"],
+                            ]
+                        ).encode()
+                    ),
+                    elapsed_ms=1,
+                )
+            )
+
+    http = _CollInfoDown()
     provider = _provider()
 
     sources = [
         source async for source in provider.discover(DiscoveryQuery(), _ctx(http))
     ]
 
-    assert sources == []
+    assert [s.url for s in sources] == ["https://boards.greenhouse.io/acme"]
+    assert all(s.evidence[0].data["index"] == "cdx" for s in sources)
+    assert any("web.archive.org" in url for url in http.urls)
 
 
 @pytest.mark.asyncio
-async def test_unparseable_index_body_yields_nothing():
-    http = _StubHttp(b"<html>rate limited</html>")
+async def test_both_indexes_down_raises_so_the_slice_is_retried():
+    http = _StubHttp(fail=True)
+    provider = _provider()
+
+    with pytest.raises(RuntimeError, match="unreachable"):
+        _ = [source async for source in provider.discover(DiscoveryQuery(), _ctx(http))]
+
+
+@pytest.mark.asyncio
+async def test_unparseable_index_bodies_fall_back_to_an_older_crawl():
+    broken = b"<html>service unavailable</html>"
+    http = _StubHttp(
+        broken,
+        bodies_by_url={
+            WebIndexProvider()._query_url(
+                OLDER_ID, "boards.greenhouse.io", "a"
+            ): _ndjson([_row("https://boards.greenhouse.io/acme")]),
+        },
+    )
+    provider = _provider()
+
+    sources = [
+        source async for source in provider.discover(DiscoveryQuery(), _ctx(http))
+    ]
+
+    assert [s.url for s in sources] == ["https://boards.greenhouse.io/acme"]
+    assert any(OLDER_ID in url for url in http.urls)
+
+
+@pytest.mark.asyncio
+async def test_empty_index_slice_yields_nothing():
+    http = _StubHttp(_ndjson([]))
     provider = _provider()
 
     sources = [
@@ -137,7 +218,7 @@ def test_cursor_walks_hosts_then_buckets():
 
 @pytest.mark.asyncio
 async def test_rotation_cursor_selects_the_queried_slice():
-    http = _StubHttp(_body([]))
+    http = _StubHttp(_ndjson([]))
     provider = _provider()
 
     # Cursor 1 is the second host at the first bucket.
@@ -146,4 +227,4 @@ async def test_rotation_cursor_selects_the_queried_slice():
         async for s in provider.discover(DiscoveryQuery(extra={"cursor": 1}), _ctx(http))
     ]
 
-    assert "jobs.ashbyhq.com%2Fa" in http.urls[0]
+    assert "jobs.ashbyhq.com/a*" in http.urls[1]

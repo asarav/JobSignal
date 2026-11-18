@@ -48,19 +48,16 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
         PluginManifest(
             id="discovery.web_index",
             kind="discovery",
-            version="1.0.0",
+            version="1.1.0",
             api_version="1",
             capabilities=frozenset({"discover"}),
-            network_hosts=("web.archive.org",),
+            network_hosts=("index.commoncrawl.org", "web.archive.org"),
             description=(
                 "Enumerates ATS tenants from a public web URL index; walks one "
                 "slice per run so coverage grows without seeds (M4)."
             ),
         ),
-        WebIndexProvider(
-            limit=_positive_int(settings.get("web_index_limit"), 60),
-            lookback_days=_positive_int(settings.get("web_index_lookback_days"), 540),
-        ),
+        WebIndexProvider(limit=_positive_int(settings.get("web_index_limit"), 100)),
     )
 
     registry.add(
