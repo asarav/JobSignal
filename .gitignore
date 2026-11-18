@@ -27,8 +27,9 @@ frontend/src-tauri/gen/
 *.tsbuildinfo
 *.local
 
-# App data / logs
-*.sqlite
+# Build artifacts (seed builder)
+.seed_build_state.json
+.build_seed_cache.json
 *.sqlite-wal
 *.sqlite-shm
 *.bak

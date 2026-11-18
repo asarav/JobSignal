@@ -2371,7 +2371,7 @@ Discovery interfaces, `SourceRegistry`, classifier, `PolicyHttpClient` (robots, 
 **Exit:** connector contract suites green; incremental crawl skips unchanged jobs; failing source isolated; not-seen/removal logic tested.
 
 ### Milestone 2 — Universal extraction
-SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI.
+SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. When these connectors land, discovery expands its host list to cover Workday/iCIMS tenants (where most S&P 500 employers live).
 **Exit:** unknown-ATS fixture sites yield complete or partial records; every strategy contract-tested; rendered DOM obeys robots/challenge rules.
 
 ### Milestone 3 — Search and job history
