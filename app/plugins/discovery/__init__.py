@@ -5,7 +5,9 @@ Two kinds of provider feed the daily pass:
 * ``discovery.web_index`` — enumerates ATS tenants from a public web URL
   index, so discovery does not depend on a bundled list or on the user adding
   sources.  Each run walks one slice of the tenant space.
-* ``discovery.ats_directory`` — a small offline seed list used as a bootstrap
+* ``discovery.ats_directory`` — a bundled seed list (~1,000 verified boards of
+  the largest employers on the supported ATS hosts) used as a warm start for
+  cold installs and as a test fixture. Regenerate via ``scripts/build_seed.py``.
   on a cold start (and a demo/test fixture).  It is not the discovery engine.
 
 Optional providers (search engines) stay behind their feature flag and are

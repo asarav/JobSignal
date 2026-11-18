@@ -25,6 +25,13 @@ Once a day the worker runs a discovery pass:
    `discovery.max_crawl_sources_per_run` (default 60) per pass and bounded by
    the global crawl concurrency cap.
 5. **Store the outcome.** Every crawl writes a `crawl_runs` row and publishes
+   `crawl.completed` / `crawl.failed` events.
+6. **Cold start.** A fresh install has no run state, so the worker runs
+   `discovery.warmup_passes` (default 5) passes back-to-back (each still
+   bounded by the pass caps and the crawl gate) to register the bundled
+   ~1,000-board seed list within minutes. It stops early once a pass
+   registers nothing new; afterwards only the normal daily pass runs.
+5. **Store the outcome.** Every crawl writes a `crawl_runs` row and publishes
    `crawl.completed` / `crawl.failed`. New jobs land in the database and are
    immediately searchable through your search profiles, with their hard
    filters applied.

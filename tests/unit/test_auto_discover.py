@@ -142,6 +142,57 @@ async def test_auto_discover_registers_dedupes_and_crawls():
 
 
 @pytest.mark.asyncio
+async def test_cold_start_runs_warmup_passes_until_seeds_are_exhausted():
+    urls = [
+        f"https://jobs.example.com/{n:04d}" for n in range(250)
+    ]
+    provider = _Provider(urls)
+    container, wiring = _wire(
+        {"discovery.fake": provider},
+        config=AppConfig(discovery={"max_new_sources_per_run": 200}),
+    )
+
+    result = await wiring.auto_discover_use_case.run_if_due(3600.0)
+
+    # 200 registered in the first pass, 50 in the second, then nothing new.
+    assert result is not None
+    assert result.registered == 250
+    assert result.crawled >= 0
+    assert provider.calls == 3
+    async with container.uow_factory() as uow:
+        state = await uow.settings.get(AUTO_DISCOVER_STATE_KEY)
+    assert state is not None and state.get("rotation_cursor") == 36
+
+
+@pytest.mark.asyncio
+async def test_warmup_runs_only_on_a_cold_start():
+    provider = _Provider(["https://jobs.example.com/a"])
+    _, wiring = _wire({"discovery.fake": provider})
+
+    first = await wiring.auto_discover_use_case.run_if_due(3600.0)
+    calls_after_warmup = provider.calls
+    assert first is not None and first.registered == 1
+
+    # Warm-up recorded a run; the interval now holds the next pass back.
+    assert await wiring.auto_discover_use_case.run_if_due(3600.0) is None
+    assert provider.calls == calls_after_warmup
+
+
+@pytest.mark.asyncio
+async def test_warmup_can_be_disabled_by_config():
+    provider = _Provider(["https://jobs.example.com/a"])
+    _, wiring = _wire(
+        {"discovery.fake": provider},
+        config=AppConfig(discovery={"warmup_passes": 0}),
+    )
+
+    result = await wiring.auto_discover_use_case.run_if_due(3600.0)
+
+    assert result is not None and result.registered == 1
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_registration_is_capped_per_pass():
     provider = _Provider([f"https://jobs.example.com/{n}" for n in "abcd"])
     _, wiring = _wire(

@@ -29,17 +29,22 @@ The repository is named `JobSignal` for historical reasons; the product is named
   around to refresh. A pass whose slices are all unreachable is retried next
   pass (the rotation cursor is held). Design and trade-offs:
   [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
-- **The seed file is a bootstrap, not the engine.**
-  `discovery.ats_directory` ships eight public boards as package data so a
-  cold install has something to crawl immediately and tests do not need the
-  network. Deleting it does not stop discovery.
+- **The seed file is a warm start, not the engine.**
+  `discovery.ats_directory` ships ~1,000 verified boards of the largest
+  employers on the supported ATS hosts (refreshed via `scripts/build_seed.py`),
+  so a cold install has something to crawl within minutes while the
+  web-index rotation fills in long-tail companies. Deleting it does not stop
+  discovery.
 - **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
   every enabled provider for candidates, dedupes by canonical URL, registers
   up to `discovery.max_new_sources_per_run` new sources (connector from the
   provider's ATS hint or the URL classifier), then crawls the sources that are
   due — stalest attempt first, in parallel, up to
-  `discovery.max_crawl_sources_per_run`. Per-provider and per-source failures
-  are isolated and counted, never fatal.
+  `discovery.max_crawl_sources_per_run`. On a cold start (no run state yet)
+  it runs `discovery.warmup_passes` (default 5) passes back-to-back so the
+  bundled seed list is registered in minutes rather than over the first
+  days. Per-provider and per-source failures are isolated and counted,
+  never fatal.
 - **Bounded work.** A source is crawled by the scheduler and by the pass only
   through one shared crawl gate (`crawl.global_concurrency`); the pass has a
   registration cap and a crawl cap, so a large source list never turns a pass

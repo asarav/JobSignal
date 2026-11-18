@@ -58,6 +58,11 @@ DEFAULT_MAX_CRAWL_SOURCES_PER_RUN = 60
 #: How many rotation slices every pass walks (coverage per day).
 DEFAULT_CURSOR_STEP = 12
 
+#: Passes run back-to-back on a cold start. One pass registers at most
+#: ``max_new_sources_per_run`` sources, so a fresh install needs several to
+#: register the bundled seed list in minutes instead of over the first days.
+DEFAULT_WARMUP_PASSES = 5
+
 #: Shim timeout for a discovery provider call.  A pass walks a dozen index
 #: slices under one gateway that throttles bursts, so the whole provider
 #: call needs a generous ceiling (the pass is still bounded by its budgets).
@@ -122,12 +127,58 @@ class AutoDiscoverUseCase:
     async def run_if_due(
         self, interval_s: float = AUTO_DISCOVER_INTERVAL_S
     ) -> AutoDiscoverResult | None:
-        """Run only when the last completed run is older than ``interval_s``."""
+        """Run only when the last completed run is older than ``interval_s``.
+
+        On a cold start (no state at all) several passes run back-to-back so
+        a fresh install registers the bundled seed list immediately instead
+        of over the first ``warmup_passes`` days.
+        """
         now = _as_utc(self._container.clock.now())
         last = await self._last_run_at()
-        if last is not None and now - last < timedelta(seconds=interval_s):
+        if last is None:
+            if self._warmup_passes() <= 1:
+                return await self.run()
+            return await self.run_warmup()
+        if now - last < timedelta(seconds=interval_s):
             return None
         return await self.run()
+
+    async def run_warmup(self) -> AutoDiscoverResult:
+        """Run back-to-back passes; for cold starts only.
+
+        Each pass still obeys its own budgets and the shared crawl gate; the
+        loop stops early once a pass registers nothing new (the seed list is
+        exhausted and only slow index discovery remains, which the daily
+        cadence covers).
+        """
+        passes = self._warmup_passes()
+        total = AutoDiscoverResult()
+        for index in range(passes):
+            try:
+                result = await self.run()
+            except Exception as exc:  # noqa: BLE001 - warmup must not kill the worker
+                self._container.logger.warning(
+                    "discovery.auto_discover.warmup_failed",
+                    index=index,
+                    error=str(exc),
+                )
+                break
+            total = AutoDiscoverResult(
+                discovered=total.discovered + result.discovered,
+                registered=total.registered + result.registered,
+                crawled=total.crawled + result.crawled,
+                failed=total.failed + result.failed,
+            )
+            self._container.logger.info(
+                "discovery.auto_discover.warmup_pass",
+                index=index + 1,
+                of=passes,
+                registered=result.registered,
+                crawled=result.crawled,
+            )
+            if result.registered == 0:
+                break
+        return total
 
     # ------------------------------------------------------------------ discovery
 
@@ -309,6 +360,15 @@ class AutoDiscoverUseCase:
 
     def _cursor_step(self) -> int:
         return self._setting_int("cursor_step", DEFAULT_CURSOR_STEP)
+
+    def _warmup_passes(self) -> int:
+        """Warm-up passes; ``0`` disables the cold-start loop (unlike budgets)."""
+        settings = getattr(self._container.config, "discovery", None)
+        if isinstance(settings, dict):
+            value = settings.get("warmup_passes")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+        return DEFAULT_WARMUP_PASSES
 
     def _provider_timeout_s(self) -> float:
         """Shim timeout for one discovery provider call.

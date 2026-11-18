@@ -49,7 +49,13 @@ on the user, who would have to add sources whenever the list missed an employer.
    being skipped forever.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
-   auto_discover` refuses to treat it as the discovery engine.
+   auto_discover` refuses to treat it as the discovery engine. As shipped, the
+   seed file is a **warm start**: ~1,000 verified boards of the largest
+   employers on the supported ATS hosts, regenerated via
+   `scripts/build_seed.py`, so a cold install is useful within minutes while
+   the web-index rotation fills in long-tail companies. The file remains a
+   bootstrap — discovery is the engine — and deleting it does not stop
+   discovery.
 4. **Bound every pass.** `discovery.max_new_sources_per_run` caps registration
    (registering a source is cheap; a dead board costs one failed crawl later),
    `discovery.max_crawl_sources_per_run` caps crawling, and crawling selects
