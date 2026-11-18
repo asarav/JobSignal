@@ -93,6 +93,8 @@ class PreviewBridge implements WorkerBridge {
         return response({ plugins: previewPlugins() });
       case "sources.list":
         return response({ sources: [] });
+      case "discovery.auto_discover":
+        return response({ discovered: 0, registered: 0, crawled: 0, failed: 0 });
       case "tasks.list":
         return response({ tasks: this.tasks });
       case "tasks.cancel":

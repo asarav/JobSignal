@@ -10,6 +10,7 @@ export function DiscoverRoute() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastRun, setLastRun] = useState<Record<string, unknown> | null>(null);
+  const [lastAutoRun, setLastAutoRun] = useState<Record<string, unknown> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -50,6 +51,21 @@ export function DiscoverRoute() {
     try {
       const result = await workerClient.runDiscovery({ source_id: sourceId });
       setLastRun(result as Record<string, unknown>);
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const autoDiscover = async () => {
+    setBusy(true);
+    setError(null);
+    setLastAutoRun(null);
+    try {
+      const result = await workerClient.autoDiscover();
+      setLastAutoRun(result as Record<string, unknown>);
       await load();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -109,6 +125,33 @@ export function DiscoverRoute() {
           {" "}{String(lastRun.removed ?? 0)} removed, {String(lastRun.errors ?? 0)} errors.
         </div>
       ) : null}
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Auto-discovery</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Job Signal looks for new career sites, registers them and crawls the sources that are due.
+        </p>
+        <p className="mt-1 text-xs text-slate-400">
+          Runs automatically once a day, so you do not need to add sources yourself.
+          Coverage grows over time and is limited to what has been discovered so far.
+        </p>
+        <button
+          type="button"
+          onClick={() => void autoDiscover()}
+          disabled={busy}
+          className="mt-3 rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+        >
+          {busy ? "Running..." : "Run auto-discovery"}
+        </button>
+        {lastAutoRun ? (
+          <p className="mt-3 text-sm text-slate-600">
+            {String(lastAutoRun.discovered ?? 0)} sites found,
+            {" "}{String(lastAutoRun.registered ?? 0)} new sources,
+            {" "}{String(lastAutoRun.crawled ?? 0)} crawled,
+            {" "}{String(lastAutoRun.failed ?? 0)} failed.
+          </p>
+        ) : null}
+      </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Jobs ({jobs.length})</h2>

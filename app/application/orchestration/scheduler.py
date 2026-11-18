@@ -25,17 +25,27 @@ class CrawlScheduler:
         source_id: str,
         interval_s: float,
         runner: Callable[[], Awaitable[Any]],
+        *,
+        run_immediately: bool = True,
     ) -> None:
         if source_id in self._tasks:
             self._tasks[source_id].cancel()
-        self._tasks[source_id] = asyncio.create_task(self._loop(source_id, interval_s, runner))
+        self._tasks[source_id] = asyncio.create_task(
+            self._loop(source_id, interval_s, runner, run_immediately=run_immediately)
+        )
 
     def schedule_sources(
         self,
         sources: list[SourceConfig],
         runner_for: Callable[[SourceConfig], Awaitable[Any]],
+        *,
+        run_immediately: bool = True,
     ) -> None:
-        """(Re)schedule every source that declares a positive interval."""
+        """(Re)schedule every source that declares a positive interval.
+
+        ``run_immediately=False`` waits one interval first, which avoids
+        re-crawling sources that a discovery pass just crawled.
+        """
         wanted = {source.id: _interval_of(source) for source in sources}
         for source_id in list(self._tasks):
             if source_id not in wanted:
@@ -48,11 +58,20 @@ class CrawlScheduler:
             async def run(source: SourceConfig = source) -> Any:
                 return await runner_for(source)
 
-            self.schedule(source.id, interval, run)
+            self.schedule(
+                source.id, interval, run, run_immediately=run_immediately
+            )
 
     async def _loop(
-        self, source_id: str, interval_s: float, runner: Callable[[], Awaitable[Any]]
+        self,
+        source_id: str,
+        interval_s: float,
+        runner: Callable[[], Awaitable[Any]],
+        *,
+        run_immediately: bool = True,
     ) -> None:
+        if not run_immediately:
+            await asyncio.sleep(interval_s)
         while True:
             try:
                 await runner()

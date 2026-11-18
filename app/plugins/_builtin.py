@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 BUILTIN_PLUGINS: list[tuple[str, str]] = [
     ("app.plugins.extraction", "register"),
     ("app.plugins.ats", "register"),
+    ("app.plugins.discovery", "register"),
 ]
 
 

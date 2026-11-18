@@ -6,6 +6,8 @@ import type {
   DiagnosticsFetchUrlResponse,
   DiagnosticsSleepRequest,
   DiagnosticsSleepResponse,
+  DiscoveryAutoDiscoverRequest,
+  DiscoveryAutoDiscoverResponse,
   DiscoveryRunRequest,
   DiscoveryRunResponse,
   Envelope,
@@ -84,7 +86,8 @@ export type WorkerMethod =
   | "search_profiles.list"
   | "search_profiles.save"
   | "search_profiles.delete"
-  | "discovery.run";
+  | "discovery.run"
+  | "discovery.auto_discover";
 
 export class WorkerError extends Error {
   readonly code: string;
@@ -220,6 +223,10 @@ export class WorkerClient {
 
   runDiscovery(request: DiscoveryRunRequest): Promise<DiscoveryRunResponse> {
     return this.request("discovery.run", { ...request });
+  }
+
+  autoDiscover(request: DiscoveryAutoDiscoverRequest = {}): Promise<DiscoveryAutoDiscoverResponse> {
+    return this.request("discovery.auto_discover", { ...request });
   }
 
   enablePlugin(request: PluginsEnableRequest): Promise<{ ok: boolean }> {

@@ -46,6 +46,17 @@ export interface DiagnosticsSleepResponse {
   task_id: string;
 }
 
+// schemas/ipc/discovery/discovery_auto_discover_request.json
+export interface DiscoveryAutoDiscoverRequest {}
+
+// schemas/ipc/discovery/discovery_auto_discover_response.json
+export interface DiscoveryAutoDiscoverResponse {
+  discovered?: number;
+  registered?: number;
+  crawled?: number;
+  failed?: number;
+}
+
 // schemas/ipc/discovery/discovery_run_request.json
 export interface DiscoveryRunRequest {
   source_id: string;

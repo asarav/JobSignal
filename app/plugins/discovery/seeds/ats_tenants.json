@@ -1,0 +1,50 @@
+[
+  {
+    "url": "https://boards.greenhouse.io/stripe",
+    "company_hint": "Stripe",
+    "ats_hint": "ats.greenhouse",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://boards.greenhouse.io/airbnb",
+    "company_hint": "Airbnb",
+    "ats_hint": "ats.greenhouse",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://boards.greenhouse.io/figma",
+    "company_hint": "Figma",
+    "ats_hint": "ats.greenhouse",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://jobs.lever.co/palantir",
+    "company_hint": "Palantir",
+    "ats_hint": "ats.lever",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://jobs.ashbyhq.com/ramp",
+    "company_hint": "Ramp",
+    "ats_hint": "ats.ashby",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://jobs.ashbyhq.com/linear",
+    "company_hint": "Linear",
+    "ats_hint": "ats.ashby",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://jobs.ashbyhq.com/vercel",
+    "company_hint": "Vercel",
+    "ats_hint": "ats.ashby",
+    "confidence": 0.95
+  },
+  {
+    "url": "https://jobs.ashbyhq.com/openai",
+    "company_hint": "OpenAI",
+    "ats_hint": "ats.ashby",
+    "confidence": 0.95
+  }
+]

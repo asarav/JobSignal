@@ -391,3 +391,23 @@ async def test_search_profiles_lifecycle(tmp_path):
         assert deleted["ok"] is True
     finally:
         await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_discover_round_trip(tmp_path):
+    worker = await spawn_worker(tmp_path / "data")
+    try:
+        # Disable both builtin providers so this test never touches a network.
+        for plugin_id in ("discovery.ats_directory", "discovery.web_index"):
+            disabled = await worker.request("plugins.disable", {"plugin_id": plugin_id})
+            assert disabled["ok"] is True
+
+        response = await worker.request("discovery.auto_discover", {})
+        assert response["ok"] is True
+        result = response["result"]
+        assert result["discovered"] == 0
+        assert result["registered"] == 0
+        assert result["crawled"] == 0
+        assert result["failed"] == 0
+    finally:
+        await worker.close()

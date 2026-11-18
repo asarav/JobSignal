@@ -1,0 +1,328 @@
+"""Automatic discovery and the daily crawl trigger (M4).
+
+One run does four things:
+
+1. asks every *enabled* discovery provider for candidate career sites,
+   advancing the providers' rotation cursor so repeated runs explore new
+   ground instead of the same handful of seeds,
+2. registers up to ``discovery.max_new_sources_per_run`` unknown career sites
+   as ``SourceConfig`` rows,
+3. crawls the sources that are actually *due* (never crawled, or last attempt
+   older than their own interval), oldest first, up to
+   ``discovery.max_crawl_sources_per_run`` so a pass stays bounded even after
+   hundreds of sources have been discovered,
+4. records the completion time and the cursor in ``app_settings`` so both the
+   daily cadence and the covered ground survive a worker restart.
+
+Failures are isolated per provider and per source: one broken provider or a
+dead board never aborts the pass.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import random
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from urllib.parse import urlsplit
+
+from app.application.container import Container
+from app.application.dto import AutoDiscoverResult
+from app.application.sources import DEFAULT_CRAWL_INTERVAL_S, SourceRegistry, run_crawl
+from app.domain.models.context import CancellationToken, ExecutionContext
+from app.domain.models.discovery import DiscoveredSource, DiscoveryQuery
+from app.domain.models.source import SourceConfig
+from app.domain.ports.http import HttpClient
+
+#: Settings key holding the run state (``last_run_at``, ``rotation_cursor``).
+AUTO_DISCOVER_STATE_KEY = "auto_discover_state"
+
+#: How often the worker checks whether a daily run is due (seconds).
+AUTO_DISCOVER_POLL_S = 300.0
+
+#: Cadence of the automatic discovery + crawl pass (seconds).
+AUTO_DISCOVER_INTERVAL_S = 24 * 3600.0
+
+#: Grace period after worker start before the first pass (seconds). Keeps app
+#: launch snappy and off the network while the UI is still coming up.
+AUTO_DISCOVER_STARTUP_DELAY_S = 60.0
+
+#: Caps that keep one pass bounded as the discovered source list grows.
+DEFAULT_MAX_NEW_SOURCES_PER_RUN = 50
+DEFAULT_MAX_CRAWL_SOURCES_PER_RUN = 40
+
+
+class _NoGate:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+_NO_GATE = _NoGate()
+
+
+class AutoDiscoverUseCase:
+    def __init__(
+        self,
+        container: Container,
+        registry: SourceRegistry,
+        http: HttpClient,
+        *,
+        crawl_gate: asyncio.Semaphore | None = None,
+    ) -> None:
+        self._container = container
+        self._registry = registry
+        self._http = http
+        self._crawl_gate = crawl_gate
+
+    async def run(self) -> AutoDiscoverResult:
+        """Discover new career sites, register them, then crawl what is due."""
+        state = await self._state()
+        cursor = _as_int(state.get("rotation_cursor"), 0)
+        discovered = await self._discover(cursor)
+        registered = await self._register(discovered)
+        crawled, failed = await self._crawl_due()
+
+        state["rotation_cursor"] = cursor + 1
+        state["last_run_at"] = self._container.clock.now().isoformat()
+        await self._save_state(state)
+
+        result = AutoDiscoverResult(
+            discovered=len(discovered),
+            registered=registered,
+            crawled=crawled,
+            failed=failed,
+        )
+        self._container.logger.info(
+            "discovery.auto_discover.completed",
+            discovered=result.discovered,
+            registered=result.registered,
+            crawled=result.crawled,
+            failed=result.failed,
+            rotation_cursor=cursor,
+        )
+        return result
+
+    async def run_if_due(
+        self, interval_s: float = AUTO_DISCOVER_INTERVAL_S
+    ) -> AutoDiscoverResult | None:
+        """Run only when the last completed run is older than ``interval_s``."""
+        now = _as_utc(self._container.clock.now())
+        last = await self._last_run_at()
+        if last is not None and now - last < timedelta(seconds=interval_s):
+            return None
+        return await self.run()
+
+    # ------------------------------------------------------------------ discovery
+
+    async def _discover(self, cursor: int) -> list[DiscoveredSource]:
+        """Collect candidates from every enabled provider, deduped by URL."""
+        plugin_registry = self._container.registry
+        discovered: list[DiscoveredSource] = []
+        seen: set[str] = set()
+        for entry in plugin_registry.list_by_kind("discovery"):
+            plugin_id = str(entry.manifest.id)
+            if not plugin_registry.is_enabled(plugin_id):
+                continue
+            try:
+                candidates = await plugin_registry.invoke(
+                    plugin_id, self._collect_provider, entry.instance, cursor
+                )
+            except Exception as exc:  # noqa: BLE001 - one provider must not break the run
+                self._container.logger.warning(
+                    "discovery.provider_failed", plugin_id=plugin_id, error=str(exc)
+                )
+                continue
+            for source in candidates:
+                key = _source_key(source.url)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                discovered.append(source)
+        return discovered
+
+    async def _collect_provider(
+        self, provider: Any, cursor: int
+    ) -> list[DiscoveredSource]:
+        """Materialize a provider's stream so the isolation shim covers it."""
+        items: list[DiscoveredSource] = []
+        query = DiscoveryQuery(extra={"cursor": cursor})
+        ctx = self._make_ctx()
+        async for source in provider.discover(query, ctx):
+            items.append(source)
+        return items
+
+    async def _register(self, discovered: Sequence[DiscoveredSource]) -> int:
+        """Store unknown career sites as sources; existing URLs are skipped."""
+        max_new = self._setting_int(
+            "max_new_sources_per_run", DEFAULT_MAX_NEW_SOURCES_PER_RUN
+        )
+        known = {_source_key(s.url) for s in await self._registry.list_sources()}
+        registered = 0
+        for source in discovered:
+            if registered >= max_new:
+                self._container.logger.info(
+                    "discovery.register_capped",
+                    cap=max_new,
+                    candidates=len(discovered),
+                )
+                break
+            key = _source_key(source.url)
+            if key in known:
+                continue
+            connector_id = source.ats_hint or self._registry.classify(source.url)
+            try:
+                await self._registry.add(
+                    source.url,
+                    connector_id=connector_id,
+                    interval_s=self._default_interval_s(),
+                )
+            except Exception as exc:  # noqa: BLE001 - a bad URL must not abort the run
+                self._container.logger.warning(
+                    "discovery.register_failed", url=source.url, error=str(exc)
+                )
+                continue
+            known.add(key)
+            registered += 1
+        return registered
+
+    def _default_interval_s(self) -> float:
+        """Per-source cadence for a new source: the configured default, jittered."""
+        schedule = self._container.config.crawl.default_schedule
+        base = float(schedule.interval_hours) * 3600.0
+        jitter = float(schedule.jitter_pct) / 100.0
+        return base * random.uniform(1.0 - jitter, 1.0 + jitter)
+
+    # --------------------------------------------------------------------- crawl
+
+    async def _crawl_due(self) -> tuple[int, int]:
+        """Crawl the sources that are due; returns ``(crawled, failed)``."""
+        budget = self._setting_int(
+            "max_crawl_sources_per_run", DEFAULT_MAX_CRAWL_SOURCES_PER_RUN
+        )
+        sources = await self._due_sources(budget)
+        crawled = 0
+        failed = 0
+        for source in sources:
+            connector = self._registry.connector_for(source.connector_id)
+            if connector is None:
+                self._container.logger.warning(
+                    "discovery.no_connector",
+                    source_id=source.id,
+                    connector_id=source.connector_id,
+                )
+                failed += 1
+                continue
+            try:
+                async with self._crawl_gate or _NO_GATE:
+                    stats = await run_crawl(
+                        source=source,
+                        connector=connector,
+                        uow_factory=self._container.uow_factory,
+                        http=self._http,
+                        clock_now=self._container.clock.now,
+                        events=self._container.events,
+                        pipeline=self._container.extraction_pipeline,
+                        invoker=self._registry.invoker,
+                    )
+            except Exception as exc:  # noqa: BLE001 - isolate the failing source
+                self._container.logger.warning(
+                    "crawl.failed", source_id=source.id, error=str(exc)
+                )
+                failed += 1
+                continue
+            if stats.get("error"):
+                failed += 1
+            else:
+                crawled += 1
+        return crawled, failed
+
+    async def _due_sources(self, limit: int) -> list[SourceConfig]:
+        """Enabled sources whose own interval has elapsed, stalest first."""
+        now = _as_utc(self._container.clock.now())
+        async with self._container.uow_factory() as uow:
+            last_started = await uow.crawl_runs.last_started_by_source()
+        pending: list[tuple[datetime, SourceConfig]] = []
+        for source in await self._registry.list_sources(enabled_only=True):
+            started = _parse_ts(last_started.get(source.id))
+            interval = _source_interval_s(source)
+            if started is not None and (now - started).total_seconds() < interval:
+                continue
+            pending.append((started or _EPOCH, source))
+        pending.sort(key=lambda item: item[0])
+        return [source for _started, source in pending[:limit]]
+
+    # --------------------------------------------------------------------- state
+
+    async def _state(self) -> dict[str, object]:
+        async with self._container.uow_factory() as uow:
+            stored = await uow.settings.get(AUTO_DISCOVER_STATE_KEY) or {}
+        return dict(stored)
+
+    async def _last_run_at(self) -> datetime | None:
+        return _parse_ts((await self._state()).get("last_run_at"))
+
+    async def _save_state(self, state: dict[str, object]) -> None:
+        async with self._container.uow_factory() as uow:
+            await uow.settings.put(AUTO_DISCOVER_STATE_KEY, dict(state))
+            await uow.commit()
+
+    def _setting_int(self, key: str, default: int) -> int:
+        settings = getattr(self._container.config, "discovery", None)
+        if isinstance(settings, dict):
+            value = settings.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+        return default
+
+    def _make_ctx(self) -> ExecutionContext:
+        return ExecutionContext(
+            task_id="auto_discover",
+            clock=self._container.clock,
+            http=self._http,
+            logger=self._container.logger,
+            cancel=CancellationToken(),
+            deadline=None,
+            config={},
+        )
+
+
+_EPOCH = datetime.min.replace(tzinfo=UTC)
+
+
+def _source_key(url: str) -> str:
+    """Dedupe key for a career-site URL: host + path, no scheme/trailing slash."""
+    parts = urlsplit(url.strip())
+    host = parts.netloc.lower()
+    path = parts.path.rstrip("/")
+    return f"{host}{path}"
+
+
+def _source_interval_s(source: SourceConfig) -> float:
+    """The crawl interval a source declares, in seconds."""
+    raw = source.schedule.get("interval_s")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return DEFAULT_CRAWL_INTERVAL_S
+    return max(0.0, float(raw))
+
+
+def _as_int(value: object, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _parse_ts(raw: object) -> datetime | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+    except ValueError:
+        return None

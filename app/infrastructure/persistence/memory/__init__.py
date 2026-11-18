@@ -261,6 +261,18 @@ class InMemoryCrawlRunRepository:
             items = [r for r in items if r.get("source_id") == source_id]
         return items[:limit]
 
+    async def last_started_by_source(self):
+        latest: dict[str, str] = {}
+        for run in self._store.values():
+            source_id = run.get("source_id")
+            started = run.get("started_at")
+            if not isinstance(source_id, str) or started is None:
+                continue
+            stamp = started.isoformat() if hasattr(started, "isoformat") else str(started)
+            if source_id not in latest or stamp > latest[source_id]:
+                latest[source_id] = stamp
+        return latest
+
     async def mark_interrupted(self) -> int:
         changed = 0
         for run in self._store.values():

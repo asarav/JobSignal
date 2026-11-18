@@ -81,3 +81,22 @@ async def test_a_failing_source_does_not_kill_the_loop():
     scheduler.cancel_all()
 
     assert len(calls) > 1, "the loop must keep running after a failure"
+
+
+@pytest.mark.asyncio
+async def test_wait_one_interval_skips_the_immediate_crawl():
+    scheduler = CrawlScheduler()
+    calls: list[str] = []
+
+    async def runner() -> None:
+        calls.append("ran")
+
+    scheduler.schedule_sources(
+        [_source("s1", 0.05)], lambda source: runner(), run_immediately=False
+    )
+    await asyncio.sleep(0.01)
+    assert calls == [], "the first crawl must wait one full interval"
+    await asyncio.sleep(0.1)
+    scheduler.cancel_all()
+
+    assert calls, "the source must still be crawled after its interval"

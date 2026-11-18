@@ -762,15 +762,34 @@ Discovery finds **sources**; connectors/extraction obtain **jobs**. They share o
 | `discovery.local_lists` | Import CSV/JSON/OPML of employers/career URLs | none | on |
 | `discovery.sitemap` | Reads `robots.txt` sitemap entries and job-related sitemaps for registered career sites | public GETs | on |
 | `discovery.search_engine` | Queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`); enabled by default but respects `external_plugins` feature flag | sends query text to the engine | on |
-| `discovery.ats_directory` | Local seed lists of known public ATS tenants shipped as data files | none | on |
-| `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default); registers newly discovered career sites as sources without user input | public GETs + search engine queries | on |
+| `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Internet Archive CDX API). Each run walks one `(ATS host, leading-character bucket)` slice of the tenant space, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
+| `discovery.ats_directory` | Offline **bootstrap** seed list of public ATS tenants shipped as a data file. Cold start and test fixture only - never the sole discovery mechanism | none | on |
+| `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default), advances the providers' rotation cursor, registers newly discovered career sites as sources without user input, and crawls the sources that are due | public GETs + search engine queries | on |
 
 Rules:
 
 - Providers produce `DiscoveredSource` with a `confidence` and `evidence`. Low-confidence sources are held in a "candidate sources" list for user approval; sources the user added explicitly are trusted.
-- The app MUST NOT assume search engines are comprehensive; the UI states coverage is limited to configured sources.
+- **Discovery MUST NOT depend on a bundled seed list or on the user adding sources.** At least one enabled provider must enumerate career sites from a live external index on every pass. A seed file may only bootstrap a cold start or seed a test.
+- The app MUST NOT assume search engines or web indexes are comprehensive; the UI states coverage is limited to what has been discovered so far.
+- **Every registered board is verified by the crawler, not by the provider.** A tenant that no longer exists costs one `crawl.failed` run and is never re-registered (it stays in the source list until the user deletes or disables it).
 - Source registration dedupes by canonical URL + connector tenant key.
 - "Periodic revisit" uses per-source schedule: default `every 12h` for sources with ≤200 jobs, `every 24h` otherwise, jittered ±10%; user-configurable per source and globally; global caps in §17.
+
+#### 6.2.1 Automatic discovery without seeds
+
+The crux of the product is that **jobs find the user**. Discovery therefore has to keep working on its own: companies appear and disappear, so a fixed list of employers or ATS tenants goes stale by construction.
+
+How one automatic pass works (`discovery.auto_discover`):
+
+1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for one `(ATS host, leading-character bucket)` pair (for example "tenants starting with `s` on `boards.greenhouse.io`"). The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file.
+2. **Rotate.** The pass persists an integer rotation cursor in `app_settings` (`auto_discover_state`) and advances it by one. Hosts are walked before buckets, so consecutive passes cover different tenants, and the cursor wraps once the whole space has been visited - a later pass re-checks it with fresher index data.
+3. **Register.** Candidates are deduped by canonical URL against existing sources and capped by `discovery.max_new_sources_per_run` (default 50). Each new row gets the default per-source schedule with jitter.
+4. **Crawl what is due.** Sources are crawled oldest-attempt-first, bounded by `discovery.max_crawl_sources_per_run` (default 40) and gated by the global crawl concurrency cap, so a pass stays bounded no matter how many sources exist. A source is "due" when it has never been crawled or when its own interval has elapsed.
+5. **Persist.** The completion time and the cursor are written together, so a restarted worker resumes both the daily cadence and the covered ground.
+
+Additional providers may add candidates (user URLs, company-name resolution, local lists, sitemaps, optional search engines). They all feed the same dedupe, cap and crawl-due machinery, so adding a provider never widens a pass beyond its budget.
+
+Coverage limits that MUST be stated in the UI and docs: the index lags reality (a brand-new company can take weeks to appear), some ATS hosts publish no public boards, and the crawl budget means a large source list is visited over several passes rather than at once.
 
 ### 6.3 Source classification
 
@@ -2096,6 +2115,7 @@ All methods below MUST exist by their milestone (§21). "LR" = long-running (ret
 ### 17.2 Concurrency and resource control
 
 - Asyncio throughout the worker; global concurrency cap (default 8 requests), per-origin cap 2, per-origin token bucket (1 req/s default), per-source run budgets (requests, bytes, wall-time).
+- One shared crawl gate (`crawl.global_concurrency`) bounds **concurrent source crawls**, whether they come from a per-source schedule or from the automatic discovery pass. The pass additionally caps how many sources it registers and crawls (`discovery.max_*_per_run`), so background work never starves user-initiated requests or the UI.
 - Background priorities: user-initiated (`1`) > on-demand verify (`2`) > discovery (`5`) > analytics/maintenance (`8`). Lower-priority tasks yield (cooperative `await sleep(0)` checkpoints) and pause when the UI window is focused and heavy interaction is detected (optional "quiet mode").
 - Playwright is started lazily, limited to 1 browser with ≤ 2 pages for extraction, closed after idle timeout (60 s).
 - CPU-bound work (fingerprinting, TF-IDF, parsing) offloaded to a bounded executor; large batches chunked.
@@ -2256,6 +2276,12 @@ crawl:
   not_seen_threshold: 2            # consecutive successful full listings
   min_refetch_hours: 6
   block_backoff_hours: [6, 24, 72, 168]
+discovery:
+  auto_discover_interval_hours: 24 # cadence of the automatic pass
+  max_new_sources_per_run: 50      # registration budget per pass
+  max_crawl_sources_per_run: 40    # crawl budget per pass (oldest attempt first)
+  web_index_limit: 60              # tenant URLs requested per index query
+  web_index_lookback_days: 540     # ignore index captures older than this
 extraction:
   order: [extract.public_api, extract.public_endpoint, extract.jsonld, extract.embedded_json,
           extract.static_html, extract.rendered_dom, extract.generic, extract.partial]
@@ -2330,10 +2356,10 @@ Search profiles, hard filters, search results with FTS; fingerprints; deduplicat
 
 ### Milestone 4 — Automatic discovery and daily scheduling
 
-**Deliverables:** `discovery.auto_discover` provider that runs all enabled discovery providers on a daily schedule without user input; auto-registers newly discovered career sites as `SourceConfig` rows; persistent per-source scheduler with cron/interval schedules that survives worker restarts; `discovery.auto_discover` IPC method; daily crawl trigger that runs all enabled sources and records `crawl.completed`/`crawl.failed` events; search profiles (from M3) begin receiving newly discovered jobs automatically.
+**Deliverables:** `discovery.auto_discover` pass that runs all enabled discovery providers on a daily schedule without user input; **seed-free discovery of career sites** via `discovery.web_index` (public web URL index, rotating `(ATS host, bucket)` cursor persisted in `app_settings`), so neither a bundled seed list nor user-added sources are required; the seed file demoted to an offline bootstrap; auto-registration of newly discovered career sites as `SourceConfig` rows with the configured default schedule; per-pass budgets for registration and crawling (`discovery.max_new_sources_per_run`, `discovery.max_crawl_sources_per_run`) plus a shared global crawl concurrency gate; due-based crawl selection (never crawled, or own interval elapsed) so a pass stays bounded as sources accumulate; persistent per-source scheduler with cron/interval schedules that survives worker restarts; `discovery.auto_discover` IPC method; daily crawl trigger that runs the due sources and records `crawl.completed`/`crawl.failed` events; search profiles (from M3) begin receiving newly discovered jobs automatically.
 The crux of this whole desktop app is that jobs find the user, not that the user needs to search for jobs. The best jobs available at a certain time need to be found for a user to find and apply to a job and maximize their chances of getting a job that they are satisfied with. We want to maximize success and satisfaction and limit manual actions and automate as much as possible to make job searching far less mentally taxing.
 
-**Exit:** auto-discovery finds all relevant career sites per run on fixture data without it taking significant amounts of time; daily scheduler survives worker restart; no user input required to populate sources; jobs flow into search profiles with hard filters applied.
+**Exit:** with the bootstrap seed file empty, a pass still discovers and registers career sites on fixture index data in bounded time; the rotation cursor and the cadence both survive a worker restart; no user input required to populate sources; a pass never exceeds its registration/crawl budgets or the global crawl gate; jobs flow into search profiles with hard filters applied.
 
 ### Milestone 5 — Resume and matching
 

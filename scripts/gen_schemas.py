@@ -71,7 +71,10 @@ def strip_nested_titles(node: Any, *, is_root: bool = True, in_properties: bool 
     metadata ``title`` of schema objects (those carrying type/properties/$ref).
     """
     if isinstance(node, dict):
-        is_schema = any(k in node for k in ("type", "properties", "$ref", "items", "allOf", "anyOf", "oneOf", "$defs"))
+        is_schema = any(
+            k in node
+            for k in ("type", "properties", "$ref", "items", "allOf", "anyOf", "oneOf", "$defs")
+        )
         out = {}
         for key, value in node.items():
             if (

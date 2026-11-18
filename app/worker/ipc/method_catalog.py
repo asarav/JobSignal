@@ -18,6 +18,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.application.dto import (
+    AutoDiscoverResult,
     CancelTaskParams,
     CrawlRunListResult,
     DiscoveryRunParams,
@@ -138,6 +139,8 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("search_profiles.list", EmptyParams, SearchProfileListResult),
     MethodSpec("search_profiles.save", SearchProfileSaveParams, SearchProfileInfo),
     MethodSpec("search_profiles.delete", SearchProfileParams, OkResult),
+    # M4: auto-discovery
+    MethodSpec("discovery.auto_discover", EmptyParams, AutoDiscoverResult),
 )
 
 MILESTONE_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in MILESTONE_METHODS)

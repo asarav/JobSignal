@@ -168,6 +168,12 @@
       "long_running": false,
       "request_schema": "schemas/ipc/search_profiles/search_profiles_delete_request.json",
       "response_schema": "schemas/ipc/search_profiles/search_profiles_delete_response.json"
+    },
+    {
+      "method": "discovery.auto_discover",
+      "long_running": false,
+      "request_schema": "schemas/ipc/discovery/discovery_auto_discover_request.json",
+      "response_schema": "schemas/ipc/discovery/discovery_auto_discover_response.json"
     }
   ],
   "forbidden_prefixes": [

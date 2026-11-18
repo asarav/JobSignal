@@ -178,6 +178,10 @@ class CrawlRunRepository(Protocol):
         self, *, source_id: str | None = None, limit: int = 50
     ) -> Sequence[Mapping[str, object]]: ...
 
+    async def last_started_by_source(self) -> Mapping[str, str]:
+        """Most recent ``started_at`` (ISO 8601) per source id."""
+        ...
+
     async def mark_interrupted(self) -> int:
         """Close crawl runs that were still running when the worker stopped."""
         ...

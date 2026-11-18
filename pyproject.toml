@@ -33,6 +33,10 @@ render = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+# Discovery providers ship their seed lists as data files (M4).
+"app.plugins.discovery" = ["seeds/*.json"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

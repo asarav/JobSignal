@@ -15,6 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from app.application.auto_discover import (
+    AUTO_DISCOVER_INTERVAL_S,
+    AUTO_DISCOVER_POLL_S,
+    AUTO_DISCOVER_STARTUP_DELAY_S,
+    AutoDiscoverUseCase,
+)
 from app.application.commands.diagnostics import FetchUrlUseCase
 from app.application.commands.discovery import DiscoveryUseCase
 from app.application.commands.hello import HealthUseCase, HelloUseCase
@@ -50,6 +56,25 @@ from app.worker.ipc.handlers.tasks import TasksHandlers
 from app.worker.ipc.transport import NdjsonTransport
 
 MAX_CONCURRENT_REQUESTS = 8
+
+
+def _auto_discover_interval_s(config: Any) -> float:
+    """Cadence of the automatic pass, from ``discovery.auto_discover_interval_hours``."""
+    settings = getattr(config, "discovery", None)
+    if isinstance(settings, dict):
+        hours = settings.get("auto_discover_interval_hours")
+        if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
+            return float(hours) * 3600.0
+    return AUTO_DISCOVER_INTERVAL_S
+
+
+def _registered_sources(response: dict[str, Any]) -> int:
+    """How many sources an ``auto_discover`` response registered."""
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return 0
+    registered = result.get("registered")
+    return registered if isinstance(registered, int) else 0
 
 
 async def _load_config(uow_factory: SqliteUnitOfWorkFactory, data_dir: Path) -> AppConfig:
@@ -145,6 +170,7 @@ def _build_dispatcher(
     dispatcher.register("jobs.search", discovery.jobs.search, params_model=JobSearchParams)
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
+    dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)
     dispatcher.register("crawl_runs.list", discovery.discovery.list_runs, params_model=EmptyParams)
 
     profiles = SearchProfilesHandlers(SearchProfilesUseCase(container))
@@ -163,17 +189,25 @@ class DiscoveryWiring:
     jobs: JobsHandlers
     discovery: DiscoveryHandlers
     discovery_use_case: DiscoveryUseCase
+    auto_discover_use_case: AutoDiscoverUseCase
     scheduler: CrawlScheduler
+    crawl_gate: asyncio.Semaphore
 
-    async def sync_scheduler(self) -> None:
+    async def sync_scheduler(self, *, run_immediately: bool = True) -> None:
         """(Re)schedule every enabled source that declares an interval."""
         enabled = await self.registry.list_sources(enabled_only=True)
         self.scheduler.schedule_sources(
-            list(enabled), lambda source: self.run_source(source.id)
+            list(enabled),
+            lambda source: self.run_source(source.id),
+            run_immediately=run_immediately,
         )
 
     async def run_source(self, source_id: str) -> dict[str, object]:
-        return await self.discovery_use_case.run(DiscoveryRunParams(source_id=source_id))
+        # One global gate bounds concurrent crawls across every schedule.
+        async with self.crawl_gate:
+            return await self.discovery_use_case.run(
+                DiscoveryRunParams(source_id=source_id)
+            )
 
 
 def _build_discovery(container: Any) -> DiscoveryWiring:
@@ -184,13 +218,19 @@ def _build_discovery(container: Any) -> DiscoveryWiring:
     policy_http = PolicyHttpClient(transport=container.http)
     registry = SourceRegistry(container.uow_factory, connectors, invoker=plugin_registry)
     discovery_use_case = DiscoveryUseCase(container, registry, policy_http)
+    crawl_gate = asyncio.Semaphore(max(1, int(container.config.crawl.global_concurrency)))
+    auto_discover_use_case = AutoDiscoverUseCase(
+        container, registry, policy_http, crawl_gate=crawl_gate
+    )
     return DiscoveryWiring(
         registry=registry,
         sources=SourcesHandlers(SourcesUseCase(container, registry)),
         jobs=JobsHandlers(JobsUseCase(container)),
-        discovery=DiscoveryHandlers(discovery_use_case),
+        discovery=DiscoveryHandlers(discovery_use_case, auto_discover_use_case),
         discovery_use_case=discovery_use_case,
+        auto_discover_use_case=auto_discover_use_case,
         scheduler=CrawlScheduler(),
+        crawl_gate=crawl_gate,
     )
 
 
@@ -242,7 +282,29 @@ async def main() -> int:
 
     wiring = _build_discovery(container)
     dispatcher = _build_dispatcher(container, wiring)
-    await wiring.sync_scheduler()
+    # Schedules are restored from the database, but nothing crawls on launch:
+    # the first automatic pass (below) crawls what is actually due, bounded.
+    await wiring.sync_scheduler(run_immediately=False)
+
+    # M4: daily auto-discovery + crawl trigger.  The last completed pass is
+    # persisted, so a worker restart resumes the cadence instead of starting a
+    # fresh one.  The first check waits out the startup delay, which keeps app
+    # launch off the network and out of integration test runs.
+    async def _auto_discover_loop() -> None:
+        interval_s = _auto_discover_interval_s(container.config)
+        await asyncio.sleep(AUTO_DISCOVER_STARTUP_DELAY_S)
+        while True:
+            try:
+                result = await wiring.auto_discover_use_case.run_if_due(interval_s)
+            except Exception as exc:  # noqa: BLE001 - the loop must keep running
+                logger.warning("discovery.auto_discover.failed", error=str(exc))
+            else:
+                if result is not None and result.registered:
+                    # The pass already crawled everything it registered.
+                    await wiring.sync_scheduler(run_immediately=False)
+            await asyncio.sleep(AUTO_DISCOVER_POLL_S)
+
+    daily_task = asyncio.create_task(_auto_discover_loop())
     transport = NdjsonTransport(sys.stdin, sys.stdout)
     writer_task = asyncio.create_task(event_writer(publisher.queue, transport.write))
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -282,9 +344,16 @@ async def main() -> int:
                 ).to_dict()
             await transport.write(response)
             # Sources changed: the schedule may have changed with them.
+            # Auto-discovery just crawled every source, so those loops must
+            # wait a full interval rather than crawl again immediately.
             method = envelope.get("method")
-            if isinstance(method, str) and method.startswith("sources."):
-                await wiring.sync_scheduler()
+            if isinstance(method, str):
+                if method.startswith("sources."):
+                    await wiring.sync_scheduler()
+                elif method == "discovery.auto_discover" and _registered_sources(
+                    response
+                ):
+                    await wiring.sync_scheduler(run_immediately=False)
 
     shutdown = False
     try:
@@ -318,6 +387,9 @@ async def main() -> int:
         if inflight:
             await asyncio.gather(*inflight, return_exceptions=True)
         wiring.scheduler.cancel_all()
+        daily_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await daily_task
         if runner is not None:
             await runner.stop()
         await registry.persist_state()

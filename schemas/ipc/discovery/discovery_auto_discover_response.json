@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "discovered": {
+      "default": 0,
+      "type": "integer"
+    },
+    "registered": {
+      "default": 0,
+      "type": "integer"
+    },
+    "crawled": {
+      "default": 0,
+      "type": "integer"
+    },
+    "failed": {
+      "default": 0,
+      "type": "integer"
+    }
+  },
+  "title": "DiscoveryAutoDiscoverResponse",
+  "type": "object"
+}

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from app.domain.models.candidate import SearchProfile
+from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask, TaskStatus
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
@@ -158,3 +159,24 @@ async def test_search_profile_get_unknown(kind, tmp_path):
     async with factory() as uow:
         got = await uow.search_profiles.get("does-not-exist")
         assert got is None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_crawl_run_last_started_by_source(kind, tmp_path):
+    factory = await _make_uow_factory(kind, tmp_path)
+    earlier = datetime(2026, 1, 1, tzinfo=UTC)
+    later = datetime(2026, 1, 2, tzinfo=UTC)
+    async with factory() as uow:
+        await uow.sources.add(SourceConfig(id="src_a", url="https://example.com/a", kind="ats"))
+        await uow.sources.add(SourceConfig(id="src_b", url="https://example.com/b", kind="ats"))
+        await uow.crawl_runs.create("run_1", "src_a", earlier)
+        await uow.crawl_runs.create("run_2", "src_a", later)
+        await uow.crawl_runs.create("run_3", "src_b", earlier)
+        await uow.commit()
+
+    async with factory() as uow:
+        latest = await uow.crawl_runs.last_started_by_source()
+
+    assert set(latest) == {"src_a", "src_b"}
+    assert latest["src_a"].startswith("2026-01-02")
+    assert latest["src_b"].startswith("2026-01-01")

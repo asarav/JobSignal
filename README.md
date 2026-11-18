@@ -8,14 +8,49 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 2 — Universal extraction.**
+> **Current milestone: 4 — Automatic discovery and daily scheduling.**
 > The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
-> from Milestone 0; sources, ATS connectors and crawls from Milestone 1.
-> Milestone 2 adds a universal extraction pipeline (JSON-LD, embedded JSON,
-> static HTML, rendered DOM, generic heuristics, partial records), field-level
-> merge with confidence and provenance, three more ATS connectors
-> (SmartRecruiters, Workday, iCIMS), and rendered-DOM extraction via an
-> optional Playwright dependency.
+> from Milestone 0; sources, ATS connectors and crawls from Milestone 1;
+> the universal extraction pipeline from Milestone 2; search profiles, hard
+> filters, full-text search and job history from Milestone 3.
+> Milestone 4 makes the app find jobs on its own: discovery enumerates career
+> sites from a public web index (no seed file, no user-added sources), and every
+> enabled source is crawled on its own persisted schedule within per-pass
+> budgets. See [`docs/how-discovery-works.md`](docs/how-discovery-works.md).
+
+## What Milestone 4 adds
+
+- **Seed-free discovery** (`app/plugins/discovery/web_index.py`):
+  `discovery.web_index` enumerates ATS tenant boards from a public web URL
+  index (Internet Archive CDX API) — no API key, no bundled list, no user
+  input. Each pass walks one `(ATS host, leading-character bucket)` slice of
+  the tenant space, so coverage grows every day and wraps around to refresh.
+  Design and trade-offs: [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
+- **The seed file is a bootstrap, not the engine.**
+  `discovery.ats_directory` ships eight public boards as package data so a
+  cold install has something to crawl immediately and tests do not need the
+  network. Deleting it does not stop discovery.
+- **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
+  every enabled provider for candidates, dedupes by canonical URL, registers
+  up to `discovery.max_new_sources_per_run` new sources (connector from the
+  provider's ATS hint or the URL classifier), then crawls the sources that are
+  due — oldest attempt first, up to `discovery.max_crawl_sources_per_run`.
+  Per-provider and per-source failures are isolated and counted, never fatal.
+- **Bounded work.** A source is crawled by the scheduler and by the pass only
+  through one shared crawl gate (`crawl.global_concurrency`); the pass has a
+  registration cap and a crawl cap, so a large source list never turns a pass
+  into an hours-long run. Nothing crawls on app launch.
+- **Cadence and coverage survive restarts.** The last run time *and* the
+  rotation cursor are stored in `app_settings` (`auto_discover_state`). The
+  loop waits `AUTO_DISCOVER_STARTUP_DELAY_S` after launch, then checks every
+  five minutes whether a run is due (`discovery.auto_discover_interval_hours`,
+  default 24).
+- **Crawl events.** Every triggered crawl records a `crawl_runs` row and
+  publishes `crawl.completed` / `crawl.failed`, so new jobs flow straight into
+  search profiles (hard filters apply to searches as in M3).
+- **Discover screen**: an "Auto-discovery" panel that says the pass runs by
+  itself, mentions the coverage limit, and offers a manual run that reports
+  sites found, new sources, crawled and failed counts.
 
 ## What Milestone 2 includes
 
@@ -38,11 +73,9 @@ The repository is named `JobSignal` for historical reasons; the product is named
 
 ## Still not implemented
 
-These are **intentionally absent** in Milestone 2, and the IPC allowlist rejects
-them (there is a test for it):
+These are **intentionally absent** in Milestone 4, and the IPC allowlist
+rejects them (there is a test for it):
 
-- Search profiles, hard filters, FTS search, job history — Milestone 3
-- Automatic discovery + daily scheduling — Milestone 4
 - Resume parsing, candidate profiles, keyword extraction — Milestone 5
 - Job matching, scoring, ranking, and saved jobs — Milestone 5
 - Application tracking, suppression, company intelligence, outcome analytics — Milestone 6
@@ -77,10 +110,18 @@ Where the discovery code lives:
 
 ```text
 app/domain/services/     # classifier.py, normalizer.py  (pure domain logic)
-app/application/         # sources.py (registry + crawl runner), commands/
-app/plugins/ats/         # greenhouse/, ashby/, lever/
+app/application/         # sources.py (registry + crawl runner), auto_discover.py,
+                         # orchestration/scheduler.py, commands/
+app/plugins/ats/         # greenhouse/, ashby/, lever/, smartrecruiters, workday, icims
+app/plugins/discovery/   # web_index.py (seed-free enumeration), ats_directory.py (bootstrap)
 app/infrastructure/      # persistence (sources, jobs, snapshots, crawl runs)
 ```
+
+Documentation for M4 lives in
+[`docs/how-discovery-works.md`](docs/how-discovery-works.md) (user-facing: what
+runs, what leaves the machine, coverage limits) and
+[`docs/adr/0005-m4-automatic-discovery.md`](docs/adr/0005-m4-automatic-discovery.md)
+(why discovery is seed-free, budgets, and the options that were rejected).
 
 ### Dependency rule
 

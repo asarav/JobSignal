@@ -572,6 +572,13 @@ class SqliteCrawlRunRepository:
             cur = await self._conn.execute("SELECT * FROM crawl_runs ORDER BY started_at DESC LIMIT ?", (limit,))
         return [self._row(r) for r in await cur.fetchall()]
 
+    async def last_started_by_source(self):
+        cur = await self._conn.execute(
+            "SELECT source_id, MAX(started_at) FROM crawl_runs GROUP BY source_id"
+        )
+        rows = await cur.fetchall()
+        return {str(row[0]): str(row[1]) for row in rows if row[1] is not None}
+
     async def mark_interrupted(self) -> int:
         """Close crawl runs that were running when the worker stopped."""
         cur = await self._conn.execute(

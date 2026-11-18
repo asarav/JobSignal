@@ -241,12 +241,19 @@ class CrawlRunSummary(DTO):
     error: str | None = None
 
 
+class DiscoveryRunParams(DTO):
+    source_id: str
+
+
 class CrawlRunListResult(DTO):
     runs: list[CrawlRunSummary]
 
 
-class DiscoveryRunParams(DTO):
-    source_id: str
+class AutoDiscoverResult(DTO):
+    discovered: int = 0
+    registered: int = 0
+    crawled: int = 0
+    failed: int = 0
 
 
 def task_summary(task: Any) -> TaskSummary:
