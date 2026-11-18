@@ -3,15 +3,17 @@
 One run does four things:
 
 1. asks every *enabled* discovery provider for candidate career sites,
-   advancing the providers' rotation cursor so repeated runs explore new
-   ground instead of the same handful of seeds (a failed provider holds the
-   cursor so its slice is retried next pass),
+   advancing the providers' rotation cursor by ``discovery.cursor_step``
+   slices so repeated runs explore new ground instead of the same handful
+   of seeds (a failed provider holds the cursor so its slice range is
+   retried next pass),
 2. registers up to ``discovery.max_new_sources_per_run`` unknown career sites
    as ``SourceConfig`` rows,
 3. crawls the sources that are actually *due* (never crawled, or last attempt
-   older than their own interval), oldest first, up to
-   ``discovery.max_crawl_sources_per_run`` so a pass stays bounded even after
-   hundreds of sources have been discovered,
+   older than their own interval), stalest first, up to
+   ``discovery.max_crawl_sources_per_run`` and in parallel up to the shared
+   crawl gate, so a pass stays bounded even after hundreds of sources have
+   been discovered,
 4. records the completion time and the cursor in ``app_settings`` so both the
    daily cadence and the covered ground survive a worker restart.
 
@@ -50,11 +52,16 @@ AUTO_DISCOVER_INTERVAL_S = 24 * 3600.0
 AUTO_DISCOVER_STARTUP_DELAY_S = 60.0
 
 #: Caps that keep one pass bounded as the discovered source list grows.
-DEFAULT_MAX_NEW_SOURCES_PER_RUN = 50
-DEFAULT_MAX_CRAWL_SOURCES_PER_RUN = 40
+DEFAULT_MAX_NEW_SOURCES_PER_RUN = 200
+DEFAULT_MAX_CRAWL_SOURCES_PER_RUN = 60
 
-#: Shim timeout for a discovery provider call (index queries are slow).
-DEFAULT_PROVIDER_TIMEOUT_S = 120.0
+#: How many rotation slices every pass walks (coverage per day).
+DEFAULT_CURSOR_STEP = 12
+
+#: Shim timeout for a discovery provider call.  A pass walks a dozen index
+#: slices under one gateway that throttles bursts, so the whole provider
+#: call needs a generous ceiling (the pass is still bounded by its budgets).
+DEFAULT_PROVIDER_TIMEOUT_S = 300.0
 
 
 class _NoGate:
@@ -90,9 +97,9 @@ class AutoDiscoverUseCase:
         registered = await self._register(discovered)
         crawled, failed = await self._crawl_due()
 
-        # A provider that failed to answer holds the cursor, so the same slice
-        # is retried next pass instead of being skipped forever.
-        state["rotation_cursor"] = cursor + 1 if providers_ok else cursor
+        # A provider that failed to answer holds the cursor, so the same
+        # slice range is retried next pass instead of being skipped forever.
+        state["rotation_cursor"] = cursor + self._cursor_step() if providers_ok else cursor
         state["last_run_at"] = self._container.clock.now().isoformat()
         await self._save_state(state)
 
@@ -144,6 +151,7 @@ class AutoDiscoverUseCase:
                     self._collect_provider,
                     entry.instance,
                     cursor,
+                    self._cursor_step(),
                     timeout_s=self._provider_timeout_s(),
                 )
             except Exception as exc:  # noqa: BLE001 - one provider must not break the run
@@ -161,11 +169,11 @@ class AutoDiscoverUseCase:
         return discovered, all_answered
 
     async def _collect_provider(
-        self, provider: Any, cursor: int
+        self, provider: Any, cursor: int, slices: int
     ) -> list[DiscoveredSource]:
         """Materialize a provider's stream so the isolation shim covers it."""
         items: list[DiscoveredSource] = []
-        query = DiscoveryQuery(extra={"cursor": cursor})
+        query = DiscoveryQuery(extra={"cursor": cursor, "slices": slices})
         ctx = self._make_ctx()
         async for source in provider.discover(query, ctx):
             items.append(source)
@@ -215,46 +223,51 @@ class AutoDiscoverUseCase:
     # --------------------------------------------------------------------- crawl
 
     async def _crawl_due(self) -> tuple[int, int]:
-        """Crawl the sources that are due; returns ``(crawled, failed)``."""
+        """Crawl the sources that are due; returns ``(crawled, failed)``.
+
+        Crawls run concurrently up to the shared crawl gate, so a pass of
+        sixty boards takes minutes rather than an hour of serial requests.
+        """
         budget = self._setting_int(
             "max_crawl_sources_per_run", DEFAULT_MAX_CRAWL_SOURCES_PER_RUN
         )
         sources = await self._due_sources(budget)
-        crawled = 0
-        failed = 0
-        for source in sources:
-            connector = self._registry.connector_for(source.connector_id)
-            if connector is None:
-                self._container.logger.warning(
-                    "discovery.no_connector",
-                    source_id=source.id,
-                    connector_id=source.connector_id,
+        outcomes = await asyncio.gather(
+            *(self._crawl_one(source) for source in sources)
+        )
+        crawled = sum(1 for ok in outcomes if ok)
+        return crawled, len(outcomes) - crawled
+
+    async def _crawl_one(self, source: SourceConfig) -> bool:
+        """Crawl one source through the shared gate; ``True`` on success."""
+        connector = self._registry.connector_for(source.connector_id)
+        if connector is None:
+            self._container.logger.warning(
+                "discovery.no_connector",
+                source_id=source.id,
+                connector_id=source.connector_id,
+            )
+            return False
+        try:
+            async with self._crawl_gate or _NO_GATE:
+                stats = await run_crawl(
+                    source=source,
+                    connector=connector,
+                    uow_factory=self._container.uow_factory,
+                    http=self._http,
+                    clock_now=self._container.clock.now,
+                    events=self._container.events,
+                    pipeline=self._container.extraction_pipeline,
+                    invoker=self._registry.invoker,
                 )
-                failed += 1
-                continue
-            try:
-                async with self._crawl_gate or _NO_GATE:
-                    stats = await run_crawl(
-                        source=source,
-                        connector=connector,
-                        uow_factory=self._container.uow_factory,
-                        http=self._http,
-                        clock_now=self._container.clock.now,
-                        events=self._container.events,
-                        pipeline=self._container.extraction_pipeline,
-                        invoker=self._registry.invoker,
-                    )
-            except Exception as exc:  # noqa: BLE001 - isolate the failing source
-                self._container.logger.warning(
-                    "crawl.failed", source_id=source.id, error=str(exc)
-                )
-                failed += 1
-                continue
-            if stats.get("error"):
-                failed += 1
-            else:
-                crawled += 1
-        return crawled, failed
+        except Exception as exc:  # noqa: BLE001 - isolate the failing source
+            self._container.logger.warning(
+                "crawl.failed", source_id=source.id, error=str(exc)
+            )
+            return False
+        if stats.get("error"):
+            return False
+        return True
 
     async def _due_sources(self, limit: int) -> list[SourceConfig]:
         """Enabled sources whose own interval has elapsed, stalest first."""
@@ -293,6 +306,9 @@ class AutoDiscoverUseCase:
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 return value
         return default
+
+    def _cursor_step(self) -> int:
+        return self._setting_int("cursor_step", DEFAULT_CURSOR_STEP)
 
     def _provider_timeout_s(self) -> float:
         """Shim timeout for one discovery provider call.

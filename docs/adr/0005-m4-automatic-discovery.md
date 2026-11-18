@@ -19,32 +19,44 @@ on the user, who would have to add sources whenever the list missed an employer.
 
 1. **Add `discovery.web_index`**, which enumerates ATS tenants from public web
    URL indexes with no API key and no user input. **Common Crawl's index
-   server is primary** (prefix queries answer in seconds; one run asks for a
-   single `(ATS host, leading-character bucket)` pair, newest crawl first with
-   one older crawl as fallback). When Common Crawl cannot serve a slice —
-   during evaluation its gateway consistently timed out on the largest ATS
-   host (`boards.greenhouse.io`, both 1- and 2-character prefixes) — the
-   provider falls back to the **Internet Archive CDX API** (measured 26–49 s
-   per prefix query; the query therefore omits the expensive `filter`/`from`
-   clauses and carries a 90 s request timeout under a 120 s discovery call
-   budget). The provider reduces results to tenant board roots and ignores
-   site chrome (`/search`, `/jobs`, `/embed`, assets).
-2. **Rotate instead of paging.** One run asks for a single
-   `(ATS host, leading-character bucket)` pair. The pass stores an integer
-   cursor in `app_settings` and advances it, so each daily run explores new
-   ground and the space is revisited after the cursor wraps. This avoids
-   fragile pagination/resume tokens and bounds the work of a pass. If every
-   index backend fails for a slice, the provider raises and the pass **holds
-   the cursor**, so the same slice is retried next pass instead of being
-   skipped forever.
+   server is primary** (prefix queries answer in seconds; each query covers
+   one `(ATS host, leading-character bucket)` pair and a pass walks several
+   of them, newest crawl first with one older crawl as fallback). When Common
+   Crawl cannot serve a slice — during evaluation its gateway consistently
+   timed out on the largest ATS host (`boards.greenhouse.io`, both 1- and
+   2-character prefixes) — the provider falls back to the **Internet Archive
+   CDX API** (measured 26–49 s per prefix query; the query therefore omits
+   the expensive `filter`/`from` clauses and carries a 60 s request timeout).
+   CDX is the scarce resource: a pass spends at most four fallback queries
+   (`MAX_CDX_FALLBACKS`) no matter how many slices come back empty, and the
+   unserved slices are revisited when the rotation cursor wraps. Two more
+   bounds keep a pass inside its discovery call budget: the `collinfo`
+   listing is fetched **once per pass and shared by every slice** (not once
+   per slice), and the provider stops starting expensive fallbacks once its
+   wall-clock budget (`PASS_BUDGET_S`) is spent, yielding what earlier
+   slices already collected. The provider
+   reduces results to tenant board roots, ignores site chrome (`/search`,
+   `/jobs`, `/embed`, assets), and dedupes `(connector id, tenant key)` within
+   a pass, because the same tenant is often indexed on two Greenhouse hosts.
+2. **Rotate instead of paging.** One pass walks a bounded set of slices
+   (`discovery.cursor_step`, default 12), queried in parallel, starting at the
+   current cursor. The pass stores an integer cursor in `app_settings` and
+   advances it by the step, so each daily run explores new ground and the
+   space is revisited after the cursor wraps. This avoids fragile
+   pagination/resume tokens and bounds the work of a pass. If every index
+   backend fails for every slice, the provider raises and the pass **holds
+   the cursor**, so the same slice range is retried next pass instead of
+   being skipped forever.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine.
-4. **Bound every pass.** `discovery.max_new_sources_per_run` caps registration,
+4. **Bound every pass.** `discovery.max_new_sources_per_run` caps registration
+   (registering a source is cheap; a dead board costs one failed crawl later),
    `discovery.max_crawl_sources_per_run` caps crawling, and crawling selects
-   only sources that are *due* (never crawled, or own interval elapsed), oldest
-   attempt first. One shared semaphore (`crawl.global_concurrency`) bounds
-   concurrent crawls across schedules and the pass alike.
+   only sources that are *due* (never crawled, or own interval elapsed),
+   stalest attempt first, run in parallel. One shared semaphore
+   (`crawl.global_concurrency`) bounds concurrent crawls across schedules and
+   the pass alike.
 5. **Verify by crawling, not by trusting the index.** A tenant that disappeared
    costs one `crawl.failed` run and is never re-registered; the pass counts it
    as a failure instead of aborting.

@@ -199,7 +199,7 @@ async def test_empty_index_slice_yields_nothing():
 
 def test_cursor_walks_hosts_then_buckets():
     provider = _provider()
-    host_count = 4
+    host_count = 5
 
     first_host, first_ats, first_bucket = provider.slice_for(0)
     assert first_host == "boards.greenhouse.io"
@@ -207,7 +207,8 @@ def test_cursor_walks_hosts_then_buckets():
     assert first_bucket == BUCKETS[0]
 
     # The next hosts at the same bucket come before the next bucket.
-    assert provider.slice_for(1)[0] == "jobs.ashbyhq.com"
+    assert provider.slice_for(1)[0] == "job-boards.greenhouse.io"
+    assert provider.slice_for(2)[0] == "jobs.ashbyhq.com"
     assert provider.slice_for(host_count)[0] == "boards.greenhouse.io"
     assert provider.slice_for(host_count)[2] == BUCKETS[1]
 
@@ -227,4 +228,87 @@ async def test_rotation_cursor_selects_the_queried_slice():
         async for s in provider.discover(DiscoveryQuery(extra={"cursor": 1}), _ctx(http))
     ]
 
-    assert "jobs.ashbyhq.com/a*" in http.urls[1]
+    assert "job-boards.greenhouse.io/a*" in http.urls[1]
+
+
+@pytest.mark.asyncio
+async def test_one_pass_walks_several_slices_in_parallel():
+    http = _StubHttp(_ndjson([]))
+    provider = _provider()
+
+    _ = [
+        s
+        async for s in provider.discover(
+            DiscoveryQuery(extra={"cursor": 0, "slices": 3}), _ctx(http)
+        )
+    ]
+
+    # collinfo once (shared across slices), then one Common Crawl query per
+    # slice (the empty answer also triggers one CDX attempt per slice while
+    # the pass-level budget of four lasts).
+    slice_urls = [u for u in http.urls[1:] if "collinfo" not in u]
+    assert len(slice_urls) == 6
+    assert sum(1 for u in http.urls if "collinfo" in u) == 1
+    assert any("boards.greenhouse.io/a*" in u for u in slice_urls)
+    assert any("job-boards.greenhouse.io/a*" in u for u in slice_urls)
+    assert any("jobs.ashbyhq.com/a*" in u for u in slice_urls)
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_on_two_greenhouse_hosts_is_deduped():
+    """boards. and job-boards. host the same tenant; one board is proposed."""
+    bodies = {
+        WebIndexProvider()._query_url(COLL_ID, "boards.greenhouse.io", "a"): _ndjson(
+            [_row("https://boards.greenhouse.io/acme")]
+        ),
+        WebIndexProvider()._query_url(
+            COLL_ID, "job-boards.greenhouse.io", "a"
+        ): _ndjson([_row("https://job-boards.greenhouse.io/acme")]),
+    }
+    http = _StubHttp(collinfo_body=json.dumps([{"id": COLL_ID}]).encode(), bodies_by_url=bodies)
+    provider = _provider()
+
+    sources = [
+        s async for s in provider.discover(
+            DiscoveryQuery(extra={"cursor": 0, "slices": 2}), _ctx(http)
+        )
+    ]
+
+    # The first host in the rotation wins; the duplicate is dropped.
+    assert [s.url for s in sources] == ["https://boards.greenhouse.io/acme"]
+
+
+@pytest.mark.asyncio
+async def test_cdx_fallbacks_are_capped_per_pass():
+    """A burst of dead Common Crawl slices must not become a CDX crawl."""
+
+    class _IndexDown(FakeHttpClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.urls: list[str] = []
+
+        async def send(self, req: HttpRequest):
+            self.urls.append(req.url)
+            if "/collinfo" in req.url:
+                body = json.dumps([{"id": COLL_ID}]).encode()
+            elif "web.archive.org" in req.url:
+                body = json.dumps(
+                    [["original"], ["https://boards.greenhouse.io/acme"]]
+                ).encode()
+            else:
+                return Err(PortError(code="http.transport", message="down"))
+            return Ok(
+                HttpResponse(
+                    status=200, url=req.url, headers={}, body=body, elapsed_ms=1
+                )
+            )
+
+    http = _IndexDown()
+    provider = _provider()
+
+    _ = [s async for s in provider.discover(
+        DiscoveryQuery(extra={"cursor": 0, "slices": 6}), _ctx(http)
+    )]
+
+    cdx_calls = [u for u in http.urls if "web.archive.org" in u]
+    assert len(cdx_calls) == 4  # MAX_CDX_FALLBACKS, not one per dead slice

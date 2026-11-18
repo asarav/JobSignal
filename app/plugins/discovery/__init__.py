@@ -57,7 +57,7 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
                 "slice per run so coverage grows without seeds (M4)."
             ),
         ),
-        WebIndexProvider(limit=_positive_int(settings.get("web_index_limit"), 100)),
+        WebIndexProvider(limit=_positive_int(settings.get("web_index_limit"), 200)),
     )
 
     registry.add(

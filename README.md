@@ -24,10 +24,10 @@ The repository is named `JobSignal` for historical reasons; the product is named
   `discovery.web_index` enumerates ATS tenant boards from public web URL
   indexes — Common Crawl's index server primary, the Internet Archive CDX API
   as fallback — with no API key, no bundled list, no user input. Each pass
-  walks one `(ATS host, leading-character bucket)` slice of the tenant space,
-  so coverage grows every day and wraps around to refresh. A slice whose
-  indexes are all unreachable is retried next pass (the rotation cursor is
-  held). Design and trade-offs:
+  walks `discovery.cursor_step` (default 12) `(ATS host, leading-character
+  bucket)` slices in parallel, so coverage grows quickly every day and wraps
+  around to refresh. A pass whose slices are all unreachable is retried next
+  pass (the rotation cursor is held). Design and trade-offs:
   [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
 - **The seed file is a bootstrap, not the engine.**
   `discovery.ats_directory` ships eight public boards as package data so a
@@ -37,8 +37,9 @@ The repository is named `JobSignal` for historical reasons; the product is named
   every enabled provider for candidates, dedupes by canonical URL, registers
   up to `discovery.max_new_sources_per_run` new sources (connector from the
   provider's ATS hint or the URL classifier), then crawls the sources that are
-  due — oldest attempt first, up to `discovery.max_crawl_sources_per_run`.
-  Per-provider and per-source failures are isolated and counted, never fatal.
+  due — stalest attempt first, in parallel, up to
+  `discovery.max_crawl_sources_per_run`. Per-provider and per-source failures
+  are isolated and counted, never fatal.
 - **Bounded work.** A source is crawled by the scheduler and by the pass only
   through one shared crawl gate (`crawl.global_concurrency`); the pass has a
   registration cap and a crawl cap, so a large source list never turns a pass
@@ -81,11 +82,12 @@ rejects them (there is a test for it):
 
 - Resume parsing, candidate profiles, keyword extraction — Milestone 5
 - Job matching, scoring, ranking, and saved jobs — Milestone 5
-- Application tracking, suppression, company intelligence, outcome analytics — Milestone 6
-- Ghost-job / posting-quality risk models — Milestone 7
-- Outcome feedback and analytics — Milestone 8
-- Posting intelligence UI refinement — Milestone 9
-- Hardening and distribution — Milestone 10
+- Relevance-ranked discovery funnel (job-URL harvesting, crawl tiers) — Milestone 6
+- Application tracking, suppression, company intelligence, outcome analytics — Milestone 7
+- Ghost-job / posting-quality risk models — Milestone 8
+- Outcome feedback and analytics — Milestone 9
+- Posting intelligence UI refinement — Milestone 10
+- Hardening and distribution — Milestone 11
 
 No browser automation is installed by default; Playwright is an opt-in extra.
 

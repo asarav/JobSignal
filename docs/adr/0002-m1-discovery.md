@@ -89,9 +89,10 @@ stats collected so far. Other sources keep working.
 
 `CrawlScheduler` runs one task per source on the interval stored in the
 source's `schedule.interval_s`. It is deliberately not a daemon: cron
-expressions, jitter and persisted schedules land in M8. The worker reschedules
-whenever a `sources.*` method changes a source, and cancels all tasks on
-shutdown.
+expressions, jitter and persisted schedules land in Milestone 4 (this entry
+predates that milestone and pointed at an older roadmap number). The worker
+reschedules whenever a `sources.*` method changes a source, and cancels all
+tasks on shutdown.
 
 ### 9. The dev database resets only when the schema changes
 
@@ -105,10 +106,10 @@ every launch, which silently discarded local dev data.
 - Adding an ATS means writing one connector plus a contract test; no
   application, IPC or UI code changes.
 - `jobs` rows are the current state, `job_snapshots` and `job_observations` are
-  the history. Later milestones (M3 repost detection, M6 risk assessment) build
-  on that history rather than re-crawling.
+  the history. Later milestones (M3 repost detection, M8 posting-intelligence
+  risk assessment) build on that history rather than re-crawling.
 - The scheduler is in-process: it dies with the worker. Persisted schedules and
-  catch-up runs are M8 work.
+  catch-up runs are Milestone 4 work (this entry predates it).
 - Content-hash comparison detects *changed* postings, not *removed* ones; the
   removal logic marks postings that the board no longer lists. M3 will refine
   this with fingerprints and repost classes.

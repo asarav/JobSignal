@@ -12,16 +12,17 @@ Once a day the worker runs a discovery pass:
 1. **Ask every enabled discovery provider for candidate career sites.**
    The built-in provider (`discovery.web_index`) queries a public web URL
    index for real ATS boards. It does not use a fixed list of employers.
-2. **Rotate what it looks at.** One pass covers one slice of the tenant space
-   — for example, ATS tenants starting with `s` on Greenhouse. The next pass
-   covers a different slice, so coverage grows every day and eventually wraps
-   around to refresh what was seen before.
+2. **Rotate what it looks at.** One pass covers a bounded set of slices of the
+   tenant space — for example, ATS tenants starting with `s` on Greenhouse and
+   a dozen neighbouring slices, queried in parallel. The next pass covers
+   different slices, so coverage grows every day and eventually wraps around
+   to refresh what was seen before.
 3. **Register what is new.** Candidates are deduplicated against the sources
-   already stored, and up to `discovery.max_new_sources_per_run` (default 50)
+   already stored, and up to `discovery.max_new_sources_per_run` (default 200)
    new career sites are added, each with its own crawl schedule.
 4. **Crawl what is due.** Sources that have never been crawled, or whose own
-   interval has elapsed, are crawled oldest-first, up to
-   `discovery.max_crawl_sources_per_run` (default 40) per pass and bounded by
+   interval has elapsed, are crawled stalest-first and in parallel, up to
+   `discovery.max_crawl_sources_per_run` (default 60) per pass and bounded by
    the global crawl concurrency cap.
 5. **Store the outcome.** Every crawl writes a `crawl_runs` row and publishes
    `crawl.completed` / `crawl.failed`. New jobs land in the database and are

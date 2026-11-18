@@ -762,7 +762,7 @@ Discovery finds **sources**; connectors/extraction obtain **jobs**. They share o
 | `discovery.local_lists` | Import CSV/JSON/OPML of employers/career URLs | none | on |
 | `discovery.sitemap` | Reads `robots.txt` sitemap entries and job-related sitemaps for registered career sites | public GETs | on |
 | `discovery.search_engine` | Queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`); enabled by default but respects `external_plugins` feature flag | sends query text to the engine | on |
-| `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Common Crawl's index server, with the Internet Archive CDX API as fallback). Each run walks one `(ATS host, leading-character bucket)` slice of the tenant space, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
+| `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Common Crawl's index server, with the Internet Archive CDX API as fallback). Each pass walks a bounded set of `(ATS host, leading-character bucket)` slices of the tenant space in parallel, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
 | `discovery.ats_directory` | Offline **bootstrap** seed list of public ATS tenants shipped as a data file. Cold start and test fixture only - never the sole discovery mechanism | none | on |
 | `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default), advances the providers' rotation cursor, registers newly discovered career sites as sources without user input, and crawls the sources that are due | public GETs + search engine queries | on |
 
@@ -781,10 +781,10 @@ The crux of the product is that **jobs find the user**. Discovery therefore has 
 
 How one automatic pass works (`discovery.auto_discover`):
 
-1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for one `(ATS host, leading-character bucket)` pair (for example "tenants starting with `s` on `boards.greenhouse.io`"). The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file. If the primary index (Common Crawl) cannot serve the slice, the Internet Archive CDX API is queried as fallback; if every index fails, the slice is retried next pass.
-2. **Rotate.** The pass persists an integer rotation cursor in `app_settings` (`auto_discover_state`) and advances it by one. Hosts are walked before buckets, so consecutive passes cover different tenants, and the cursor wraps once the whole space has been visited - a later pass re-checks it with fresher index data.
-3. **Register.** Candidates are deduped by canonical URL against existing sources and capped by `discovery.max_new_sources_per_run` (default 50). Each new row gets the default per-source schedule with jitter.
-4. **Crawl what is due.** Sources are crawled oldest-attempt-first, bounded by `discovery.max_crawl_sources_per_run` (default 40) and gated by the global crawl concurrency cap, so a pass stays bounded no matter how many sources exist. A source is "due" when it has never been crawled or when its own interval has elapsed.
+1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for a bounded set of `(ATS host, leading-character bucket)` slices per pass (`discovery.cursor_step`, default 12, walked in parallel — for example "tenants starting with `s` on `boards.greenhouse.io`"). The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file. If the primary index (Common Crawl) cannot serve a slice, the Internet Archive CDX API is queried as fallback; if every index fails for every slice, the slice range is retried next pass.
+2. **Rotate.** The pass persists an integer rotation cursor in `app_settings` (`auto_discover_state`) and advances it by `discovery.cursor_step` (default 12). Hosts are walked before buckets, so consecutive passes cover different tenants, and the cursor wraps once the whole space has been visited - a later pass re-checks it with fresher index data.
+3. **Register.** Candidates are deduped by canonical URL against existing sources and capped by `discovery.max_new_sources_per_run` (default 200). Each new row gets the default per-source schedule with jitter.
+4. **Crawl what is due.** Sources are crawled stalest-attempt-first, bounded by `discovery.max_crawl_sources_per_run` (default 60) and run concurrently up to the global crawl concurrency cap, so a pass stays bounded no matter how many sources exist. A source is "due" when it has never been crawled or when its own interval has elapsed.
 5. **Persist.** The completion time and the cursor are written together, so a restarted worker resumes both the daily cadence and the covered ground.
 
 Additional providers may add candidates (user URLs, company-name resolution, local lists, sitemaps, optional search engines). They all feed the same dedupe, cap and crawl-due machinery, so adding a provider never widens a pass beyond its budget.
@@ -879,6 +879,22 @@ Implemented by a `PolicyHttpClient` decorator wrapping the raw `HttpClient` (so 
 - Progress events: `discovery.progress` (counts: sources total/done, refs discovered, fetched, new, updated, unchanged, failed), `discovery.source_completed`, `discovery.error`.
 - Cancellation: cooperative; in-flight HTTP is cancelled; committed jobs remain; run ends `cancelled`.
 - After persistence, the orchestrator publishes domain events that trigger (debounced, background priority) keyword extraction, matching for active search profiles, and posting-intelligence evaluation for changed jobs.
+
+### 6.8 Relevance-ranked discovery funnel (Milestone 6)
+
+Board-first discovery (§6.2) answers *"which companies are hiring?"* but not *"which postings matter to this user?"* — the US economy adds on the order of 165k net jobs per month, and crawling every board at full depth does not scale to that. The funnel reallocates the same crawl budget by **relevance**, so that the moment a posting the user could plausibly get appears, it is surfaced without the user searching for it. Four stages:
+
+1. **Board discovery (shipped in M4).** The web-index provider enumerates ATS tenant boards; every discovered company enters the source registry with a default schedule.
+2. **Job-URL harvesting.** The *same* index queries that list tenants also list posting URLs (`boards.greenhouse.io/<tenant>/jobs/<id>`). A funnel pass harvests newly indexed posting URLs directly — postings become visible within the index's freshness window (days) **before** their board is ever crawled at full depth, and long-tail companies may never need a full crawl at all.
+3. **Relevance tiers.** Sources are ranked against the candidate profile and hard filters from M5/M3 (skills, roles, locations, connector confidence, posting-intelligence signals from M8 as they arrive). The registry assigns each source a tier:
+   - **hot** — crawled every pass (the "apply the moment it appears" SLA),
+   - **warm** — crawled daily,
+   - **cold** — crawled weekly, or index-only (verify individual harvested postings instead of listing the board).
+4. **Posting verification.** A harvested posting URL is verified with a single fetch + extraction pass (cheap, one request) and resolved through the M3 identity/fingerprint machinery against the same company's other listings, so harvesting a long-tail company costs one request, not a board crawl. Full listings remain the source of truth for `not_seen`/removal logic; harvested-only postings carry a "via index" provenance until a full listing confirms them.
+
+**Budgets stay the boundary.** The funnel never raises the pass caps: `max_new_sources_per_run`, `max_crawl_sources_per_run`, and the global crawl gate are unchanged; tiering only decides *which* due sources are picked and *how often* each tier is crawled. Index harvests add posting candidates, not crawl load, up to `discovery.funnel_postings_per_pass` verifications per pass.
+
+**Freshness honesty.** A web index reflects what its crawler saw days ago; the hot tier exists because the index alone cannot guarantee "the moment it comes out" for the most relevant boards. The funnel is therefore a coverage amplifier (long-tail companies at near-zero crawl cost), not a replacement for the hot tier's direct polling. This is a deliberate trade-off documented in ADR-0006.
 
 ---
 
@@ -2171,7 +2187,7 @@ All methods below MUST exist by their milestone (§21). "LR" = long-running (ret
 ### 18.3 Optional hardening (post-MVP unless stated)
 
 - At-rest encryption: SQLCipher or OS-level disk encryption guidance; resumes encrypted with a key held in the OS keychain (via Tauri plugin). Documented as optional because it affects performance and recovery.
-- Security review is a Milestone 8 deliverable: threat model update, dependency audit, IPC fuzzing, HTML-sanitizer tests with known XSS corpora, crawler SSRF tests.
+- Security review is a Milestone 11 deliverable: threat model update, dependency audit, IPC fuzzing, HTML-sanitizer tests with known XSS corpora, crawler SSRF tests.
 
 ---
 
@@ -2255,6 +2271,10 @@ Outcomes tracked and linked to applications · Response/interview/rejection/no-r
 
 Component tests for badges/explanation panels (accessible names, no bare scores), table virtualization, filters, autofill review panel (blocked/skipped labels, no "Submit" wording), IPC client typing (generated types in sync), error/empty states. E2E smoke (Playwright against the built app with a worker running on fixtures): add source → discover → view job → save → mark applied → see suppression.
 
+### 19.10 Funnel tests
+
+Tier assignment respects profile + hard filters (golden profile/fixture boards) · a tier never crawls more often than its interval · tier reassignment after profile changes is explainable and evented · harvested posting URLs are verified with at most one fetch before extraction · harvested-only postings never create `not_seen` observations and never mark a job `removed` · identity resolution dedupes a harvested posting against a full listing of the same posting · funnel passes never exceed the pass caps or the global crawl gate · disabling `discovery.funnel_enabled` restores plain due-based crawling.
+
 ---
 
 ## 20. Default configuration (reference)
@@ -2278,10 +2298,14 @@ crawl:
   block_backoff_hours: [6, 24, 72, 168]
 discovery:
   auto_discover_interval_hours: 24 # cadence of the automatic pass
-  max_new_sources_per_run: 50      # registration budget per pass
-  max_crawl_sources_per_run: 40    # crawl budget per pass (oldest attempt first)
-  web_index_limit: 100             # tenant URLs requested per index query
-  provider_timeout_s: 120          # call budget for one discovery provider
+  max_new_sources_per_run: 200     # registration budget per pass
+  max_crawl_sources_per_run: 60    # crawl budget per pass (stalest first, parallel)
+  cursor_step: 12                  # index slices walked per pass
+  web_index_limit: 200             # tenant URLs requested per index query
+  provider_timeout_s: 300          # call budget for one discovery provider
+  funnel_enabled: true             # relevance-ranked crawl budget (Milestone 6)
+  funnel_postings_per_pass: 50     # harvested posting-URL verifications per pass
+  tier_intervals_s: [3600, 86400, 604800] # hot / warm / cold crawl cadence
 extraction:
   order: [extract.public_api, extract.public_endpoint, extract.jsonld, extract.embedded_json,
           extract.static_html, extract.rendered_dom, extract.generic, extract.partial]
@@ -2358,6 +2382,7 @@ Search profiles, hard filters, search results with FTS; fingerprints; deduplicat
 
 **Deliverables:** `discovery.auto_discover` pass that runs all enabled discovery providers on a daily schedule without user input; **seed-free discovery of career sites** via `discovery.web_index` (public web URL index, rotating `(ATS host, bucket)` cursor persisted in `app_settings`), so neither a bundled seed list nor user-added sources are required; the seed file demoted to an offline bootstrap; auto-registration of newly discovered career sites as `SourceConfig` rows with the configured default schedule; per-pass budgets for registration and crawling (`discovery.max_new_sources_per_run`, `discovery.max_crawl_sources_per_run`) plus a shared global crawl concurrency gate; due-based crawl selection (never crawled, or own interval elapsed) so a pass stays bounded as sources accumulate; persistent per-source scheduler with cron/interval schedules that survives worker restarts; `discovery.auto_discover` IPC method; daily crawl trigger that runs the due sources and records `crawl.completed`/`crawl.failed` events; search profiles (from M3) begin receiving newly discovered jobs automatically.
 The crux of this whole desktop app is that jobs find the user, not that the user needs to search for jobs. The best jobs available at a certain time need to be found for a user to find and apply to a job and maximize their chances of getting a job that they are satisfied with. We want to maximize success and satisfaction and limit manual actions and automate as much as possible to make job searching far less mentally taxing.
+As shipped, a pass walks `discovery.cursor_step` (default 12) index slices in parallel, crawls the due sources concurrently through the shared gate, and the web-index provider dedupes tenants across hosts within a pass (see §6.2 for the shipped behavior and budgets).
 
 **Exit:** with the bootstrap seed file empty, a pass still discovers and registers career sites on fixture index data in bounded time; the rotation cursor and the cadence both survive a worker restart; no user input required to populate sources; a pass never exceeds its registration/crawl budgets or the global crawl gate; jobs flow into search profiles with hard filters applied.
 
@@ -2367,31 +2392,37 @@ Resume import/versions, parsers (PDF/DOCX/TXT), sectioner and entity extraction,
 
 **Exit:** golden resume/job fixtures produce expected dimensions; unavailable dimensions handled; privacy network-denied test passes.
 
-### Milestone 6 — Applications and autofill
+### Milestone 6 — Relevance-ranked discovery funnel
+
+Build §6.8: the crawl budget follows relevance instead of recency alone. Job-URL harvesting from the same web-index queries used for board discovery (`funnel` provider); posting-URL verification with single-fetch extraction routed through M3 identity resolution; relevance tiers assigned to sources from the M5 candidate profile and M3 hard filters (hot = every pass, warm = daily, cold = weekly or index-only); tier reassignment on profile changes; funnel config (`discovery.funnel_enabled`, `funnel_postings_per_pass`, `tier_intervals_s`) with all existing pass caps unchanged; Discover screen shows tier and "via index" provenance.
+
+**Exit:** funnel tests (§19.10) green; a tier never crawls more often than its interval; long-tail companies cost near-zero crawl load; disabling the funnel restores plain due-based crawling; the pass caps and global gate are never exceeded.
+
+### Milestone 7 — Applications and autofill
 
 Application tracking, events, company history, suppression engine and policy UI, Suppressed/Seen view, Playwright `BrowserProvider`, `FormInspector`, generic `FormFiller`, review panel, `SubmissionGuard` layers, fixture application site, safety suite.
 
 **Exit:** all §19.5 safety tests green; cooldown tests (save/dismiss do not trigger) green; **no code path capable of submitting**.
 
-### Milestone 7 — Posting intelligence
+### Milestone 8 — Posting intelligence
 
 Observation recorders, endpoint verifier, all signal providers (§9.3), `risk.heuristic_v1`, classification, assessments and history, company summaries and tiers, ranking policies (credibility), Posting Intelligence UI with evidence and "How this works".
 
 **Exit:** all §19.7 tests green; reproducibility golden test; cautious-language lint passes. Start with explainable heuristics; no ML.
 
-### Milestone 8 — Outcome feedback and analytics
+### Milestone 9 — Outcome feedback and analytics
 
 Outcomes capture (+ proposed no-response flow), response/interview/no-response analytics with intervals, calibration view and proposal flow, company-level statistics, keyword prevalence (distinct-job counting), resume coverage and missing-skills UI, trends.
 
 **Exit:** §19.8 tests green; prevalence counts verified against golden datasets with reposts/duplicates.
 
-### Milestone 9 — Posting intelligence UI refinement
+### Milestone 10 — Posting intelligence UI refinement
 
 Ghost-job signal UI, "How this works" explanations per job, credibility badges, risk tier filtering, company hiring trend charts.
 
 **Exit:** §19.7 tests green for UI layer; all ghost-risk explanations verified against golden datasets.
 
-### Milestone 10 — Hardening and distribution
+### Milestone 11 — Hardening and distribution
 
 Performance tuning to §17 budgets, reliability (restart/interrupt recovery, integrity checks), backup/export/import, migration upgrade tests, error-recovery UX, installers (Windows MSI/NSIS, macOS signed dmg/notarized, Linux AppImage/deb), auto-update decision (ADR; off by default or user-initiated), documentation (user guide, "How scoring works", privacy), security review (§18.3).
 

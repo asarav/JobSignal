@@ -9,11 +9,16 @@ Common Crawl answers in seconds, but its gateway currently times out on the
 largest ATS hosts, so an unserved slice falls back to the Internet Archive's
 CDX API (the same kind of public index, slower: tens of seconds per query).
 
-One run asks the index for one ``(ATS host, leading-character bucket)`` pair.
-The auto-discovery pass persists and advances that cursor, so each daily run
-explores a new slice of the tenant space and the whole space is revisited
-after the cursor wraps.  If a pass cannot read the index, the cursor is held
-and the same slice is retried next pass instead of being skipped.
+One pass asks the index for several ``(ATS host, leading-character bucket)``
+pairs (``slices`` from the pass), so a daily run covers a meaningful stretch
+of the tenant space; the auto-discovery pass persists and advances that
+cursor, so coverage grows every run and the whole space is revisited after
+the cursor wraps.  If a pass cannot read the index at all, the cursor is
+held and the same slices are retried next pass instead of being skipped.
+
+Because the same tenant can be indexed on more than one host (Greenhouse's
+``boards.`` and ``job-boards.`` subdomains, say), a pass dedupes candidates
+by ``(connector id, tenant key)`` and yields the first host it saw.
 
 The provider only proposes sources.  The crawler verifies each board, so a
 tenant that has gone away costs one failed crawl run instead of polluting the
@@ -22,8 +27,10 @@ source list forever.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime
 from urllib.parse import quote, urlencode, urlsplit
@@ -53,10 +60,34 @@ CDX_ENDPOINT = "https://web.archive.org/cdx/search/cdx"
 #: (indexed host, connector id) pairs.  Adding an ATS host widens discovery.
 DEFAULT_ATS_HOSTS: tuple[tuple[str, str], ...] = (
     ("boards.greenhouse.io", "ats.greenhouse"),
+    ("job-boards.greenhouse.io", "ats.greenhouse"),
     ("jobs.ashbyhq.com", "ats.ashby"),
     ("jobs.lever.co", "ats.lever"),
     ("jobs.smartrecruiters.com", "ats.smartrecruiters"),
 )
+
+#: How many index queries run concurrently inside one pass. The archive
+#: gateways throttle bursts, so this stays low and slice starts are staggered.
+SLICE_CONCURRENCY = 3
+
+#: Seconds between slice starts; paces the fan-out without serializing it.
+SLICE_STAGGER_S = 1.0
+
+#: Rows requested per Common Crawl query (a fast, columnar index server).
+CC_LIMIT = 200
+
+#: Rows requested per CDX query (its gateway struggles beyond small limits).
+CDX_LIMIT = 60
+
+#: CDX fallback queries one pass may spend.  Each takes tens of seconds, so
+#: a run of empty-or-failed Common Crawl slices must not turn the pass into
+#: a serial CDX crawl; the unserved slices are simply skipped this pass and
+#: revisited when the rotation cursor wraps.
+MAX_CDX_FALLBACKS = 4
+
+#: Wall-clock budget for the whole pass (the discovery call timeout is
+#: 300 s; the provider stops starting expensive fallbacks well before it).
+PASS_BUDGET_S = 240.0
 
 #: Leading characters of a tenant key; one bucket is walked per run.
 BUCKETS = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -97,9 +128,9 @@ class WebIndexProvider:
         hosts: Sequence[tuple[str, str]] = DEFAULT_ATS_HOSTS,
         endpoint: str = DEFAULT_INDEX_ENDPOINT,
         *,
-        limit: int = 100,
+        limit: int = 200,
         timeout_s: float = 45.0,
-        cdx_timeout_s: float = 90.0,
+        cdx_timeout_s: float = 60.0,
     ) -> None:
         self._hosts = tuple(hosts) or DEFAULT_ATS_HOSTS
         self._endpoint = endpoint.rstrip("/")
@@ -126,63 +157,143 @@ class WebIndexProvider:
         mixin: Mapping[str, object] = dict(query.extra)
         raw_cursor = mixin.get("cursor", 0)
         cursor = raw_cursor if isinstance(raw_cursor, int) else 0
-        host, connector_id, bucket = self.slice_for(cursor)
+        raw_slices = mixin.get("slices", 1)
+        slices = raw_slices if isinstance(raw_slices, int) and raw_slices > 0 else 1
 
+        # Walk several slices per pass, in parallel, so one daily run covers
+        # a meaningful stretch of the tenant space instead of one thin
+        # `(host, bucket)` column of it.  Shared pass state: `seen` dedupes
+        # `(connector id, tenant)` across hosts (Greenhouse boards live on
+        # two subdomains), `shared["cdx_left"]` caps the slow CDX fallbacks,
+        # `shared["deadline"]` stops late slices from starting expensive
+        # fallbacks, and `shared["crawl_ids"]` shares one collinfo answer
+        # across all slices instead of one request per slice.
+        semaphore = asyncio.Semaphore(SLICE_CONCURRENCY)
+        seen: set[tuple[str, str]] = set()
+        shared: dict[str, object] = {
+            "cdx_left": MAX_CDX_FALLBACKS,
+            "deadline": time.monotonic() + PASS_BUDGET_S,
+            "crawl_ids": None,
+        }
+
+        async def fetch(offset: int) -> tuple[int, list[tuple[str, str, str, str]] | None]:
+            await asyncio.sleep(SLICE_STAGGER_S * offset)
+            async with semaphore:
+                return offset, await self._slice_rows(ctx, cursor + offset, shared)
+
+        outcomes = await asyncio.gather(
+            *(fetch(offset) for offset in range(slices)), return_exceptions=True
+        )
+        reachable = sum(
+            1
+            for outcome in outcomes
+            if not isinstance(outcome, BaseException)
+            and outcome[1] is not None  # type: ignore[misc]
+        )
+        if reachable == 0:
+            # Every backend for every slice failed: raise so the pass holds
+            # the rotation cursor and retries this range next time.
+            ctx.logger.warning(
+                "discovery.web_index.unreachable", slices=slices, cursor=cursor
+            )
+            raise RuntimeError(f"web index unreachable for cursor {cursor}")
+
+        observed_at = datetime.now(UTC)
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException) or outcome[1] is None:
+                continue
+            offset, rows = outcome
+            host, connector_id, bucket = self.slice_for(cursor + offset)
+            for tenant, original, timestamp, backend in rows:
+                key = (connector_id, tenant)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield DiscoveredSource(
+                    kind="ats",
+                    url=f"https://{host}/{tenant}",
+                    company_hint=tenant.replace("-", " ").title(),
+                    ats_hint=connector_id,
+                    confidence=0.6,
+                    evidence=[
+                        Evidence(
+                            kind="web_index",
+                            description=f"{host}/{bucket} is listed in the public web index",
+                            data={
+                                "index": backend,
+                                "captured_url": original,
+                                "captured_timestamp": timestamp,
+                            },
+                            observed_at=observed_at,
+                        )
+                    ],
+                )
+
+    async def _slice_rows(
+        self, ctx: ExecutionContext, cursor: int, shared: dict[str, object]
+    ) -> list[tuple[str, str, str, str]] | None:
+        """Rows for one slice; ``None`` when both index backends fail.
+
+        Each row is ``(tenant, captured url, timestamp, index backend)``.
+        ``shared`` is mutable pass state (see ``discover``): the slow CDX
+        fallback may only be spent ``MAX_CDX_FALLBACKS`` times per pass and
+        not at all once the pass deadline has passed.
+        """
+        host, _connector_id, bucket = self.slice_for(cursor)
         # Common Crawl answers in seconds; the Internet Archive CDX API needs
         # a minute but serves the hosts whose CC partitions are unavailable.
-        cc_rows = await self._common_crawl_rows(ctx, host, bucket)
+        cc_rows = await self._common_crawl_rows(ctx, host, bucket, shared)
         rows: list[tuple[str, str, str]] | None
-        source = "common_crawl"
+        backend = "common_crawl"
         if not cc_rows:
             # No Common Crawl rows for this slice (or it failed): an empty
             # answer there often means poor coverage, not an empty bucket.
-            cdx_rows = await self._cdx_rows(ctx, host, bucket)
-            if cdx_rows is not None:
-                rows, source = cdx_rows, "cdx"
-            elif cc_rows is not None:
-                rows = cc_rows  # empty, but an index answered
+            # But CDX is slow and the pass is budgeted, so only spend the
+            # fallback while there is budget left for it.
+            if (
+                shared["cdx_left"] <= 0  # type: ignore[operator]
+                or time.monotonic() >= shared["deadline"]  # type: ignore[operator]
+            ):
+                rows = cc_rows  # empty, or None if CC also failed
             else:
-                rows = None
+                shared["cdx_left"] -= 1  # type: ignore[operator]
+                cdx_rows = await self._cdx_rows(ctx, host, bucket)
+                if cdx_rows is not None:
+                    rows = cdx_rows
+                    backend = "cdx"
+                else:
+                    rows = cc_rows  # empty, but an index answered
         else:
             rows = cc_rows
-        if rows is None:
-            # Both indexes are unreachable: raise so the pass holds the
-            # rotation cursor and retries this slice next time.
-            ctx.logger.warning(
-                "discovery.web_index.unreachable", host=host, bucket=bucket
-            )
-            raise RuntimeError(f"web index unreachable for {host}/{bucket}")
-
-        observed_at = datetime.now(UTC)
-        for tenant, original, timestamp in rows:
-            yield DiscoveredSource(
-                kind="ats",
-                url=f"https://{host}/{tenant}",
-                company_hint=tenant.replace("-", " ").title(),
-                ats_hint=connector_id,
-                confidence=0.6,
-                evidence=[
-                    Evidence(
-                        kind="web_index",
-                        description=f"{host}/{bucket} is listed in the public web index",
-                        data={
-                            "index": source,
-                            "captured_url": original,
-                            "captured_timestamp": timestamp,
-                        },
-                        observed_at=observed_at,
-                    )
-                ],
-            )
+        return [(tenant, url, ts, backend) for tenant, url, ts in rows]
 
     async def _common_crawl_rows(
-        self, ctx: ExecutionContext, host: str, bucket: str
+        self,
+        ctx: ExecutionContext,
+        host: str,
+        bucket: str,
+        shared: dict[str, object],
     ) -> list[tuple[str, str, str]] | None:
-        """Rows from Common Crawl's index; ``None`` if it cannot serve the slice."""
-        crawl_ids = await self._crawl_ids_of(ctx)
+        """Rows from Common Crawl's index; ``None`` if it cannot serve the slice.
+
+        The collinfo answer is shared across slices of one pass (one HTTP
+        request instead of one per slice), and a second crawl index is only
+        tried while the pass still has time budget left.
+        """
+        crawl_ids = shared.get("crawl_ids")
         if crawl_ids is None:
+            task = shared.get("crawl_ids_task")
+            if not isinstance(task, asyncio.Task):
+                task = asyncio.create_task(self._crawl_ids_of(ctx))
+                shared["crawl_ids_task"] = task
+            crawl_ids = await task
+            shared["crawl_ids"] = crawl_ids
+        if not isinstance(crawl_ids, list) or not crawl_ids:
             return None
-        for crawl_id in crawl_ids[:MAX_CRAWL_FALLBACKS]:
+        backoffs = crawl_ids[:MAX_CRAWL_FALLBACKS]
+        for position, crawl_id in enumerate(backoffs):
+            if position and time.monotonic() >= shared["deadline"]:  # type: ignore[operator]
+                return None
             rows = await self._query(ctx, crawl_id, host, bucket)
             if rows is not None:
                 return rows
@@ -202,7 +313,7 @@ class WebIndexProvider:
             ("matchType", "prefix"),
             ("fl", "original"),
             ("collapse", "urlkey"),
-            ("limit", str(self._limit)),
+            ("limit", str(CDX_LIMIT)),
             ("output", "json"),
         ]
         url = f"{CDX_ENDPOINT}?{urlencode(params)}"

@@ -48,12 +48,14 @@ class _Provider:
         self._urls = urls
         self.calls = 0
         self.cursors: list[object] = []
+        self.slices_seen: list[object] = []
 
     async def discover(
         self, query: DiscoveryQuery, ctx: ExecutionContext
     ) -> AsyncIterator[DiscoveredSource]:
         self.calls += 1
         self.cursors.append(query.extra.get("cursor"))
+        self.slices_seen.append(query.extra.get("slices"))
         for url in self._urls:
             yield _candidate(url)
 
@@ -203,11 +205,13 @@ async def test_rotation_cursor_is_passed_and_persisted():
     await wiring.auto_discover_use_case.run()
     await wiring.auto_discover_use_case.run()
 
-    assert provider.cursors == [0, 1]
+    # Each pass walks `cursor_step` slices, so the cursor advances by 12.
+    assert provider.cursors == [0, 12]
+    assert provider.slices_seen == [12, 12]
     async with container.uow_factory() as uow:
         state = await uow.settings.get(AUTO_DISCOVER_STATE_KEY)
     assert state is not None
-    assert state["rotation_cursor"] == 2
+    assert state["rotation_cursor"] == 24
 
 
 @pytest.mark.asyncio
@@ -358,7 +362,7 @@ async def test_a_pass_discovers_without_seeds_from_fixture_index_data():
     }
     async with container.uow_factory() as uow:
         state = await uow.settings.get(AUTO_DISCOVER_STATE_KEY)
-    assert isinstance(state, dict) and state.get("rotation_cursor") == 1
+    assert isinstance(state, dict) and state.get("rotation_cursor") == 12
 
 
 def _ctx() -> ExecutionContext:
