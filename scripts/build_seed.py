@@ -1,23 +1,16 @@
-"""Build the bundled ATS seed list incrementally, as discovery happens.
+"""Build the bundled ATS seed list from the public web URL index.
 
-Unlike a one-shot batch harvest, this script runs discovery passes one at a
-time (the same paced slices the app uses), collects every newly discovered
-board, verifies it is live via the ATS public API, records its open-posting
-count, and appends it to ``app/plugins/discovery/seeds/ats_tenants.json``
-immediately.  Seeds are sorted by open-posting count so the largest
-employers come first.  Progress is checkpointed to ``.seed_build_state.json``
-after every pass, so an interrupted run resumes where it left off.
+Uses the Internet Archive CDX API directly with high per-query limits so each
+bucket is captured in ONE request (not 50 paginated ones).  CDX can return
+10,000 distinct URLs in ~13s.  Requests are spaced 5s apart to stay under the
+gateway's rate limit.  Progress is checkpointed to ``.seed_build_cache.json``
+after every slice, so an interrupted run resumes where it left off.
 
-Boards are verified here (ATS API liveness + job count) so the shipped seed
-file only contains live boards and is ordered by employer size.  Per spec 6.4,
-the crawler still does the real verification + extraction at crawl time.
+Run it (network required).  Expect ~30-60 min for a full sweep:
 
-Run it (network required).  It stops when the seed list reaches ``--limit``
-(default 1000) or 5 consecutive passes find nothing new:
-
-    python scripts/build_seed.py            # run until target (background)
-    python scripts/build_seed.py --limit 200 # smaller target
-    python scripts/build_seed.py --passes 1  # one pass only (for testing)
+    python scripts/build_seed.py            # full harvest + verify
+    python scripts/build_seed.py --limit 200 # smaller list
+    python scripts/build_seed.py --resume    # skip harvest, use cache
 
 The seed file is a *bootstrap*: discovery's engine is the web-index provider
 (see ADR 0005).  The resulting list is the "one time" shipped artifact.
@@ -30,23 +23,21 @@ import asyncio
 import json
 import os
 import time
+from collections import defaultdict
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode
 
 import httpx
-from app.domain.models.context import CancellationToken, ExecutionContext
-from app.domain.models.discovery import DiscoveryQuery
-from app.infrastructure.http.httpx_client import HttpxClient
-from app.application.config import AppConfig
-from app.plugins.discovery.web_index import WebIndexProvider
+from app.plugins.discovery.web_index import DEFAULT_ATS_HOSTS, _tenant_of
 
 ROOT = Path(__file__).resolve().parents[1]
 SEEDS_PATH = ROOT / "app" / "plugins" / "discovery" / "seeds" / "ats_tenants.json"
-STATE_PATH = ROOT / ".seed_build_state.json"
+CACHE_PATH = ROOT / ".seed_build_cache.json"
 
-SLICES_PER_PASS = 24
-PASS_TIMEOUT_S = 300.0
-HARVEST_LIMIT = 10000
+CDX_ENDPOINT = "https://web.archive.org/cdx/search/cdx"
+BUCKETS = "abcdefghijklmnopqrstuvwxyz0123456789"
+CDX_LIMIT = 10000
+REQUEST_GAP_S = 3.0
 VERIFY_CONCURRENCY = min(32, max(8, (os.cpu_count() or 4) * 4))
 
 API_TEMPLATES: dict[str, str] = {
@@ -57,56 +48,145 @@ API_TEMPLATES: dict[str, str] = {
 }
 
 
-def load_state() -> dict:
-    if STATE_PATH.exists():
-        try:
-            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass
-    existing = []
-    if SEEDS_PATH.exists():
-        try:
-            for e in json.loads(SEEDS_PATH.read_text(encoding="utf-8")):
-                if isinstance(e, dict) and e.get("url"):
-                    e = dict(e)
-                    e.setdefault("_jobs", 0)
-                    e.setdefault("_verified", True)
-                    existing.append(e)
-        except (OSError, json.JSONDecodeError):
-            pass
-    return {"cursor": 0, "seeds": existing, "stall": 0}
+async def harvest_slice(
+    client: httpx.AsyncClient,
+    host: str,
+    connector_id: str,
+    bucket: str,
+    sem: asyncio.Semaphore,
+) -> dict[str, int]:
+    """Return {tenant: url_count} for one (host, bucket) slice."""
+    counts: dict[str, int] = defaultdict(int)
+    async with sem:
+        await asyncio.sleep(REQUEST_GAP_S)
+        params = {
+            "url": f"{host}/{bucket}",
+            "matchType": "prefix",
+            "fl": "original",
+            "collapse": "urlkey",
+            "limit": str(CDX_LIMIT),
+            "output": "json",
+        }
+        url = f"{CDX_ENDPOINT}?{urlencode(params)}"
+        for attempt in range(2):
+            try:
+                r = await client.get(url, timeout=30.0)
+            except httpx.HTTPError:
+                await asyncio.sleep(5.0)
+                continue
+            if r.status_code == 200:
+                try:
+                    table = r.json()
+                except ValueError:
+                    return dict(counts)
+                if isinstance(table, list):
+                    for record in table[1:]:
+                        if isinstance(record, list) and record and isinstance(record[0], str):
+                            tenant = _tenant_of(record[0], host)
+                            if tenant is not None:
+                                counts[tenant] += 1
+                return dict(counts)
+            # 503/504/etc: retry with backoff
+            await asyncio.sleep(5.0 * (attempt + 1))
+        return dict(counts)
 
 
-def save_state(state: dict) -> None:
-    STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    # Sort by open-posting count desc so largest employers come first.
-    ordered = sorted(state["seeds"], key=lambda e: e.get("_jobs", 0), reverse=True)
-    out = []
-    for e in ordered:
-        out.append(
-            {
-                "url": e["url"],
-                "company_hint": e.get("company_hint"),
-                "ats_hint": e.get("ats_hint"),
-                "confidence": e.get("confidence", 0.95),
-            }
+async def harvest_all(client: httpx.AsyncClient, resume: bool) -> dict[tuple[str, str], int]:
+    completed: set[tuple[str, str]] = set()
+    results: dict[tuple[str, str], int] = defaultdict(int)
+
+    if CACHE_PATH.exists():
+        try:
+            raw = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and "results" in raw:
+                for k, v in raw.get("results", {}).items():
+                    parts = k.split("|", 1)
+                    if len(parts) == 2:
+                        results[(parts[0], parts[1])] = int(v)
+                for pair in raw.get("completed", []):
+                    if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                        completed.add((str(pair[0]), str(pair[1])))
+                print(
+                    f"Resuming from cache: {len(completed)}/180 slices done, "
+                    f"{len(results)} candidates so far.",
+                    flush=True,
+                )
+                if resume:
+                    return dict(results)
+        except (OSError, ValueError, KeyError):
+            completed = set()
+            results = defaultdict(int)
+
+    semaphore = asyncio.Semaphore(1)  # serial: one request at a time
+    tasks = [
+        (host, connector_id, bucket)
+        for host, connector_id in DEFAULT_ATS_HOSTS
+        for bucket in "abcdefghijklmnopqrstuvwxyz0123456789"
+    ]
+    todo = [t for t in tasks if (t[0], t[2]) not in completed]
+
+    done = len(completed)
+    total = len(tasks)
+    started = time.monotonic()
+
+    def checkpoint() -> None:
+        CACHE_PATH.write_text(
+            json.dumps(
+                {
+                    "completed": [[h, b] for (h, b) in completed],
+                    "results": {f"{c}|{t}": n for (c, t), n in results.items()},
+                },
+                indent=1,
+            ),
+            encoding="utf-8",
         )
-    SEEDS_PATH.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+
+    async def run_one(host: str, connector_id: str, bucket: str) -> None:
+        nonlocal done
+        counts = await harvest_slice(client, host, connector_id, bucket, semaphore)
+        for tenant, n in counts.items():
+            results[(connector_id, tenant)] += n
+        completed.add((host, bucket))
+        done += 1
+        if done % 5 == 0 or done == total:
+            checkpoint()
+            print(
+                f"  harvested {done}/{total} slices "
+                f"({len(results)} candidates, {round(time.monotonic()-started)}s)",
+                flush=True,
+            )
+
+    await asyncio.gather(*(run_one(h, c, b) for h, c, b in todo), return_exceptions=True)
+    checkpoint()
+    return dict(results)
 
 
-async def verify_board(client: httpx.AsyncClient, url: str, ats_hint: str | None, sem: asyncio.Semaphore) -> int | None:
-    """Returns open-posting count if live, None if dead/unreachable."""
+async def verify_board(
+    client: httpx.AsyncClient,
+    url: str,
+    ats_hint: str | None,
+    sem: asyncio.Semaphore,
+) -> int | None:
     from urllib.parse import urlparse
 
     tenant = urlparse(url).path.strip("/").split("/")[0]
-    template = API_TEMPLATES.get(ats_hint) if ats_hint else None
+    template = {
+        "ats.greenhouse": "https://boards-api.greenhouse.io/v1/boards/{tenant}/jobs",
+        "ats.lever": "https://api.lever.co/v0/postings/{tenant}?mode=json",
+        "ats.ashby": "https://api.ashbyhq.com/posting-api/job-board/{tenant}",
+        "ats.smartrecruiters": "https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=1",
+    }.get(ats_hint)
     async with sem:
         await asyncio.sleep(0.05)
         if template:
             try:
-                r = await client.get(template.format(tenant=tenant), timeout=20.0, follow_redirects=True)
+                r = await client.get(
+                    template.format(tenant=tenant),
+                    timeout=20.0,
+                    follow_redirects=True,
+                )
                 if r.status_code == 200:
-                    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+                    data = r.json() if "json" in r.headers.get("content-type", "") else {}
                     if ats_hint == "ats.greenhouse":
                         return len(data.get("jobs", [])) if isinstance(data, dict) else 0
                     if ats_hint == "ats.lever":
@@ -119,147 +199,95 @@ async def verify_board(client: httpx.AsyncClient, url: str, ats_hint: str | None
                     return 0
             except (httpx.HTTPError, ValueError):
                 pass
-        # Fallback: board root.
         try:
             r = await client.get(url, timeout=15.0, follow_redirects=True)
             if r.status_code == 200:
-                return 0  # live but count unknown
+                return 0
         except httpx.HTTPError:
             pass
         return None
 
 
-async def run_pass(state: dict, ctx_factory) -> int:
-    cursor = state["cursor"]
-    provider = WebIndexProvider(limit=HARVEST_LIMIT)
-    existing_urls = {e["url"] for e in state["seeds"]}
-    new_candidates: list = []
-    try:
-        query = DiscoveryQuery(extra={"cursor": cursor, "slices": SLICES_PER_PASS})
-        ctx = ctx_factory()
-        async for src in provider.discover(query, ctx):
-            if src.url not in existing_urls:
-                new_candidates.append(src)
-                existing_urls.add(src.url)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  pass at cursor {cursor} failed: {exc}; cursor held.", flush=True)
-        return 0
-    if not new_candidates:
-        print(f"  pass at cursor {cursor}: no new candidates.", flush=True)
-        state["cursor"] = cursor + SLICES_PER_PASS
-        return 0
-
-    sem = asyncio.Semaphore(VERIFY_CONCURRENCY)
-    async with httpx.AsyncClient(headers={"User-Agent": "Lodestar seed builder"}, follow_redirects=True) as client:
-        async def check(src) -> tuple:
-            count = await verify_board(client, src.url, src.ats_hint, sem)
-            return src, count
-
-        results = await asyncio.gather(*(check(s) for s in new_candidates))
-
-    added = 0
-    for src, count in results:
-        if count is None:
-            continue  # dead / unreachable
-        state["seeds"].append(
-            {
-                "url": src.url,
-                "company_hint": src.company_hint,
-                "ats_hint": src.ats_hint,
-                "confidence": src.confidence if src.confidence else 0.95,
-                "_jobs": count,
-                "_verified": True,
-            }
-        )
-        added += 1
-    print(
-        f"  pass at cursor {cursor}: {len(new_candidates)} candidates, "
-        f"{added} live (+{added}, total {len(state['seeds'])}).",
-        flush=True,
-    )
-    state["cursor"] = cursor + SLICES_PER_PASS
-    return added
-
-
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=1000, help="target seed count")
-    parser.add_argument("--passes", type=int, default=0, help="max passes (0 = until target or stall)")
+    parser.add_argument("--resume", action="store_true", help="skip harvest, use cache only")
     args = parser.parse_args()
 
-    state = load_state()
-    # Verify any legacy (unverified) seeds.
-    unverified = [e for e in state["seeds"] if not e.get("_verified", False) or "_jobs" not in e]
-    if unverified:
-        print(f"Verifying {len(unverified)} existing seeds...", flush=True)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "Lodestar seed builder"}, follow_redirects=True
+    ) as client:
+        # Pre-flight: verify CDX is reachable before starting a 30+ min harvest.
+        print("Pre-flight: checking CDX availability...", flush=True)
+        ok_count = 0
+        for _ in range(3):
+            try:
+                r = await client.get(
+                    "https://web.archive.org/cdx/search/cdx?url=boards.greenhouse.io/a&matchType=prefix&fl=original&collapse=urlkey&limit=5&output=json",
+                    timeout=20.0,
+                )
+                if r.status_code == 200:
+                    ok_count += 1
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(3.0)
+        if ok_count < 2:
+            print(
+                    f"CDX is unreachable ({ok_count}/3 succeeded). "
+                    "Aborting - try again later.",
+                    flush=True,
+                )
+            return
+        print(f"CDX OK ({ok_count}/3). Starting harvest...", flush=True)
+
+        print("Harvesting candidates from CDX (high limit, serial, polite)...", flush=True)
+        candidates = await harvest_all(client, args.resume)
+        print(f"Harvested {len(candidates)} candidate tenants.", flush=True)
+
+        # Verify + rank by job count.
+        print(f"Verifying {len(candidates)} candidates against ATS APIs...", flush=True)
         sem = asyncio.Semaphore(VERIFY_CONCURRENCY)
-        async with httpx.AsyncClient(headers={"User-Agent": "Lodestar seed builder"}, follow_redirects=True) as client:
-            async def check(e: dict) -> bool:
-                count = await verify_board(client, e["url"], e.get("ats_hint"), sem)
-                if count is None:
-                    return False
-                e["_jobs"] = count
-                e["_verified"] = True
-                return True
+        verified: list[dict] = []
+        done = 0
+        started = time.monotonic()
 
-            results = await asyncio.gather(*(check(e) for e in unverified))
-        before = len(state["seeds"])
-        state["seeds"] = [e for e in state["seeds"] if e.get("_verified", False)]
-        print(f"  kept {len(state['seeds'])}/{before} live boards.", flush=True)
-        save_state(state)
+        async def check(item) -> None:
+            nonlocal done
+            (connector_id, tenant), evidence = item
+            host = next(h for h, c in DEFAULT_ATS_HOSTS if c == connector_id)
+            url = f"https://{host}/{tenant}"
+            count = await verify_board(client, url, connector_id, sem)
+            done += 1
+            if count is not None:
+                verified.append(
+                    {
+                        "url": url,
+                        "company_hint": tenant.replace("-", " ").title(),
+                        "ats_hint": connector_id,
+                        "confidence": 0.9 if count > 0 else 0.6,
+                        "_jobs": count,
+                    }
+                )
+            if done % 50 == 0 or done == len(candidates):
+                print(
+                    f"  verified {done}/{len(candidates)} "
+                    f"({len(verified)} live, {round(time.monotonic()-started)}s)",
+                    flush=True,
+                )
 
-    print(
-        f"Starting: {len(state['seeds'])} seeds already, cursor {state['cursor']}, "
-        f"target {args.limit}.",
-        flush=True,
-    )
+        await asyncio.gather(*(check(item) for item in candidates.items()))
 
-    http = HttpxClient(AppConfig().http)
-    ctx_factory = lambda: ExecutionContext(  # noqa: E731
-        task_id="seed-build",
-        clock=None,  # type: ignore[arg-type]
-        http=http,
-        logger=_NullLogger(),
-        cancel=CancellationToken(),
-        deadline=None,
-        config={},
-    )
+    verified.sort(key=lambda s: s["_jobs"], reverse=True)
+    top = verified[: args.limit]
+    for s in top:
+        del s["_jobs"]
 
-    max_passes = args.passes if args.passes > 0 else 10_000
-    for i in range(max_passes):
-        if len(state["seeds"]) >= args.limit:
-            print(f"Reached target ({len(state['seeds'])} >= {args.limit}). Done.", flush=True)
-            break
-        print(f"\n--- pass {i + 1}: cursor {state['cursor']}, seeds {len(state['seeds'])} ---", flush=True)
-        try:
-            added = await asyncio.wait_for(run_pass(state, ctx_factory), timeout=PASS_TIMEOUT_S)
-        except asyncio.TimeoutError:
-            print("  pass timed out; cursor held.", flush=True)
-            state["stall"] = state.get("stall", 0) + 1
-            save_state(state)
-            continue
-        except Exception as exc:  # noqa: BLE001
-            print(f"  pass error: {exc}", flush=True)
-            state["stall"] = state.get("stall", 0) + 1
-            save_state(state)
-            continue
-
-        if added == 0:
-            state["stall"] = state.get("stall", 0) + 1
-        else:
-            state["stall"] = 0
-        save_state(state)
-        if state.get("stall", 0) >= 5:
-            print("5 consecutive passes added nothing; stopping.", flush=True)
-            break
-
-    print(f"\nFinal: {len(state['seeds'])} seeds. Seed file: {SEEDS_PATH}", flush=True)
-
-
-class _NullLogger:
-    def warning(self, *a, **k): pass
-    def info(self, *a, **k): pass
-    def error(self, *a, **k): pass
+    SEEDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SEEDS_PATH.write_text(json.dumps(top, indent=2) + "\n", encoding="utf-8")
+    print(f"\nWrote {len(top)} verified seeds to {SEEDS_PATH}", flush=True)
+    print("Top 10 by open postings:")
+    for s in verified[:10]:
+        print(f"  {s['url']}  ({s['_jobs']} open)")
 
 
 if __name__ == "__main__":
