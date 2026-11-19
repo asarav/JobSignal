@@ -26,15 +26,17 @@ The repository is named `JobSignal` for historical reasons; the product is named
   as fallback — with no API key, no bundled list, no user input. Each pass
   walks `discovery.cursor_step` (default 12) `(ATS host, leading-character
   bucket)` slices in parallel, so coverage grows quickly every day and wraps
-  around to refresh. A pass whose slices are all unreachable is retried next
-  pass (the rotation cursor is held). Design and trade-offs:
+  around to refresh. Each query asks for a whole block of rows (the CDX
+  fallback requests 10,000 — measured at ~13 s for a complete bucket), not a
+  small sample. A pass whose slices are all unreachable is retried next pass
+  (the rotation cursor is held). Design and trade-offs:
   [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships ~1,000 verified boards of the largest
-  employers on the supported ATS hosts (refreshed via `scripts/build_seed.py`),
-  so a cold install has something to crawl within minutes while the
-  web-index rotation fills in long-tail companies. Deleting it does not stop
-  discovery.
+  `discovery.ats_directory` ships 1,069 boards, each confirmed live through its
+  own public ATS API and ordered largest-first by open postings (refreshed via
+  `scripts/build_seed.py`), so a cold install has something to crawl within
+  minutes while the web-index rotation fills in long-tail companies. Deleting
+  it does not stop discovery.
 - **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
   every enabled provider for candidates, dedupes by canonical URL, registers
   up to `discovery.max_new_sources_per_run` new sources (connector from the

@@ -53,7 +53,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are us
 18. Security and privacy
 19. Testing strategy
 20. Default configuration
-21. Implementation roadmap (Milestones 0–10)
+21. Implementation roadmap (Milestones 0–11)
 22. Development practices and ADR process
 23. Final acceptance criteria
 24. Initial coding-agent prompt
@@ -763,7 +763,7 @@ Discovery finds **sources**; connectors/extraction obtain **jobs**. They share o
 | `discovery.sitemap` | Reads `robots.txt` sitemap entries and job-related sitemaps for registered career sites | public GETs | on |
 | `discovery.search_engine` | Queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`); enabled by default but respects `external_plugins` feature flag | sends query text to the engine | on |
 | `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Common Crawl's index server, with the Internet Archive CDX API as fallback). Each pass walks a bounded set of `(ATS host, leading-character bucket)` slices of the tenant space in parallel, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
-| `discovery.ats_directory` | Offline **bootstrap** seed list of ~1,000 verified boards of the largest employers on the supported ATS hosts (refreshed via `scripts/build_seed.py`). Cold start warm-start and test fixture only - never the sole discovery mechanism | none | on |
+| `discovery.ats_directory` | Offline **bootstrap** seed list of 1,000+ boards on the supported ATS hosts, each confirmed live through its own public ATS API and ordered largest-first by open postings (refreshed via `scripts/build_seed.py`). Cold start warm-start and test fixture only - never the sole discovery mechanism | none | on |
 | `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default), advances the providers' rotation cursor, registers newly discovered career sites as sources without user input, and crawls the sources that are due | public GETs + search engine queries | on |
 
 Rules:
@@ -781,7 +781,7 @@ The crux of the product is that **jobs find the user**. Discovery therefore has 
 
 How one automatic pass works (`discovery.auto_discover`):
 
-1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for a bounded set of `(ATS host, leading-character bucket)` slices per pass (`discovery.cursor_step`, default 12, walked in parallel — for example "tenants starting with `s` on `boards.greenhouse.io`"). The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file. If the primary index (Common Crawl) cannot serve a slice, the Internet Archive CDX API is queried as fallback; if every index fails for every slice, the slice range is retried next pass.
+1. **Enumerate.** Every enabled provider is asked for candidates. `discovery.web_index` queries a public web URL index for a bounded set of `(ATS host, leading-character bucket)` slices per pass (`discovery.cursor_step`, default 12, walked in parallel — for example "tenants starting with `s` on `boards.greenhouse.io`"). Each query asks for a large block of rows (`discovery.web_index_limit`, default 200, for Common Crawl; `discovery.web_index_cdx_limit`, default 10,000, for CDX) because a small limit samples a fraction of a percent of a bucket: measured, CDX returns 10,001 rows in ~13 s and one such answer reduces to ~100 distinct tenants. The index reflects pages a crawler recently fetched, so it tracks companies that exist rather than a snapshot of a data file. If the primary index (Common Crawl) cannot serve a slice, the Internet Archive CDX API is queried as fallback, with one retry while the pass still has budget; if every index fails for every slice, the slice range is retried next pass.
 2. **Rotate.** The pass persists an integer rotation cursor in `app_settings` (`auto_discover_state`) and advances it by `discovery.cursor_step` (default 12). Hosts are walked before buckets, so consecutive passes cover different tenants, and the cursor wraps once the whole space has been visited - a later pass re-checks it with fresher index data.
 3. **Register.** Candidates are deduped by canonical URL against existing sources and capped by `discovery.max_new_sources_per_run` (default 200). Each new row gets the default per-source schedule with jitter.
 4. **Crawl what is due.** Sources are crawled stalest-attempt-first, bounded by `discovery.max_crawl_sources_per_run` (default 60) and run concurrently up to the global crawl concurrency cap, so a pass stays bounded no matter how many sources exist. A source is "due" when it has never been crawled or when its own interval has elapsed.
@@ -791,6 +791,20 @@ How one automatic pass works (`discovery.auto_discover`):
 Additional providers may add candidates (user URLs, company-name resolution, local lists, sitemaps, optional search engines). They all feed the same dedupe, cap and crawl-due machinery, so adding a provider never widens a pass beyond its budget.
 
 Coverage limits that MUST be stated in the UI and docs: the index lags reality (a brand-new company can take weeks to appear), some ATS hosts publish no public boards, and the crawl budget means a large source list is visited over several passes rather than at once.
+
+#### 6.2.2 Hosts whose tenant is a subdomain (Workday, iCIMS)
+
+The M2 connectors already read Workday (`{tenant}.wd{N}.myworkdayjobs.com/{locale}/{site}`) and iCIMS (`{tenant}.icims.com`) boards, but discovery cannot enumerate them with the `host/bucket` prefix query the other hosts use: the variable part of the URL comes *before* the fixed host, so a prefix scan of `icims.com/a` matches the apex only.
+
+Measured against the Internet Archive CDX API: `matchType=domain` answers, but it has no offset parameter, so the first `limit` rows are the alphabetical head of the whole domain (~54 s for `icims.com`, apex and `www` chrome first); narrowing it with `filter=urlkey:^com,icims,a` or `filter=original:^https?://a...` returns 503/504 after 5–60 s. Discovery therefore keeps the prefix path and does not claim to cover these hosts yet.
+
+Expanding to them needs a different slice shape, not a bigger limit:
+
+1. Query by domain. Common Crawl supports `matchType=domain` with `page`/`pageSize`, so the urlkey-sorted subdomain space can be walked page by page; CDX has no offset and is unsuitable for this.
+2. Derive the board URL and tenant key per host. iCIMS: the subdomain is the tenant and the board root is enough. Workday: the subdomain is the tenant, the host carries the `wd{N}` shard, and the CxS API needs both `tenant` and the `{locale}/{site}` path, so the board root must be stored together with `ats_tenant_key`.
+3. Carry the tenant key from discovery into `SourceConfig.ats_tenant_key`. The column and the connector support already exist; the discovery → registration path does not set it yet.
+
+Until then, employers on those two ATSs are reached only if the user adds the board or a company-name/sitemap provider finds it.
 
 ### 6.3 Source classification
 
@@ -2302,7 +2316,8 @@ discovery:
   max_new_sources_per_run: 200     # registration budget per pass
   max_crawl_sources_per_run: 60    # crawl budget per pass (stalest first, parallel)
   cursor_step: 12                  # index slices walked per pass
-  web_index_limit: 200             # tenant URLs requested per index query
+  web_index_limit: 200             # tenant URLs requested per Common Crawl query
+  web_index_cdx_limit: 10000       # tenant URLs requested per CDX query (one whole bucket)
   provider_timeout_s: 300          # call budget for one discovery provider
   warmup_passes: 5                # passes run back-to-back on a cold start
   funnel_enabled: true             # relevance-ranked crawl budget (Milestone 6)
@@ -2371,7 +2386,7 @@ Discovery interfaces, `SourceRegistry`, classifier, `PolicyHttpClient` (robots, 
 **Exit:** connector contract suites green; incremental crawl skips unchanged jobs; failing source isolated; not-seen/removal logic tested.
 
 ### Milestone 2 — Universal extraction
-SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. When these connectors land, discovery expands its host list to cover Workday/iCIMS tenants (where most S&P 500 employers live).
+SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. The connectors landed in M2; discovery's host expansion for the Workday/iCIMS subdomain space (where most S&P 500 employers live) is specified in §6.2.2 and remains open.
 **Exit:** unknown-ATS fixture sites yield complete or partial records; every strategy contract-tested; rendered DOM obeys robots/challenge rules.
 
 ### Milestone 3 — Search and job history

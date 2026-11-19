@@ -11,7 +11,9 @@ Once a day the worker runs a discovery pass:
 
 1. **Ask every enabled discovery provider for candidate career sites.**
    The built-in provider (`discovery.web_index`) queries a public web URL
-   index for real ATS boards. It does not use a fixed list of employers.
+   index for real ATS boards. It does not use a fixed list of employers. Each
+   query asks for a large block of rows (up to 10,000 from the archive
+   fallback) so one answer covers a whole slice of the tenant space.
 2. **Rotate what it looks at.** One pass covers a bounded set of slices of the
    tenant space — for example, ATS tenants starting with `s` on Greenhouse and
    a dozen neighbouring slices, queried in parallel. The next pass covers
@@ -25,16 +27,16 @@ Once a day the worker runs a discovery pass:
    `discovery.max_crawl_sources_per_run` (default 60) per pass and bounded by
    the global crawl concurrency cap.
 5. **Store the outcome.** Every crawl writes a `crawl_runs` row and publishes
-   `crawl.completed` / `crawl.failed` events.
-6. **Cold start.** A fresh install has no run state, so the worker runs
-   `discovery.warmup_passes` (default 5) passes back-to-back (each still
-   bounded by the pass caps and the crawl gate) to register the bundled
-   ~1,000-board seed list within minutes. It stops early once a pass
-   registers nothing new; afterwards only the normal daily pass runs.
-5. **Store the outcome.** Every crawl writes a `crawl_runs` row and publishes
    `crawl.completed` / `crawl.failed`. New jobs land in the database and are
    immediately searchable through your search profiles, with their hard
    filters applied.
+6. **Cold start.** A fresh install has no run state, so the worker runs
+   `discovery.warmup_passes` (default 5) passes back-to-back (each still
+   bounded by the pass caps and the crawl gate) to register most of the bundled
+   seed list within minutes — at most 200 new sources per pass. Because the
+   seed list is ordered largest-first, the biggest employers arrive first.
+   The loop stops early once a pass registers nothing new; afterwards only the
+   normal daily pass runs.
 
 The pass repeats the next day, and again after that. A restart of the app does
 not reset it: the last run time and the rotation cursor are stored in the app
@@ -42,11 +44,13 @@ database, so the schedule and the covered ground both survive.
 
 ## Sources, not seeds
 
-`discovery.ats_directory` ships a small offline seed list. It exists so a brand
-new install has something to crawl immediately (and so tests do not need the
-network). It is **not** the discovery engine: the app never depends on that
-file to find employers, and the file going stale only removes a head start, not
-discovery.
+`discovery.ats_directory` ships a small offline seed list: 1,069 boards on the
+four ATS hosts whose boards live at `host/{tenant}`, each confirmed live
+through the board's own public ATS API. It exists so a brand new install has
+something to crawl immediately (and so tests do not need the network). It is
+**not** the discovery engine: the app never depends on that file to find
+employers, and the file going stale only removes a head start, not discovery.
+`scripts/build_seed.py --refresh` re-verifies and re-ranks it.
 
 You can still add a source yourself if you know a company you want tracked, and
 you can disable any source or any provider. Removing your involvement is the
@@ -59,7 +63,7 @@ telemetry and no cloud database.
 
 | Provider | Contacted | Sent |
 |---|---|---|
-| `discovery.web_index` | `web.archive.org` (public URL index query API) | an ATS host and a single leading character, e.g. `boards.greenhouse.io/s` |
+| `discovery.web_index` | Common Crawl's public index (`index.commoncrawl.org`), then the Internet Archive CDX API (`web.archive.org`) as fallback | an ATS host and a single leading character, e.g. `boards.greenhouse.io/s` |
 | `discovery.ats_directory` | nothing | nothing |
 | crawl of a registered board | that ATS's public job pages | ordinary page requests |
 
@@ -79,8 +83,11 @@ be:
   up, and one that just disappeared may still show up as a source until its
   crawl fails.
 - **Some ATS hosts are invisible.** Only hosts with public job boards can be
-  enumerated. Companies that host jobs on their own site are found later, via
-  the user-URL, company-name, sitemap and optional search-engine providers.
+  enumerated. Workday and iCIMS put the employer in the site's subdomain, which
+  the fixed-host index scan cannot walk yet, so those boards are reached only
+  if you add them or a company-name/sitemap provider finds them. Companies that
+  host jobs on their own site are found later, via the user-URL, company-name,
+  sitemap and optional search-engine providers.
 - **A pass is deliberately bounded.** With hundreds of sources, each one is
   visited over several days rather than all at once; your per-source schedules
   decide the order.
@@ -98,10 +105,12 @@ advanced) and are validated when saved:
 | Key | Default | Meaning |
 |---|---|---|
 | `auto_discover_interval_hours` | `24` | How often the automatic pass runs |
-| `max_new_sources_per_run` | `50` | New sources registered per pass |
-| `max_crawl_sources_per_run` | `40` | Sources crawled per pass (oldest attempt first) |
-| `web_index_limit` | `60` | Tenant URLs requested per index query |
-| `web_index_lookback_days` | `540` | Ignore index captures older than this |
+| `max_new_sources_per_run` | `200` | New sources registered per pass |
+| `max_crawl_sources_per_run` | `60` | Sources crawled per pass (oldest attempt first) |
+| `cursor_step` | `12` | Index slices walked per pass |
+| `web_index_limit` | `200` | Rows requested per Common Crawl query |
+| `web_index_cdx_limit` | `10000` | Rows requested per CDX query (one whole bucket) |
+| `warmup_passes` | `5` | Passes run back-to-back on a cold start (`0`/`1` disables) |
 
 To stop a specific provider or source, disable it in Settings → Sources /
 Plugins; nothing else changes.

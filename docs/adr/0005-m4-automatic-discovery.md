@@ -25,8 +25,14 @@ on the user, who would have to add sources whenever the list missed an employer.
    Crawl cannot serve a slice — during evaluation its gateway consistently
    timed out on the largest ATS host (`boards.greenhouse.io`, both 1- and
    2-character prefixes) — the provider falls back to the **Internet Archive
-   CDX API** (measured 26–49 s per prefix query; the query therefore omits
-   the expensive `filter`/`from` clauses and carries a 60 s request timeout).
+   CDX API**. CDX is queried with a **high row limit** (`CDX_LIMIT`, 10,000,
+   configurable as `discovery.web_index_cdx_limit`): measured, `limit=10000`
+   answers in ~13 s and returns 10,001 rows for
+   `boards.greenhouse.io/a`, which reduce to 102 distinct tenants. The
+   original 60-row cap sampled a fraction of a percent of a bucket and was the
+   reason an early seed list came out undersized. The query omits the
+   expensive `filter`/`from` clauses and carries a 60 s request timeout; a
+   failed CDX call is retried once while the pass still has wall-clock budget.
    CDX is the scarce resource: a pass spends at most four fallback queries
    (`MAX_CDX_FALLBACKS`) no matter how many slices come back empty, and the
    unserved slices are revisited when the rotation cursor wraps. Two more
@@ -50,11 +56,16 @@ on the user, who would have to add sources whenever the list missed an employer.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine. As shipped, the
-   seed file is a **warm start**: ~1,000 verified boards of the largest
-   employers on the supported ATS hosts, regenerated via
-   `scripts/build_seed.py`, so a cold install is useful within minutes while
-   the web-index rotation fills in long-tail companies. The file remains a
-   bootstrap — discovery is the engine — and deleting it does not stop
+   seed file is a **warm start**: 1,069 boards on the four ATS hosts whose
+   boards live at `host/{tenant}` — each confirmed live by asking the board's
+   own public ATS API (HTTP 200, including live boards that currently list no
+   postings) and written **largest-first by open postings**, because the
+   cold-start warm-up registers at most `discovery.max_new_sources_per_run`
+   per pass, so ordering decides which employers are reached first. It is
+   regenerated via `scripts/build_seed.py` (`--refresh` re-verifies and
+   re-ranks without re-harvesting), so a cold install is useful within minutes
+   while the web-index rotation fills in long-tail companies. The file remains
+   a bootstrap — discovery is the engine — and deleting it does not stop
    discovery.
 4. **Bound every pass.** `discovery.max_new_sources_per_run` caps registration
    (registering a source is cheap; a dead board costs one failed crawl later),
@@ -79,10 +90,17 @@ on the user, who would have to add sources whenever the list missed an employer.
 - **Common Crawl index only**: rejected as the sole backend — its gateway
   returned 504s for the largest ATS host during evaluation, which would have
   made discovery for that host permanently blind. The CDX fallback covers it.
-- **Internet Archive CDX only**: rejected as the sole backend — its prefix
-  scans measure 26–49 s per query, at or beyond the request and plugin-call
-  budgets, and the gateway intermittently 504s under load. Common Crawl
-  answers the same slices in seconds.
+- **Internet Archive CDX only**: rejected as the sole backend — prefix scans
+  measure 26–49 s per query at a 60-row limit and the gateway intermittently
+  503s under load, while a 10,000-row query takes ~13 s but is still the slow
+  backend. Common Crawl answers the same slices in seconds.
+- **Domain queries for subdomain-based ATSs (Workday, iCIMS)**: deferred, not
+  rejected. The tenant is a subdomain there, so a `host/bucket` prefix query
+  cannot reach it. CDX `matchType=domain` has no offset (the answer is the
+  alphabetical head of the domain: ~54 s for `icims.com`, apex chrome first)
+  and `filter=urlkey…`/`filter=original…` narrowing returned 503/504 after
+  5–60 s. Common Crawl's domain match plus `page`/`pageSize` is the viable
+  path; it needs the tenant-key plumbing described in spec §6.2.2.
 - **Static seed list only**: rejected — it cannot track a changing market and
   shifts work back onto the user.
 
