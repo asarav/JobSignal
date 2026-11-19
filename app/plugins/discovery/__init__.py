@@ -4,11 +4,11 @@ Two kinds of provider feed the daily pass:
 
 * ``discovery.web_index`` — enumerates ATS tenants from a public web URL
   index, so discovery does not depend on a bundled list or on the user adding
-  sources.  Each run walks one slice of the tenant space.
-* ``discovery.ats_directory`` — a bundled seed list (~1,000 verified boards of
-  the largest employers on the supported ATS hosts) used as a warm start for
-  cold installs and as a test fixture. Regenerate via ``scripts/build_seed.py``.
-  on a cold start (and a demo/test fixture).  It is not the discovery engine.
+  sources.  Each run walks a slice of the tenant space.
+* ``discovery.ats_directory`` — a bundled seed list (1,000+ boards, each
+  confirmed live through its public ATS API and ordered largest-first) used as
+  a warm start for cold installs and as a test fixture.  Regenerate via
+  ``scripts/build_seed.py``.  It is not the discovery engine.
 
 Optional providers (search engines) stay behind their feature flag and are
 registered by their own module when enabled.
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.plugins.discovery.ats_directory import AtsDirectoryProvider
-from app.plugins.discovery.web_index import WebIndexProvider
+from app.plugins.discovery.web_index import CDX_LIMIT, WebIndexProvider
 
 if TYPE_CHECKING:
     from app.plugins.registry import PluginDeps, PluginRegistry
@@ -50,16 +50,19 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
         PluginManifest(
             id="discovery.web_index",
             kind="discovery",
-            version="1.1.0",
+            version="1.2.0",
             api_version="1",
             capabilities=frozenset({"discover"}),
             network_hosts=("index.commoncrawl.org", "web.archive.org"),
             description=(
-                "Enumerates ATS tenants from a public web URL index; walks one "
+                "Enumerates ATS tenants from a public web URL index; walks a "
                 "slice per run so coverage grows without seeds (M4)."
             ),
         ),
-        WebIndexProvider(limit=_positive_int(settings.get("web_index_limit"), 200)),
+        WebIndexProvider(
+            limit=_positive_int(settings.get("web_index_limit"), 200),
+            cdx_limit=_positive_int(settings.get("web_index_cdx_limit"), CDX_LIMIT),
+        ),
     )
 
     registry.add(

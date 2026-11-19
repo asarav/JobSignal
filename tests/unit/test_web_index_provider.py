@@ -73,6 +73,7 @@ def _row(url: str, status: str = "200") -> dict[str, str]:
 
 
 def _provider(**kwargs) -> WebIndexProvider:
+    kwargs.setdefault("cdx_retry_delay_s", 0.0)
     return WebIndexProvider(**kwargs)
 
 
@@ -312,3 +313,45 @@ async def test_cdx_fallbacks_are_capped_per_pass():
 
     cdx_calls = [u for u in http.urls if "web.archive.org" in u]
     assert len(cdx_calls) == 4  # MAX_CDX_FALLBACKS, not one per dead slice
+
+
+@pytest.mark.asyncio
+async def test_cdx_asks_for_a_whole_bucket_and_retries_once():
+    """The CDX fallback uses the measured high row limit, not a small sample."""
+
+    class _CdxFlaky(FakeHttpClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.urls: list[str] = []
+            self.cdx_attempts = 0
+
+        async def send(self, req: HttpRequest):
+            self.urls.append(req.url)
+            if "/collinfo" in req.url:
+                return Err(PortError(code="http.transport", message="down"))
+            self.cdx_attempts += 1
+            if self.cdx_attempts == 1:
+                return Err(PortError(code="http.gateway", message="temporarily offline"))
+            return Ok(
+                HttpResponse(
+                    status=200,
+                    url=req.url,
+                    headers={},
+                    body=json.dumps(
+                        [["original"], ["https://boards.greenhouse.io/acme"]]
+                    ).encode(),
+                    elapsed_ms=1,
+                )
+            )
+
+    http = _CdxFlaky()
+    provider = _provider()
+
+    sources = [
+        source async for source in provider.discover(DiscoveryQuery(), _ctx(http))
+    ]
+
+    assert [s.url for s in sources] == ["https://boards.greenhouse.io/acme"]
+    assert http.cdx_attempts == 2  # one 503, one retry
+    assert all("limit=10000" in url for url in http.urls if "web.archive.org" in url)
+

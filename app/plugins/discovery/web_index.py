@@ -7,7 +7,10 @@ yesterday's seed file.  No API key, no account, no user input.
 
 Common Crawl answers in seconds, but its gateway currently times out on the
 largest ATS hosts, so an unserved slice falls back to the Internet Archive's
-CDX API (the same kind of public index, slower: tens of seconds per query).
+CDX API (the same kind of public index, slower: seconds to tens of seconds
+per query).  Both backends are asked for a large block of rows per slice
+(``limit=10,000``) rather than a small sample: the gateway serves that in
+~13 s and one request then covers a whole leading-character bucket.
 
 One pass asks the index for several ``(ATS host, leading-character bucket)``
 pairs (``slices`` from the pass), so a daily run covers a meaningful stretch
@@ -76,13 +79,18 @@ SLICE_STAGGER_S = 1.0
 #: Rows requested per Common Crawl query (a fast, columnar index server).
 CC_LIMIT = 200
 
-#: Rows requested per CDX query (its gateway struggles beyond small limits).
-CDX_LIMIT = 60
+#: Rows requested per CDX query.  Measured against the Internet Archive
+#: gateway: ``limit=10000`` answers in ~13 s (23 s for 5,000) and returns a
+#: whole first-character bucket -- e.g. 10,001 rows for
+#: ``boards.greenhouse.io/a``, which reduce to 102 distinct tenants.  Small
+#: limits sample a fraction of a percent of a bucket and were why an earlier
+#: seed list came out undersized.
+CDX_LIMIT = 10000
 
-#: CDX fallback queries one pass may spend.  Each takes tens of seconds, so
-#: a run of empty-or-failed Common Crawl slices must not turn the pass into
-#: a serial CDX crawl; the unserved slices are simply skipped this pass and
-#: revisited when the rotation cursor wraps.
+#: CDX fallback queries one pass may spend.  Each takes seconds to tens of
+#: seconds even at the high row limit, so a run of empty-or-failed Common
+#: Crawl slices must not turn the pass into a serial CDX crawl; the unserved
+#: slices are simply skipped this pass and revisited when the cursor wraps.
 MAX_CDX_FALLBACKS = 4
 
 #: Wall-clock budget for the whole pass (the discovery call timeout is
@@ -116,7 +124,7 @@ class WebIndexProvider:
     """Enumerates ATS tenant boards from a public web URL index."""
 
     id = "discovery.web_index"
-    version = "1.1.0"
+    version = "1.2.0"
     capabilities = ProviderCapabilities(
         offline=False,
         network_hosts=("index.commoncrawl.org", "web.archive.org"),
@@ -129,14 +137,19 @@ class WebIndexProvider:
         endpoint: str = DEFAULT_INDEX_ENDPOINT,
         *,
         limit: int = 200,
+        cdx_limit: int = CDX_LIMIT,
         timeout_s: float = 45.0,
         cdx_timeout_s: float = 60.0,
+        cdx_retry_delay_s: float = 5.0,
     ) -> None:
         self._hosts = tuple(hosts) or DEFAULT_ATS_HOSTS
         self._endpoint = endpoint.rstrip("/")
         self._limit = max(1, limit)
+        self._cdx_limit = max(1, cdx_limit)
         self._timeout_s = timeout_s
         self._cdx_timeout_s = cdx_timeout_s
+        #: Pause before the one CDX retry; injectable so tests never sleep.
+        self._cdx_retry_delay_s = max(0.0, cdx_retry_delay_s)
         self._crawl_ids: list[str] | None = None
 
     @property
@@ -257,7 +270,7 @@ class WebIndexProvider:
                 rows = cc_rows  # empty, or None if CC also failed
             else:
                 shared["cdx_left"] -= 1  # type: ignore[operator]
-                cdx_rows = await self._cdx_rows(ctx, host, bucket)
+                cdx_rows = await self._cdx_rows(ctx, host, bucket, shared)
                 if cdx_rows is not None:
                     rows = cdx_rows
                     backend = "cdx"
@@ -300,7 +313,11 @@ class WebIndexProvider:
         return None
 
     async def _cdx_rows(
-        self, ctx: ExecutionContext, host: str, bucket: str
+        self,
+        ctx: ExecutionContext,
+        host: str,
+        bucket: str,
+        shared: dict[str, object],
     ) -> list[tuple[str, str, str]] | None:
         """Rows from the Internet Archive CDX API; ``None`` if unreachable.
 
@@ -313,27 +330,39 @@ class WebIndexProvider:
             ("matchType", "prefix"),
             ("fl", "original"),
             ("collapse", "urlkey"),
-            ("limit", str(CDX_LIMIT)),
+            ("limit", str(self._cdx_limit)),
             ("output", "json"),
         ]
         url = f"{CDX_ENDPOINT}?{urlencode(params)}"
-        response = await ctx.http.send(
-            HttpRequest(method="GET", url=url, timeout_s=self._cdx_timeout_s)
-        )
-        if not isinstance(response, Ok):
+        # The gateway answers 503/504 under bursts.  One retry covers that,
+        # but only while the pass still has budget: a late fallback must not
+        # sleep past the pass deadline.
+        for attempt in range(2):
+            response = await ctx.http.send(
+                HttpRequest(method="GET", url=url, timeout_s=self._cdx_timeout_s)
+            )
+            if isinstance(response, Ok):
+                rows = self._cdx_parse(response.value.body, host)
+                if rows is None:
+                    ctx.logger.warning(
+                        "discovery.web_index.cdx_unparseable", host=host, bucket=bucket
+                    )
+                return rows
             ctx.logger.warning(
                 "discovery.web_index.cdx_failed",
                 host=host,
                 bucket=bucket,
                 error=response.error.message,
+                attempt=attempt + 1,
             )
-            return None
-        rows = self._cdx_parse(response.value.body, host)
-        if rows is None:
-            ctx.logger.warning(
-                "discovery.web_index.cdx_unparseable", host=host, bucket=bucket
-            )
-        return rows
+            if attempt == 0:
+                if (
+                    time.monotonic() + self._cdx_retry_delay_s
+                    >= shared["deadline"]  # type: ignore[operator]
+                ):
+                    break
+                await asyncio.sleep(self._cdx_retry_delay_s)
+        return None
 
     def _cdx_parse(
         self, body: bytes, host: str
