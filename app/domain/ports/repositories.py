@@ -109,7 +109,8 @@ class JobRepository(Protocol):
     async def count(self) -> int: ...
 
     async def mark_not_seen(
-        self, source_id: str, seen_ids: Sequence[str], cutoff: datetime
+        self, source_id: str, seen_ids: Sequence[str], cutoff: datetime,
+        threshold: int = 2, min_spacing_hours: int = 24,
     ) -> int: ...
 
 

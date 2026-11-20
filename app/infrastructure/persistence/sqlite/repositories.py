@@ -510,15 +510,55 @@ class SqliteJobRepository:
         row = await cur.fetchone()
         return int(row[0]) if row else 0
 
-    async def mark_not_seen(self, source_id, seen_ids, cutoff):
+    async def mark_not_seen(self, source_id, seen_ids, cutoff, threshold=2, min_spacing_hours=24):
+        from datetime import timedelta
+
         ts = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not seen_ids:
-            cur = await self._conn.execute("UPDATE jobs SET posting_status='removed', last_seen_at=? WHERE source_id=?", (ts, source_id))
-            return cur.rowcount or 0
-        placeholders = ",".join("?" for _ in seen_ids)
-        params = [ts, source_id, *seen_ids]
-        cur = await self._conn.execute(f"UPDATE jobs SET posting_status='removed', last_seen_at=? WHERE source_id=? AND id NOT IN ({placeholders})", tuple(params))
-        return cur.rowcount or 0
+        # All jobs for this source.
+        cur = await self._conn.execute(
+            "SELECT id FROM jobs WHERE source_id = ?", (source_id,)
+        )
+        all_ids = [r[0] for r in await cur.fetchall()]
+        missing = [jid for jid in all_ids if jid not in (seen_ids or [])]
+        removed_count = 0
+        for jid in missing:
+            # record a not_seen observation
+            await self._conn.execute(
+                "INSERT INTO job_observations(id, job_id, source_id, observed_at, posting_status, details_json) VALUES (?,?,?,?,?,?)",
+                (str(__import__("uuid").uuid4()), jid, source_id, ts, "not_seen", "{}"),
+            )
+            # count consecutive trailing not_seen observations
+            cur2 = await self._conn.execute(
+                "SELECT observed_at, posting_status FROM job_observations WHERE job_id = ? ORDER BY observed_at DESC",
+                (jid,),
+            )
+            rows = await cur2.fetchall()
+            streak = 0
+            first_ts = None
+            last_ts = None
+            for r in rows:
+                if r[1] == "not_seen":
+                    streak += 1
+                    if first_ts is None:
+                        first_ts = r[0]
+                    last_ts = r[0]
+                else:
+                    break
+            if streak >= threshold and first_ts and last_ts:
+                # spacing check
+                try:
+                    t_first = __import__("datetime").datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                    t_last = __import__("datetime").datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    if abs((t_first - t_last).total_seconds()) >= min_spacing_hours * 3600:
+                        await self._conn.execute(
+                            "UPDATE jobs SET posting_status='removed', last_seen_at=? WHERE id=?",
+                            (ts, jid),
+                        )
+                        removed_count += 1
+                except ValueError:
+                    pass
+        await self._conn.commit()
+        return removed_count
 
 
 class SqliteObservationRepository:

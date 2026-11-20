@@ -151,6 +151,11 @@ async def test_missing_job_is_marked_removed():
         }
     )
     empty_policy = PolicyHttpClient(transport=empty_http)
+    # Two consecutive successful full listings, >= 24 h apart, are required
+    # before a missing posting is marked removed (N=2 not-seen rule).
+    clock.advance(25 * 3600)
+    await run_crawl(source=source, connector=connector, uow_factory=factory, http=empty_policy, clock_now=clock.now)
+    clock.advance(25 * 3600)
     await run_crawl(source=source, connector=connector, uow_factory=factory, http=empty_policy, clock_now=clock.now)
 
     async with factory() as uow:

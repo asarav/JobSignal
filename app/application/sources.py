@@ -243,14 +243,23 @@ async def run_crawl(
             )
         return stats
 
-    # Postings that the source no longer lists are marked removed.
-    async with uow_factory() as uow:
-        removed = await uow.jobs.mark_not_seen(source.id, seen_ids, clock_now())
-        stats["removed"] = removed
-        await uow.crawl_runs.finish(
-            run_id, status="completed", finished_at=clock_now(), stats=stats
-        )
-        await uow.commit()
+    # Postings that the source no longer lists are marked removed, but only
+    # when the listing was fully successful (partial/failed listings never
+    # create not_seen observations).
+    if int(str(stats.get("errors", 0) or 0)) == 0:
+        async with uow_factory() as uow:
+            removed = await uow.jobs.mark_not_seen(source.id, seen_ids, clock_now())
+            stats["removed"] = removed
+            await uow.crawl_runs.finish(
+                run_id, status="completed", finished_at=clock_now(), stats=stats
+            )
+            await uow.commit()
+    else:
+        async with uow_factory() as uow:
+            await uow.crawl_runs.finish(
+                run_id, status="completed_with_errors", finished_at=clock_now(), stats=stats
+            )
+            await uow.commit()
     if events is not None:
         events.publish(
             "crawl.completed",

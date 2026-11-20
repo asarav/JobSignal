@@ -219,11 +219,41 @@ class InMemoryJobRepository:
     async def count(self) -> int:
         return len(self._store)
 
-    async def mark_not_seen(self, source_id, seen_ids, cutoff):
+    async def mark_not_seen(self, source_id, seen_ids, cutoff, threshold=2, min_spacing_hours=24):
+        from datetime import datetime, timedelta
+
+        ts = cutoff.isoformat() if hasattr(cutoff, "isoformat") else str(cutoff)
         changed = 0
         for jid, j in list(self._store.items()):
-            if j.get("source_id") == source_id and jid not in seen_ids:
+            if j.get("source_id") != source_id:
+                continue
+            if jid in (seen_ids or []):
+                # reset streak
+                j["_not_seen_streak"] = 0
+                continue
+            # increment streak
+            prev = j.get("_not_seen_last_at")
+            streak = int(j.get("_not_seen_streak", 0)) + 1
+            j["_not_seen_streak"] = streak
+            j["_not_seen_last_at"] = ts
+            # spacing check: need first and last at least min_spacing_hours apart
+            first = j.get("_not_seen_first_at")
+            if first is None:
+                j["_not_seen_first_at"] = ts
+                first = ts
+            # parse
+            try:
+                t_first = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+                t_now = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            except ValueError:
+                t_first = None
+                t_now = None
+            spaced = False
+            if t_first is not None and t_now is not None:
+                spaced = abs((t_now - t_first).total_seconds()) >= min_spacing_hours * 3600
+            if streak >= threshold and (streak == 1 or spaced):
                 j["posting_status"] = "removed"
+                j["last_seen_at"] = ts
                 changed += 1
         return changed
 
