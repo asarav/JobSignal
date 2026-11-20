@@ -4,6 +4,7 @@ import { DiagnosticsRoute } from "../features/diagnostics/DiagnosticsRoute";
 import { DiscoverRoute } from "../features/discover/DiscoverRoute";
 import { HomeRoute } from "../features/home/HomeRoute";
 import { PlaceholderRoute } from "../features/placeholder/PlaceholderRoute";
+import { ResumeRoute } from "../features/resume/ResumeRoute";
 import { SearchRoute } from "../features/search/SearchRoute";
 import { SettingsRoute } from "../features/settings/SettingsRoute";
 
@@ -42,7 +43,7 @@ export function AppRoutes() {
         element={<PlaceholderRoute screen="postingIntelligence" />}
       />
       <Route path="/keywords" element={<PlaceholderRoute screen="keywords" />} />
-      <Route path="/resume" element={<PlaceholderRoute screen="resume" />} />
+      <Route path="/resume" element={<ResumeRoute />} />
       <Route path="/seen" element={<PlaceholderRoute screen="seen" />} />
       <Route path="/jobs/:id" element={<PlaceholderRoute screen="job" />} />
       <Route path="/settings" element={<SettingsRoute />} />

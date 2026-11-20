@@ -11,6 +11,22 @@ import type {
   DiscoveryRunRequest,
   DiscoveryRunResponse,
   Envelope,
+  MatchingRunRequest,
+  MatchingRunResponse,
+  MatchingGetResultsRequest,
+  MatchingGetResultsResponse,
+  MatchingUpdateWeightsRequest,
+  MatchingUpdateWeightsResponse,
+  ResumeImportRequest,
+  ResumeImportResponse,
+  ResumeListVersionsRequest,
+  ResumeListVersionsResponse,
+  ResumeGetProfileRequest,
+  ResumeGetProfileResponse,
+  ResumeSetActiveRequest,
+  ResumeSetActiveResponse,
+  ResumeUpdateOverridesRequest,
+  ResumeUpdateOverridesResponse,
   JobsListRequest,
   JobsListResponse,
   JobsSearchRequest,
@@ -82,12 +98,23 @@ export type WorkerMethod =
   | "sources.delete"
   | "jobs.list"
   | "jobs.search"
+  | "jobs.merge"
+  | "jobs.unmerge"
+  | "jobs.list_duplicates"
   | "crawl_runs.list"
   | "search_profiles.list"
   | "search_profiles.save"
   | "search_profiles.delete"
   | "discovery.run"
-  | "discovery.auto_discover";
+  | "discovery.auto_discover"
+  | "resume.import"
+  | "resume.list_versions"
+  | "resume.get_profile"
+  | "resume.set_active"
+  | "resume.update_overrides"
+  | "matching.run"
+  | "matching.get_results"
+  | "matching.update_weights";
 
 export class WorkerError extends Error {
   readonly code: string;
@@ -227,6 +254,31 @@ export class WorkerClient {
 
   autoDiscover(request: DiscoveryAutoDiscoverRequest = {}): Promise<DiscoveryAutoDiscoverResponse> {
     return this.request("discovery.auto_discover", { ...request });
+  }
+
+  importResume(request: ResumeImportRequest): Promise<ResumeImportResponse> {
+    return this.request("resume.import", { ...request });
+  }
+  listResumeVersions(request: ResumeListVersionsRequest = {}): Promise<ResumeListVersionsResponse> {
+    return this.request("resume.list_versions", { ...request });
+  }
+  getResumeProfile(request: ResumeGetProfileRequest = {}): Promise<ResumeGetProfileResponse> {
+    return this.request("resume.get_profile", { ...request });
+  }
+  setResumeActive(request: ResumeSetActiveRequest): Promise<ResumeSetActiveResponse> {
+    return this.request("resume.set_active", { ...request });
+  }
+  updateResumeOverrides(request: ResumeUpdateOverridesRequest): Promise<ResumeUpdateOverridesResponse> {
+    return this.request("resume.update_overrides", { ...request });
+  }
+  runMatching(request: MatchingRunRequest = {}): Promise<MatchingRunResponse> {
+    return this.request("matching.run", { ...request });
+  }
+  getMatchingResults(request: MatchingGetResultsRequest = {}): Promise<MatchingGetResultsResponse> {
+    return this.request("matching.get_results", { ...request });
+  }
+  updateMatchingWeights(request: MatchingUpdateWeightsRequest): Promise<MatchingUpdateWeightsResponse> {
+    return this.request("matching.update_weights", { ...request });
   }
 
   enablePlugin(request: PluginsEnableRequest): Promise<{ ok: boolean }> {
