@@ -8,7 +8,7 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 4 — Automatic discovery and daily scheduling.**
+> **Current milestone: 5 — Resume and matching (in progress).**
 > The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
 > from Milestone 0; sources, ATS connectors and crawls from Milestone 1;
 > the universal extraction pipeline from Milestone 2; search profiles, hard
