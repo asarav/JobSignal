@@ -1,0 +1,40 @@
+{
+  "version": "taxonomy.v1",
+  "skills": [
+    {"id": "python", "canonical": "Python", "category": "language", "aliases": ["py"]},
+    {"id": "javascript", "canonical": "JavaScript", "category": "language", "aliases": ["js", "ecmascript"]},
+    {"id": "typescript", "canonical": "TypeScript", "category": "language", "aliases": ["ts"]},
+    {"id": "java", "canonical": "Java", "category": "language", "aliases": []},
+    {"id": "go", "canonical": "Go", "category": "language", "aliases": ["golang"]},
+    {"id": "rust", "canonical": "Rust", "category": "language", "aliases": []},
+    {"id": "csharp", "canonical": "C#", "category": "language", "aliases": ["c#", ".net", "dotnet"]},
+    {"id": "cpp", "canonical": "C++", "category": "language", "aliases": ["c++"]},
+    {"id": "sql", "canonical": "SQL", "category": "language", "aliases": []},
+    {"id": "react", "canonical": "React", "category": "framework", "aliases": ["reactjs", "react.js"]},
+    {"id": "node", "canonical": "Node.js", "category": "framework", "aliases": ["nodejs", "node.js"]},
+    {"id": "django", "canonical": "Django", "category": "framework", "aliases": []},
+    {"id": "flask", "canonical": "Flask", "category": "framework", "aliases": []},
+    {"id": "fastapi", "canonical": "FastAPI", "category": "framework", "aliases": []},
+    {"id": "spring", "canonical": "Spring", "category": "framework", "aliases": ["spring boot"]},
+    {"id": "aws", "canonical": "AWS", "category": "cloud", "aliases": ["amazon web services"]},
+    {"id": "gcp", "canonical": "GCP", "category": "cloud", "aliases": ["google cloud"]},
+    {"id": "azure", "canonical": "Azure", "category": "cloud", "aliases": ["microsoft azure"]},
+    {"id": "docker", "canonical": "Docker", "category": "tool", "aliases": ["containers"]},
+    {"id": "kubernetes", "canonical": "Kubernetes", "category": "tool", "aliases": ["k8s"]},
+    {"id": "postgres", "canonical": "PostgreSQL", "category": "database", "aliases": ["postgresql", "postgres"]},
+    {"id": "mysql", "canonical": "MySQL", "category": "database", "aliases": []},
+    {"id": "mongodb", "canonical": "MongoDB", "category": "database", "aliases": ["mongo"]},
+    {"id": "redis", "canonical": "Redis", "category": "database", "aliases": []},
+    {"id": "git", "canonical": "Git", "category": "tool", "aliases": []},
+    {"id": "linux", "canonical": "Linux", "category": "tool", "aliases": []},
+    {"id": "machine_learning", "canonical": "Machine Learning", "category": "practice", "aliases": ["ml", "machine learning"]},
+    {"id": "data_engineering", "canonical": "Data Engineering", "category": "practice", "aliases": []}
+  ],
+  "implications": [
+    {"from": "django", "to": "python", "strength": 0.9},
+    {"from": "fastapi", "to": "python", "strength": 0.9},
+    {"from": "flask", "to": "python", "strength": 0.9},
+    {"from": "react", "to": "javascript", "strength": 0.8},
+    {"from": "node", "to": "javascript", "strength": 0.9}
+  ]
+}

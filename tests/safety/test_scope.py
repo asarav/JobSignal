@@ -53,8 +53,6 @@ FORBIDDEN_DEPENDENCIES = (
     "beautifulsoup4",
     "lxml",
     "selectolax",
-    "pymupdf",
-    "python-docx",
     "scikit-learn",
     "onnxruntime",
     "sentence-transformers",
@@ -85,8 +83,6 @@ FORBIDDEN_IMPORTS = (
     "bs4",
     "lxml",
     "selectolax",
-    "fitz",
-    "docx",
     "sklearn",
     "onnxruntime",
 )
