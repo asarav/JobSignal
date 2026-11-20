@@ -40,6 +40,8 @@ class MatchingUseCase:
             if version_id:
                 sks = await uow.resumes.get_skills(str(version_id))
                 skills = [str(s["keyword_id"]) for s in sks]
+                overrides = await uow.resumes.get_overrides(profile_id)
+                years = overrides.get("years_experience_total")
             # candidate profile as simple namespace
             from types import SimpleNamespace
             cand = SimpleNamespace(skills=skills, years_experience_total=years)

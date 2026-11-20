@@ -11,7 +11,7 @@ from typing import Any
 from app.application.container import Container
 from app.domain.models.resume import ParsedResume, ResumeFileRef
 from app.domain.services.keywords import KeywordExtractor
-from app.domain.services.sectioner import section_text
+from app.domain.services.sectioner import extract_experience_entries, section_text
 from app.plugins.resume.docx import DocxResumeParser
 from app.plugins.resume.pdf import PdfResumeParser
 from app.plugins.resume.txt import TxtResumeParser
@@ -41,7 +41,11 @@ class ResumeUseCase:
     async def import_resume(self, file_path: str, label: str = "Imported") -> dict[str, Any]:
         path = Path(file_path)
         mime = _MIME_BY_EXT.get(path.suffix.lower(), "text/plain")
-        raw = path.read_bytes()
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            from app.domain.models.common import PortError
+            raise PortError(code="resume.read_failed", message=str(exc), retryable=False) from exc
         sha = hashlib.sha256(raw).hexdigest()
         # content-addressed copy
         dest = self._resumes_dir / sha[:2] / sha
@@ -51,12 +55,14 @@ class ResumeUseCase:
 
         parser = self._parser_for(mime)
         if parser is None:
-            raise ValueError(f"no parser for {mime}")
+            from app.domain.models.common import PortError
+            raise PortError(code="resume.no_parser", message=f"no parser for {mime}", retryable=False)
         ref = ResumeFileRef(path=str(dest), mime_type=mime, original_name=path.name, sha256=sha)
         result = await parser.parse(ref)
         from app.domain.models.common import Ok
         if not isinstance(result, Ok):
-            raise ValueError(str(result.error.message))
+            from app.domain.models.common import PortError
+            raise PortError(code=result.error.code, message=result.error.message, retryable=False)
         parsed: ParsedResume = result.value
 
         # create profile if none exists (reuse a default profile)
@@ -73,12 +79,18 @@ class ResumeUseCase:
             # create version
             version_id = f"rv_{uuid.uuid4().hex[:12]}"
             sections = section_text(parsed.text)
-            parsed_json = json.dumps({"text": parsed.text, "sections": sections, "parser_id": parsed.parser_id})
+            entries = extract_experience_entries(sections.get("experience", ""))
+            # naive years: count distinct start years
+            years = None
+            if entries:
+                years = float(len(entries))
+            parsed_json = json.dumps({"text": parsed.text, "sections": sections, "parser_id": parsed.parser_id, "experience": entries})
             await uow.resumes.add_resume_version(
                 version_id, profile_id, file_id, label, parsed.parser_id, parsed.parser_version,
                 hashlib.sha256(parsed.text.encode()).hexdigest(), parsed_json, is_active=True,
             )
             await uow.resumes.save_skills(version_id, [(s, "explicit", 0.8) for s in skills])
+            await uow.resumes.update_overrides(profile_id, {"years_experience_total": years})
             await uow.resumes.set_active(profile_id, version_id)
             await uow.commit()
 
