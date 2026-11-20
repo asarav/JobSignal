@@ -44,7 +44,7 @@ database, so the schedule and the covered ground both survive.
 
 ## Sources, not seeds
 
-`discovery.ats_directory` ships a small offline seed list: 1,069 boards on the
+`discovery.ats_directory` ships a small offline seed list: 1,460 boards on the
 four ATS hosts whose boards live at `host/{tenant}`, each confirmed live
 through the board's own public ATS API. It exists so a brand new install has
 something to crawl immediately (and so tests do not need the network). It is
@@ -82,12 +82,13 @@ be:
 - **The index lags.** A company that appears today may take weeks to be picked
   up, and one that just disappeared may still show up as a source until its
   crawl fails.
-- **Some ATS hosts are invisible.** Only hosts with public job boards can be
-  enumerated. Workday and iCIMS put the employer in the site's subdomain, which
-  the fixed-host index scan cannot walk yet, so those boards are reached only
-  if you add them or a company-name/sitemap provider finds them. Companies that
-  host jobs on their own site are found later, via the user-URL, company-name,
-  sitemap and optional search-engine providers.
+- **The daily rotation cannot walk every host.** It enumerates fixed-host ATSs
+  (Greenhouse, Lever, Ashby, SmartRecruiters). Workday and iCIMS put the
+  employer in a subdomain, which the rotation does not page through yet. Many of
+  those boards are in the bundled warm start and are crawled immediately, but a
+  *new* Workday or iCIMS tenant appears there only when the seed file is
+  regenerated. Companies that host jobs on their own site are found later, via
+  the user-URL, company-name, sitemap and optional search-engine providers.
 - **A pass is deliberately bounded.** With hundreds of sources, each one is
   visited over several days rather than all at once; your per-source schedules
   decide the order.

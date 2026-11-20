@@ -254,6 +254,7 @@ class AutoDiscoverUseCase:
                     source.url,
                     connector_id=connector_id,
                     interval_s=self._default_interval_s(),
+                    tenant_key=source.tenant_key,
                 )
             except Exception as exc:  # noqa: BLE001 - a bad URL must not abort the run
                 self._container.logger.warning(

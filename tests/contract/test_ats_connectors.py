@@ -129,6 +129,19 @@ async def test_workday_lists_and_fetches_postings():
     assert result.value.body_text == "<p>Own the models</p>"
 
 
+def test_workday_board_url_drops_the_locale_segment():
+    """The locale is not part of the tenant, in either case."""
+    from app.plugins.ats.workday import _board_from_url
+
+    for locale in ("en-US", "en-us", "fr-CA"):
+        host, tenant, site = _board_from_url(
+            f"https://acme.wd5.myworkdayjobs.com/{locale}/AcmeCareers"
+        )
+        assert host == "acme.wd5.myworkdayjobs.com"
+        assert tenant == "AcmeCareers"
+        assert site == "AcmeCareers"
+
+
 @pytest.mark.asyncio
 async def test_icims_lists_postings_from_the_search_page():
     search_url = "https://careers.acme.icims.com/jobs/search?search=&limit=100"
@@ -159,6 +172,46 @@ async def test_icims_lists_postings_from_the_search_page():
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert len(refs) == 2
     assert refs[0].url == "https://careers.acme.icims.com/job/12345/Software-Engineer"
+
+
+@pytest.mark.asyncio
+async def test_icims_lists_postings_from_an_iframe_portal():
+    """Current portals render an outer shell; the list lives in the iframe."""
+    shell_url = "https://careers-acme.icims.com/jobs/search?search=&limit=100&in_iframe=1"
+    iframe_url = "https://careers-acme.icims.com/jobs/search?ss=1&in_iframe=1"
+    shell = '<html><body><span id="icims_iframe_span"></span></body></html>'
+    iframe = """
+    <html><body>
+      <a href="/jobs/search?pr=1&amp;in_iframe=1">Next</a>
+      <a href="/jobs/intro?in_iframe=1">Intro</a>
+      <a href="/jobs/login?loginOnly=1&amp;in_iframe=1">Login</a>
+      <a href="/jobs/12345/software-engineer/job?in_iframe=1">Software Engineer</a>
+      <a href="/jobs/12346/data-engineer/job?in_iframe=1">Data Engineer</a>
+    </body></html>
+    """
+    http = FakeHttpClient(
+        {
+            shell_url: HttpResponse(
+                status=200, url=shell_url, headers={"content-type": "text/html"},
+                body=shell.encode(), elapsed_ms=5,
+            ),
+            iframe_url: HttpResponse(
+                status=200, url=iframe_url, headers={"content-type": "text/html"},
+                body=iframe.encode(), elapsed_ms=5,
+            ),
+        }
+    )
+    source = SourceConfig(
+        id="s1", url="https://careers-acme.icims.com", kind="ats",
+        connector_id="ats.icims",
+    )
+
+    refs = [ref async for ref in await IcmsConnector().list_jobs(source, _ctx(http))]
+
+    assert [ref.url for ref in refs] == [
+        "https://careers-acme.icims.com/jobs/12345/software-engineer/job?in_iframe=1",
+        "https://careers-acme.icims.com/jobs/12346/data-engineer/job?in_iframe=1",
+    ]
 
 
 @pytest.mark.asyncio

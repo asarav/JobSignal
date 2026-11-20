@@ -794,17 +794,17 @@ Coverage limits that MUST be stated in the UI and docs: the index lags reality (
 
 #### 6.2.2 Hosts whose tenant is a subdomain (Workday, iCIMS)
 
-The M2 connectors already read Workday (`{tenant}.wd{N}.myworkdayjobs.com/{locale}/{site}`) and iCIMS (`{tenant}.icims.com`) boards, but discovery cannot enumerate them with the `host/bucket` prefix query the other hosts use: the variable part of the URL comes *before* the fixed host, so a prefix scan of `icims.com/a` matches the apex only.
+The M2 connectors read Workday (`{tenant}.wd{N}.myworkdayjobs.com/{locale}/{site}`) and iCIMS (`{tenant}.icims.com`) boards. The live index provider still enumerates only fixed-host ATSs: the variable part of these URLs comes *before* the fixed host, so the `host/bucket` prefix query cannot reach it. The **seed bootstrap** covers the gap, and the plumbing it needed is now in place.
 
-Measured against the Internet Archive CDX API: `matchType=domain` answers, but it has no offset parameter, so the first `limit` rows are the alphabetical head of the whole domain (~54 s for `icims.com`, apex and `www` chrome first); narrowing it with `filter=urlkey:^com,icims,a` or `filter=original:^https?://a...` returns 503/504 after 5–60 s. Discovery therefore keeps the prefix path and does not claim to cover these hosts yet.
+How `scripts/build_seed.py` reaches those tenants:
 
-Expanding to them needs a different slice shape, not a bigger limit:
+1. Query by domain. `matchType=domain` sorts the whole domain; CDX ignores `offset` but supports `showResumeKey=true`, and the resumption key walks the domain in 10,000-row chunks (measured: Workday chunks answer in 30–50 s). A negative `filter=original` drops what would otherwise fill the first chunks: one Workday tenant can own tens of thousands of `/assets/…` URLs, and iCIMS' own `www` marketing site dominates the alphabetical head. Positive `filter=urlkey:…` / `filter=original:^https?://…` narrowing is not used; it returned 503/504 under load.
+2. Derive the board URL and tenant key per host. iCIMS: the subdomain is the tenant and the board root is enough. Workday: the subdomain is the tenant, the host carries the `wd{N}` shard, and CxS needs both the tenant and the `{locale}/{site}` path, so the board URL is stored together with its `tenant_key`.
+3. Carry the tenant key through discovery. `DiscoveredSource.tenant_key` → `SourceRegistry.add(tenant_key=…)` → `SourceConfig.ats_tenant_key`, which `ats.workday` already prefers over parsing the URL. The seed rows carry `tenant_key` where the URL alone is ambiguous.
 
-1. Query by domain. Common Crawl supports `matchType=domain` with `page`/`pageSize`, so the urlkey-sorted subdomain space can be walked page by page; CDX has no offset and is unsuitable for this.
-2. Derive the board URL and tenant key per host. iCIMS: the subdomain is the tenant and the board root is enough. Workday: the subdomain is the tenant, the host carries the `wd{N}` shard, and the CxS API needs both `tenant` and the `{locale}/{site}` path, so the board root must be stored together with `ats_tenant_key`.
-3. Carry the tenant key from discovery into `SourceConfig.ats_tenant_key`. The column and the connector support already exist; the discovery → registration path does not set it yet.
+Verification is per connector and uses the same public surface the connector crawls: Workday's CxS `POST …/jobs` (its `total`), and iCIMS' `jobs/search?ss=1&in_iframe=1` page, counting posting links and rejecting tenant portals that redirect to `login.icims.com`. A live board with zero postings stays; a tenant whose portal is behind a login does not.
 
-Until then, employers on those two ATSs are reached only if the user adds the board or a company-name/sitemap provider finds it.
+This is bootstrap coverage, not live discovery: the seed file is a snapshot, and §6.2's rule that discovery must not depend on it still holds. Enumerating these hosts in the daily rotation (Common Crawl's domain paging, which this network cannot currently reach, or CDX resumption inside `discovery.web_index`) remains open (§21).
 
 ### 6.3 Source classification
 
@@ -2386,7 +2386,7 @@ Discovery interfaces, `SourceRegistry`, classifier, `PolicyHttpClient` (robots, 
 **Exit:** connector contract suites green; incremental crawl skips unchanged jobs; failing source isolated; not-seen/removal logic tested.
 
 ### Milestone 2 — Universal extraction
-SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. The connectors landed in M2; discovery's host expansion for the Workday/iCIMS subdomain space (where most S&P 500 employers live) is specified in §6.2.2 and remains open.
+SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. The connectors landed in M2; the tenant-key path now carries discovered Workday/iCIMS boards into `SourceConfig.ats_tenant_key`, and the seed bootstrap covers those subdomain-hosted boards (§6.2.2). Live discovery of the subdomain space (where most S&P 500 employers live) remains open.
 **Exit:** unknown-ATS fixture sites yield complete or partial records; every strategy contract-tested; rendered DOM obeys robots/challenge rules.
 
 ### Milestone 3 — Search and job history

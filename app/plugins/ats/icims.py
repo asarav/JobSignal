@@ -8,7 +8,9 @@ field detection.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
+from urllib.parse import urljoin, urlsplit
 
 from app.domain.models.common import Ok, PortError, Result
 from app.domain.models.context import ExecutionContext
@@ -17,8 +19,10 @@ from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
 from app.infrastructure.html import parsing
 
-# Link shapes that point at a posting on an iCIMS board.
-JOB_PATH_MARKERS = ("/job/", "/jobs/")
+#: Posting paths look like ``/job/12345/Title`` (older portals) or
+#: ``/jobs/12345/Title/job`` (the current portal).  Everything else under
+#: ``/jobs/`` (``search``, ``intro``, ``login``) is navigation.
+POSTING_PATH_RE = re.compile(r"^/jobs?/\d+(?:/|$)", re.IGNORECASE)
 
 
 class IcmsConnector:
@@ -53,7 +57,9 @@ class IcmsConnector:
 
         return gen()
 
-    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext) -> Result[RawJob, PortError]:
+    async def fetch_job(
+        self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext
+    ) -> Result[RawJob, PortError]:
         response = await ctx.http.send(HttpRequest(method="GET", url=ref.url))
         if not isinstance(response, Ok):
             return response
@@ -62,26 +68,35 @@ class IcmsConnector:
 
 
 def _search_urls(source: SourceConfig) -> list[str]:
-    """Candidate search URLs for an iCIMS board."""
+    """Candidate search URLs for an iCIMS board.
+
+    Current iCIMS portals wrap the postings in an iframe: the plain search URL
+    is a shell with no links, and ``in_iframe=1`` returns the rendered list.
+    Older portals render the list directly, so both shapes are tried.
+    """
     base = source.url.rstrip("/")
     if base.endswith("/jobs"):
         base = base[: -len("/jobs")]
-    return [f"{base}/jobs/search?search=&limit=100", f"{base}/jobs?limit=100"]
+    return [
+        f"{base}/jobs/search?search=&limit=100&in_iframe=1",
+        f"{base}/jobs/search?ss=1&in_iframe=1",
+        f"{base}/jobs/search?search=&limit=100",
+        f"{base}/jobs?limit=100",
+    ]
 
 
 def _job_links(html: str, page_url: str) -> list[str]:
     """Absolute URLs of the postings linked from a search page."""
-    from urllib.parse import urljoin
-
     urls: list[str] = []
     seen: set[str] = set()
     for link in parsing.links(html):
         href = link.href.strip()
         if not href or href.startswith(("#", "javascript:", "mailto:")):
             continue
-        if not any(marker in href.lower() for marker in JOB_PATH_MARKERS):
-            continue
         absolute = urljoin(page_url, href)
+        path = urlsplit(absolute).path
+        if not POSTING_PATH_RE.match(path):
+            continue
         if absolute in seen:
             continue
         seen.add(absolute)

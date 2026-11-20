@@ -56,7 +56,7 @@ on the user, who would have to add sources whenever the list missed an employer.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine. As shipped, the
-   seed file is a **warm start**: 1,069 boards on the four ATS hosts whose
+   seed file is a **warm start**: 1,460 boards on the four ATS hosts whose
    boards live at `host/{tenant}` — each confirmed live by asking the board's
    own public ATS API (HTTP 200, including live boards that currently list no
    postings) and written **largest-first by open postings**, because the
@@ -94,13 +94,17 @@ on the user, who would have to add sources whenever the list missed an employer.
   measure 26–49 s per query at a 60-row limit and the gateway intermittently
   503s under load, while a 10,000-row query takes ~13 s but is still the slow
   backend. Common Crawl answers the same slices in seconds.
-- **Domain queries for subdomain-based ATSs (Workday, iCIMS)**: deferred, not
-  rejected. The tenant is a subdomain there, so a `host/bucket` prefix query
-  cannot reach it. CDX `matchType=domain` has no offset (the answer is the
-  alphabetical head of the domain: ~54 s for `icims.com`, apex chrome first)
-  and `filter=urlkey…`/`filter=original…` narrowing returned 503/504 after
-  5–60 s. Common Crawl's domain match plus `page`/`pageSize` is the viable
-  path; it needs the tenant-key plumbing described in spec §6.2.2.
+- **Domain queries for subdomain-based ATSs (Workday, iCIMS)**: adopted for the
+  *seed bootstrap*, deferred for live discovery. The tenant is a subdomain
+  there, so a `host/bucket` prefix query cannot reach it. CDX `matchType=domain`
+  has no offset — the answer starts at the alphabetical head of the domain —
+  but its `showResumeKey` walks the domain page by page, and a negative
+  `filter=original` clause removes what otherwise fills the first chunks
+  (Workday tenants own tens of thousands of `/assets/…` URLs; iCIMS' `www`
+  marketing site dominates its head). Positive `filter=urlkey…`/`filter=
+  original:^https?://…` narrowing returned 503/504 under load. The seed builder
+  uses this path with checkpointed chunks; `discovery.web_index` still uses the
+  prefix rotation, so new subdomain tenants wait for a seed refresh.
 - **Static seed list only**: rejected — it cannot track a changing market and
   shifts work back onto the user.
 
@@ -116,5 +120,9 @@ on the user, who would have to add sources whenever the list missed an employer.
 - Source lists grow over time and include dead boards. The due-based crawl and
   the two budgets keep a pass bounded; dead boards are visible as failed crawl
   runs rather than being silently dropped.
+- The seed file now also carries Workday and iCIMS boards. Workday rows persist
+  their `tenant_key`, because the CxS endpoint needs the tenant and the board
+  URL alone parses as `{locale}/{site}`; the discovery → registration path
+  (`DiscoveredSource.tenant_key`) passes it into `SourceConfig.ats_tenant_key`.
 - `crawl_runs.last_started_by_source()` was added so due selection does not
   need a new table or a schema migration.

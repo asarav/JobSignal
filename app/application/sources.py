@@ -77,6 +77,7 @@ class SourceRegistry:
         connector_id: str | None = None,
         company_id: str | None = None,
         interval_s: float = DEFAULT_CRAWL_INTERVAL_S,
+        tenant_key: str | None = None,
     ) -> SourceConfig:
         if connector_id is None:
             # Unknown ATS: fall back to the generic career-site connector.
@@ -87,6 +88,7 @@ class SourceRegistry:
             kind="ats" if connector_id != FALLBACK_CONNECTOR_ID else "career_site",
             company_id=company_id,
             connector_id=connector_id,
+            ats_tenant_key=tenant_key,
             schedule={"interval_s": interval_s},
         )
         async with self._uow_factory() as uow:

@@ -32,7 +32,7 @@ The repository is named `JobSignal` for historical reasons; the product is named
   (the rotation cursor is held). Design and trade-offs:
   [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships 1,069 boards, each confirmed live through its
+  `discovery.ats_directory` ships 1,460 boards, each confirmed live through its
   own public ATS API and ordered largest-first by open postings (refreshed via
   `scripts/build_seed.py`), so a cold install has something to crawl within
   minutes while the web-index rotation fills in long-tail companies. Deleting

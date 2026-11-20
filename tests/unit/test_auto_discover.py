@@ -337,6 +337,30 @@ async def test_daily_cadence_is_due_after_the_interval_and_survives_a_restart():
 
 
 @pytest.mark.asyncio
+async def test_a_discovered_tenant_key_is_stored_on_the_source():
+    """Workday boards keep the tenant in the subdomain but need it explicitly."""
+
+    class _WorkdayProvider:
+        id = "discovery.fake"
+
+        async def discover(self, query, ctx):
+            yield replace(
+                _candidate("https://acme.wd5.myworkdayjobs.com/en-US/AcmeCareers"),
+                ats_hint="ats.workday",
+                tenant_key="acme",
+            )
+
+    _, wiring = _wire({"discovery.fake": _WorkdayProvider()})
+
+    result = await wiring.auto_discover_use_case.run()
+
+    assert result.registered == 1
+    (source,) = await wiring.registry.list_sources()
+    assert source.connector_id == "ats.workday"
+    assert source.ats_tenant_key == "acme"
+
+
+@pytest.mark.asyncio
 async def test_bundled_ats_directory_is_registered_and_yields_seeds():
     container = build_test_container(http=FakeHttpClient())
     entries = container.registry.list_by_kind("discovery")

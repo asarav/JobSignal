@@ -29,3 +29,7 @@ class DiscoveredSource:
     ats_hint: str | None
     confidence: float
     evidence: Sequence[Evidence]
+    #: ATS tenant key when the URL alone does not carry it.  Workday keeps the
+    #: tenant in the subdomain but its CxS API also needs the board site, so a
+    #: discovered Workday board records the tenant explicitly.
+    tenant_key: str | None = None

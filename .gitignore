@@ -29,7 +29,9 @@ frontend/src-tauri/gen/
 
 # Build artifacts (seed builder)
 .seed_build_state.json
-.build_seed_cache.json
+.seed_build_cache.json
+.seed_build_subdomains.json
+.seed_build_ct.json
 *.sqlite-wal
 *.sqlite-shm
 *.bak

@@ -49,6 +49,7 @@ class AtsDirectoryProvider:
                 continue
             company = seed.get("company_hint")
             ats = seed.get("ats_hint")
+            tenant_key = seed.get("tenant_key")
             confidence = seed.get("confidence", 0.9)
             yield DiscoveredSource(
                 kind=str(seed.get("kind", "ats")),
@@ -64,4 +65,5 @@ class AtsDirectoryProvider:
                         observed_at=observed_at,
                     )
                 ],
+                tenant_key=tenant_key if isinstance(tenant_key, str) and tenant_key else None,
             )

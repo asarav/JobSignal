@@ -12,6 +12,7 @@ The host, tenant and site are taken from the board URL.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 
 from app.domain.models.common import Ok, PortError, Result
@@ -19,6 +20,9 @@ from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpRequest
 from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
+
+#: Workday board URLs begin with the locale (``en-US``, ``fr-CA``, ``ja``).
+_LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[A-Za-z]{2,4})?$")
 
 
 class WorkdayConnector:
@@ -33,9 +37,7 @@ class WorkdayConnector:
     def matches(self, url: str, sniff: PageSniff | None = None) -> MatchResult:
         lowered = url.lower()
         matched = "myworkdayjobs.com" in lowered or "myworkdaysite.com" in lowered
-        return MatchResult(
-            matched=matched, confidence=0.9 if matched else 0.0, ats_hint="workday"
-        )
+        return MatchResult(matched=matched, confidence=0.9 if matched else 0.0, ats_hint="workday")
 
     async def list_jobs(
         self, source: SourceConfig, ctx: ExecutionContext
@@ -61,13 +63,17 @@ class WorkdayConnector:
                 yield RawJobRef(
                     source_id=source.id,
                     url=f"https://{host}{path}" if path else source.url,
-                    source_posting_id=str(posting.get("titleReqId") or posting.get("jobReqId") or path),
+                    source_posting_id=str(
+                        posting.get("titleReqId") or posting.get("jobReqId") or path
+                    ),
                     updated_at_hint=posting.get("postedOn"),
                 )
 
         return gen()
 
-    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext) -> Result[RawJob, PortError]:
+    async def fetch_job(
+        self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext
+    ) -> Result[RawJob, PortError]:
         host, tenant, site = _board(source)
         if not host:
             return Ok(RawJob(ref=ref, title=None, body_text=None, body_html=None, payload={}))
@@ -105,7 +111,7 @@ def _board_from_url(url: str) -> tuple[str, str, str]:
     host, _, path = without_scheme.partition("/")
     segments = [segment for segment in path.split("/") if segment]
     # The first segment is the locale (en-US), then tenant and site.
-    if segments and "-" in segments[0] and segments[0].islower():
+    if segments and _LOCALE_RE.match(segments[0]):
         segments = segments[1:]
     tenant = segments[0] if segments else ""
     site = segments[1] if len(segments) > 1 else tenant
