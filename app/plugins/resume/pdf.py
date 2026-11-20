@@ -11,7 +11,7 @@ class PdfResumeParser(ResumeParser):
 
     async def parse(self, file: ResumeFileRef) -> Result[ParsedResume, PortError]:
         try:
-            import fitz
+            import fitz  # type: ignore[import-untyped]
         except ImportError as exc:
             return Err(PortError(code="resume.missing_dep", message=str(exc), retryable=False))
         try:

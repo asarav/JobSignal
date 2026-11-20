@@ -158,6 +158,54 @@
       "response_schema": "schemas/ipc/jobs/jobs_list_duplicates_response.json"
     },
     {
+      "method": "resume.import",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_import_request.json",
+      "response_schema": "schemas/ipc/resume/resume_import_response.json"
+    },
+    {
+      "method": "resume.list_versions",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_list_versions_request.json",
+      "response_schema": "schemas/ipc/resume/resume_list_versions_response.json"
+    },
+    {
+      "method": "resume.get_profile",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_get_profile_request.json",
+      "response_schema": "schemas/ipc/resume/resume_get_profile_response.json"
+    },
+    {
+      "method": "resume.set_active",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_set_active_request.json",
+      "response_schema": "schemas/ipc/resume/resume_set_active_response.json"
+    },
+    {
+      "method": "resume.update_overrides",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_update_overrides_request.json",
+      "response_schema": "schemas/ipc/resume/resume_update_overrides_response.json"
+    },
+    {
+      "method": "matching.run",
+      "long_running": false,
+      "request_schema": "schemas/ipc/matching/matching_run_request.json",
+      "response_schema": "schemas/ipc/matching/matching_run_response.json"
+    },
+    {
+      "method": "matching.get_results",
+      "long_running": false,
+      "request_schema": "schemas/ipc/matching/matching_get_results_request.json",
+      "response_schema": "schemas/ipc/matching/matching_get_results_response.json"
+    },
+    {
+      "method": "matching.update_weights",
+      "long_running": false,
+      "request_schema": "schemas/ipc/matching/matching_update_weights_request.json",
+      "response_schema": "schemas/ipc/matching/matching_update_weights_response.json"
+    },
+    {
       "method": "crawl_runs.list",
       "long_running": false,
       "request_schema": "schemas/ipc/crawl_runs/crawl_runs_list_request.json",
@@ -195,11 +243,8 @@
     }
   ],
   "forbidden_prefixes": [
-    "matching.",
     "applications.",
     "posting_intelligence.",
-    "resume.",
-    "keywords.",
     "browser."
   ]
 }

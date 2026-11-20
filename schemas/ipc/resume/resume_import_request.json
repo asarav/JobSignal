@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "file_path": {
+      "type": "string"
+    },
+    "label": {
+      "default": "Imported",
+      "type": "string"
+    }
+  },
+  "required": [
+    "file_path"
+  ],
+  "title": "ResumeImportRequest",
+  "type": "object"
+}

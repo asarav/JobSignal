@@ -235,6 +235,47 @@ class JobMergeParams(DTO):
     job_id: str
     related_job_id: str
 
+class ResumeImportResult(DTO):
+    profile_id: str
+    version_id: str
+    skills: list[str] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)
+
+class ResumeVersionsResult(DTO):
+    versions: list[dict[str, Any]] = Field(default_factory=list)
+
+class ResumeProfileResult(DTO):
+    profile: dict[str, Any] | None = None
+
+class MatchingRunResult(DTO):
+    results: list[dict[str, Any]] = Field(default_factory=list)
+
+class MatchingResultsResult(DTO):
+    results: list[dict[str, Any]] = Field(default_factory=list)
+
+class ResumeImportParams(DTO):
+    file_path: str
+    label: str = "Imported"
+
+class ResumeProfileParams(DTO):
+    profile_id: str = "default"
+
+class ResumeSetActiveParams(DTO):
+    profile_id: str = "default"
+    version_id: str
+
+class ResumeOverridesParams(DTO):
+    profile_id: str = "default"
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+class MatchingRunParams(DTO):
+    profile_id: str = "default"
+    job_ids: list[str] = Field(default_factory=list)
+
+class MatchingWeightsParams(DTO):
+    profile_id: str = "default"
+    weights: dict[str, Any] = Field(default_factory=dict)
+
 
 
 class CrawlRunSummary(DTO):

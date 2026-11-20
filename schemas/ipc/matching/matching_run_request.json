@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "job_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "MatchingRunRequest",
+  "type": "object"
+}

@@ -402,8 +402,8 @@ class InMemoryUnitOfWork:
         self.companies = InMemoryCompanyRepository(self._companies_store)
         self.applications = _Unimplemented()
         self.observations = InMemoryObservationRepository(self._observations_store)
-        self.resumes = _Unimplemented()
-        self.matches = _Unimplemented()
+        self.resumes = InMemoryResumeRepository()
+        self.matches = InMemoryMatchRepository()
         self.keywords = _Unimplemented()
         self.settings = InMemorySettingsRepository(self._settings_store)
         self.tasks = InMemoryTaskRepository(self._tasks_store)
@@ -476,3 +476,73 @@ class InMemorySearchProfileRepository:
 
     async def delete(self, profile_id: str) -> None:
         self._store.pop(profile_id, None)
+
+# append to memory module
+
+
+class InMemoryResumeRepository:
+    def __init__(self):
+        self._profiles = {}
+        self._files = {}
+        self._versions = {}
+        self._skills = {}
+
+    async def add_profile(self, profile_id, display_name):
+        self._profiles[profile_id] = {"id": profile_id, "display_name": display_name, "active_resume_version_id": None, "overrides_json": "{}"}
+
+    async def get_profile(self, profile_id):
+        return self._profiles.get(profile_id)
+
+    async def add_resume_file(self, file_id, sha256, original_name, mime_type, size_bytes, stored_path):
+        self._files[file_id] = {"id": file_id, "sha256": sha256, "original_name": original_name}
+
+    async def add_resume_version(self, version_id, profile_id, file_id, label, parser_id, parser_version, text_hash, parsed_json, parent_version_id=None, is_active=False):
+        self._versions[version_id] = {"id": version_id, "candidate_profile_id": profile_id, "resume_file_id": file_id, "label": label, "parser_id": parser_id, "text_hash": text_hash, "parsed_json": parsed_json, "is_active": is_active}
+
+    async def list_versions(self, profile_id):
+        return [v for v in self._versions.values() if v["candidate_profile_id"] == profile_id]
+
+    async def set_active(self, profile_id, version_id):
+        for v in self._versions.values():
+            if v["candidate_profile_id"] == profile_id:
+                v["is_active"] = (v["id"] == version_id)
+        if profile_id in self._profiles:
+            self._profiles[profile_id]["active_resume_version_id"] = version_id
+
+    async def get_version(self, version_id):
+        return self._versions.get(version_id)
+
+    async def save_skills(self, version_id, skills):
+        self._skills[version_id] = skills
+
+    async def get_skills(self, version_id):
+        return [{"keyword_id": s[0], "evidence": s[1], "confidence": s[2]} for s in self._skills.get(version_id, [])]
+
+    async def update_overrides(self, profile_id, overrides):
+        import json
+        if profile_id in self._profiles:
+            self._profiles[profile_id]["overrides_json"] = json.dumps(overrides)
+
+    async def get_overrides(self, profile_id):
+        import json
+        p = self._profiles.get(profile_id)
+        if not p:
+            return {}
+        try:
+            return json.loads(p.get("overrides_json") or "{}")
+        except Exception:
+            return {}
+
+
+class InMemoryMatchRepository:
+    def __init__(self):
+        self._results = []
+
+    async def save_result(self, result_id, job_id, profile_id, resume_version_id, model_id, model_version, weights, input_hash, fit_score, dimension_coverage, dimensions, evaluated_at):
+        self._results.append({"id": result_id, "job_id": job_id, "candidate_profile_id": profile_id, "fit_score": fit_score, "dimension_coverage": dimension_coverage})
+
+    async def list_results(self, profile_id, limit=50):
+        return [r for r in self._results if r["candidate_profile_id"] == profile_id][:limit]
+
+    async def update_weights(self, profile_id, weights):
+        return None

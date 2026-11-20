@@ -203,6 +203,44 @@ export interface JobsUnmergeResponse {
   ok?: boolean;
 }
 
+// schemas/ipc/matching/matching_get_results_request.json
+export interface MatchingGetResultsRequest {
+  profile_id?: string;
+}
+
+// schemas/ipc/matching/matching_get_results_response.json
+export interface MatchingGetResultsResponse {
+  results?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/matching/matching_run_request.json
+export interface MatchingRunRequest {
+  profile_id?: string;
+  job_ids?: string[];
+}
+
+// schemas/ipc/matching/matching_run_response.json
+export interface MatchingRunResponse {
+  results?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/matching/matching_update_weights_request.json
+export interface MatchingUpdateWeightsRequest {
+  profile_id?: string;
+  weights?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/matching/matching_update_weights_response.json
+export interface MatchingUpdateWeightsResponse {
+  ok?: boolean;
+}
+
 // schemas/ipc/plugins/plugins_configure_request.json
 export interface PluginsConfigureRequest {
   plugin_id: string;
@@ -278,6 +316,68 @@ export interface PluginsResetCircuitRequest {
 
 // schemas/ipc/plugins/plugins_reset_circuit_response.json
 export interface PluginsResetCircuitResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/resume/resume_get_profile_request.json
+export interface ResumeGetProfileRequest {
+  profile_id?: string;
+}
+
+// schemas/ipc/resume/resume_get_profile_response.json
+export interface ResumeGetProfileResponse {
+  profile?: {
+    [k: string]: unknown;
+  } | null;
+}
+
+// schemas/ipc/resume/resume_import_request.json
+export interface ResumeImportRequest {
+  file_path: string;
+  label?: string;
+}
+
+// schemas/ipc/resume/resume_import_response.json
+export interface ResumeImportResponse {
+  profile_id: string;
+  version_id: string;
+  skills?: string[];
+  sections?: string[];
+}
+
+// schemas/ipc/resume/resume_list_versions_request.json
+export interface ResumeListVersionsRequest {
+  profile_id?: string;
+}
+
+// schemas/ipc/resume/resume_list_versions_response.json
+export interface ResumeListVersionsResponse {
+  versions?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/resume/resume_set_active_request.json
+export interface ResumeSetActiveRequest {
+  profile_id?: string;
+  version_id: string;
+}
+
+// schemas/ipc/resume/resume_set_active_response.json
+export interface ResumeSetActiveResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/resume/resume_update_overrides_request.json
+export interface ResumeUpdateOverridesRequest {
+  profile_id?: string;
+  overrides?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/resume/resume_update_overrides_response.json
+export interface ResumeUpdateOverridesResponse {
   ok?: boolean;
 }
 

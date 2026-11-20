@@ -1,0 +1,14 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "versions": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "title": "ResumeListVersionsResponse",
+  "type": "object"
+}

@@ -1,0 +1,11 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    }
+  },
+  "title": "MatchingGetResultsRequest",
+  "type": "object"
+}

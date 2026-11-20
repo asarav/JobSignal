@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "version_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "version_id"
+  ],
+  "title": "ResumeSetActiveRequest",
+  "type": "object"
+}

@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "overrides": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "title": "ResumeUpdateOverridesRequest",
+  "type": "object"
+}

@@ -13,16 +13,13 @@ from app.domain.ports.repositories import (
     CrawlRunRepository,
     JobRepository,
     KeywordRepository,
-    MatchRepository,
     ObservationRepository,
-    ResumeRepository,
     SearchProfileRepository,
     SnapshotRepository,
     SourceRepository,
 )
 from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrate
 from app.infrastructure.persistence.sqlite.repositories import (
-    SqliteAliasRepository,
     SqliteCompanyRepository,
     SqliteCrawlRunRepository,
     SqliteJobRepository,
@@ -33,6 +30,10 @@ from app.infrastructure.persistence.sqlite.repositories import (
     SqliteSnapshotRepository,
     SqliteSourceRepository,
     SqliteTaskRepository,
+)
+from app.infrastructure.persistence.sqlite.resume_match import (
+    SqliteMatchRepository,
+    SqliteResumeRepository,
 )
 
 
@@ -55,8 +56,8 @@ class SqliteUnitOfWork:
         self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
         self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
         self.observations: ObservationRepository = _Unimplemented()  # type: ignore[assignment]
-        self.resumes: ResumeRepository = _Unimplemented()  # type: ignore[assignment]
-        self.matches: MatchRepository = _Unimplemented()  # type: ignore[assignment]
+        self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
+        self.matches = SqliteMatchRepository(self._conn, self._clock_now)
         self.keywords: KeywordRepository = _Unimplemented()  # type: ignore[assignment]
         self.settings = None  # type: ignore[assignment]
         self.tasks = None  # type: ignore[assignment]
@@ -76,7 +77,8 @@ class SqliteUnitOfWork:
         self.crawl_runs = SqliteCrawlRunRepository(self._conn, self._clock_now)
         self.snapshots = SqliteSnapshotRepository(self._conn, self._clock_now)
         self.search_profiles = SqliteSearchProfileRepository(self._conn, self._clock_now)
-        self.aliases = SqliteAliasRepository(self._conn, self._clock_now)
+        self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
+        self.matches = SqliteMatchRepository(self._conn, self._clock_now)
         return self
 
     async def __aexit__(self, *exc: object) -> None:

@@ -99,9 +99,15 @@ def _build_dispatcher(
         JobFilter,
         JobMergeParams,
         JobSearchParams,
+        MatchingRunParams,
+        MatchingWeightsParams,
         PluginConfigureParams,
         PluginIdParams,
         PluginOptionalIdParams,
+        ResumeImportParams,
+        ResumeOverridesParams,
+        ResumeProfileParams,
+        ResumeSetActiveParams,
         SearchProfileParams,
         SearchProfileSaveParams,
         SettingsPatch,
@@ -176,6 +182,26 @@ def _build_dispatcher(
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)
     dispatcher.register("crawl_runs.list", discovery.discovery.list_runs, params_model=EmptyParams)
+
+    from app.application.commands.matching import MatchingUseCase
+    from app.application.commands.resume import ResumeUseCase
+    from app.worker.ipc.handlers.matching import MatchingHandlers
+    from app.worker.ipc.handlers.resume import ResumeHandlers
+
+    resume_uc = ResumeUseCase(container, Path(container.data_dir))
+    matching_uc = MatchingUseCase(container)
+    resume = ResumeHandlers(resume_uc)
+    matching = MatchingHandlers(matching_uc)
+
+    dispatcher.register("resume.import", resume.import_resume, params_model=ResumeImportParams)
+    dispatcher.register("resume.list_versions", resume.list_versions, params_model=ResumeProfileParams)
+    dispatcher.register("resume.get_profile", resume.get_profile, params_model=ResumeProfileParams)
+    dispatcher.register("resume.set_active", resume.set_active, params_model=ResumeSetActiveParams)
+    dispatcher.register("resume.update_overrides", resume.update_overrides, params_model=ResumeOverridesParams)
+
+    dispatcher.register("matching.run", matching.run, params_model=MatchingRunParams)
+    dispatcher.register("matching.get_results", matching.get_results, params_model=ResumeProfileParams)
+    dispatcher.register("matching.update_weights", matching.update_weights, params_model=MatchingWeightsParams)
 
     profiles = SearchProfilesHandlers(SearchProfilesUseCase(container))
     dispatcher.register("search_profiles.list", profiles.list, params_model=EmptyParams)

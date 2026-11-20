@@ -1,0 +1,14 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "results": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "title": "MatchingRunResponse",
+  "type": "object"
+}

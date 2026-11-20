@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "weights": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "title": "MatchingUpdateWeightsRequest",
+  "type": "object"
+}
