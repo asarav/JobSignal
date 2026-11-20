@@ -231,6 +231,12 @@ class JobFilter(DTO):
     offset: int = 0
 
 
+class JobMergeParams(DTO):
+    job_id: str
+    related_job_id: str
+
+
+
 class CrawlRunSummary(DTO):
     run_id: str
     source_id: str

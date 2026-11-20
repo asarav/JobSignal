@@ -171,13 +171,15 @@ class InMemoryCompanyRepository:
 class InMemoryJobRepository:
     def __init__(self, store: dict[str, dict[str, object]]) -> None:
         self._store = store
+        self._relations: list[dict[str, object]] = []
 
-    async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None) -> None:
+    async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None, updated_at_hint=None) -> None:
         self._store[job_id] = {
             "id": job_id,
             "company_id": company_id,
             "source_id": source_id,
             "content_hash": content_hash,
+            "updated_at_hint": updated_at_hint,
             "title": getattr(job, "title", None),
             "normalized_title": getattr(job, "normalized_title", None),
             "canonical_url": getattr(job, "canonical_url", None),
@@ -204,6 +206,23 @@ class InMemoryJobRepository:
                 return jid
         return None
 
+    async def add_relation(self, job_id, related_job_id, relation, confidence=1.0, evidence=None, created_by="user"):
+        import datetime
+        import uuid
+        self._relations.append({
+            "id": str(uuid.uuid4()),
+            "job_id": job_id,
+            "related_job_id": related_job_id,
+            "relation": relation,
+            "confidence": float(confidence),
+            "evidence_json": list(evidence or []),
+            "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "created_by": created_by,
+        })
+
+    async def list_relations(self, job_id):
+        return [r for r in self._relations if r.get("job_id") == job_id or r.get("related_job_id") == job_id]
+
     async def list(self, *, company_id=None, source_id=None, limit=50, offset=0):
         items = list(self._store.values())
         if company_id:
@@ -220,7 +239,7 @@ class InMemoryJobRepository:
         return len(self._store)
 
     async def mark_not_seen(self, source_id, seen_ids, cutoff, threshold=2, min_spacing_hours=24):
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         ts = cutoff.isoformat() if hasattr(cutoff, "isoformat") else str(cutoff)
         changed = 0
@@ -232,7 +251,6 @@ class InMemoryJobRepository:
                 j["_not_seen_streak"] = 0
                 continue
             # increment streak
-            prev = j.get("_not_seen_last_at")
             streak = int(j.get("_not_seen_streak", 0)) + 1
             j["_not_seen_streak"] = streak
             j["_not_seen_last_at"] = ts

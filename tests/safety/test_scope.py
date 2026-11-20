@@ -35,6 +35,10 @@ ALLOWED_TABLES = {
     "jobs_fts_docsize",
     "jobs_fts_idx",
     "search_profiles",
+    "job_fingerprints",
+    "job_relations",
+    "repost_events",
+    "job_user_state",
     "sqlite_sequence",
     "sqlite_stat1",
 }

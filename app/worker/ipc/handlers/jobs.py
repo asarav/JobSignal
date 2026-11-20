@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.application.commands.jobs import JobsUseCase
-from app.application.dto import JobFilter, JobSearchParams
+from app.application.dto import EmptyParams, JobFilter, JobMergeParams, JobSearchParams
 
 
 class JobsHandlers:
@@ -15,3 +15,14 @@ class JobsHandlers:
 
     async def search(self, params: JobSearchParams) -> dict:
         return (await self._jobs.search(params)).model_dump()
+
+    async def merge(self, params: JobMergeParams) -> dict:
+        await self._jobs.merge(params.job_id, params.related_job_id)
+        return {"ok": True}
+
+    async def unmerge(self, params: JobMergeParams) -> dict:
+        await self._jobs.unmerge(params.job_id, params.related_job_id)
+        return {"ok": True}
+
+    async def list_duplicates(self, params: EmptyParams) -> dict:
+        return (await self._jobs.list_duplicates()).model_dump()

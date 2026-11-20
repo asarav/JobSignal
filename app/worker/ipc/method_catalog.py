@@ -30,6 +30,7 @@ from app.application.dto import (
     HelloResult,
     JobFilter,
     JobListResult,
+    JobMergeParams,
     JobSearchParams,
     OkResult,
     PluginConfigureParams,
@@ -133,6 +134,9 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("sources.delete", SourceIdParams, OkResult),
     MethodSpec("jobs.list", JobFilter, JobListResult),
     MethodSpec("jobs.search", JobSearchParams, JobListResult),
+    MethodSpec("jobs.merge", JobMergeParams, OkResult),
+    MethodSpec("jobs.unmerge", JobMergeParams, OkResult),
+    MethodSpec("jobs.list_duplicates", EmptyParams, JobListResult),
     MethodSpec("crawl_runs.list", EmptyParams, CrawlRunListResult),
     MethodSpec("discovery.run", DiscoveryRunParams, OkResult),
     # M3: search profiles

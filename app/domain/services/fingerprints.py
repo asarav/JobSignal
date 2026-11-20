@@ -2,6 +2,7 @@
 
 Pure functions: no I/O, no third-party dependencies.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +16,11 @@ def canonical_url(url: str) -> str:
     # strip common tracking params
     if "?" in url:
         base, _, query = url.partition("?")
-        params = [p for p in query.split("&") if p and not p.lower().startswith(("utm_", "ref=", "src=", "source="))]
+        params = [
+            p
+            for p in query.split("&")
+            if p and not p.lower().startswith(("utm_", "ref=", "src=", "source="))
+        ]
         url = base + ("?" + "&".join(params) if params else "")
     return url.rstrip("/").lower()
 
@@ -24,7 +29,9 @@ def url_key(url: str) -> str:
     return canonical_url(url)
 
 
-def ats_key(ats_id: str | None, tenant_key: str | None, source_posting_id: str | None) -> str | None:
+def ats_key(
+    ats_id: str | None, tenant_key: str | None, source_posting_id: str | None
+) -> str | None:
     if not (ats_id and tenant_key and source_posting_id):
         return None
     return f"{ats_id}|{tenant_key}|{source_posting_id}"
@@ -104,7 +111,7 @@ def minhash_signature(text: str, num_perm: int = 64, k: int = 5) -> list[int]:
 def jaccard_est(sig_a: Sequence[int], sig_b: Sequence[int]) -> float:
     if not sig_a or not sig_b or len(sig_a) != len(sig_b):
         return 0.0
-    matches = sum(1 for a, b in zip(sig_a, sig_b) if a == b)
+    matches = sum(1 for a, b in zip(sig_a, sig_b, strict=False) if a == b)
     return matches / len(sig_a)
 
 

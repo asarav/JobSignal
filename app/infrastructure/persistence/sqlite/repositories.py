@@ -312,7 +312,7 @@ class SqliteJobRepository:
     def _ts(self):
         return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None):
+    async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None, updated_at_hint=None):
         from app.domain.models.job import NormalizedJob
 
         if isinstance(job, NormalizedJob):
@@ -373,6 +373,8 @@ class SqliteJobRepository:
             fetched_at = self._ts()
 
         now = self._ts()
+        if updated_at_hint is None:
+            updated_at_hint = getattr(job, "updated_at_hint", None)
         cur = await self._conn.execute("SELECT id FROM jobs WHERE canonical_url = ?", (canonical_url,))
         existing = await cur.fetchone()
         if existing is None:
@@ -384,13 +386,16 @@ class SqliteJobRepository:
                   required_skills_json, preferred_skills_json, extraction_status,
                   extraction_confidence, field_confidence_json, provenance_json,
                   posting_status, content_hash, first_seen_at, last_seen_at, fetched_at,
+                   updated_at_hint,
                   created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (job_id, company_id, title, normalized_title, title_family, description_text, description_html,
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, canonical_url, json.dumps(original_urls), department,
                  json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
-                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, now, fetched_at, now, now),
+                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, now, fetched_at,
+                 updated_at_hint,
+                 now, now),
             )
         else:
             await self._conn.execute(
@@ -400,13 +405,13 @@ class SqliteJobRepository:
                   source_posting_id=?, original_urls_json=?, department=?,
                   required_skills_json=?, preferred_skills_json=?, extraction_status=?,
                   extraction_confidence=?, field_confidence_json=?, provenance_json=?,
-                  posting_status=?, content_hash=?, last_seen_at=?, fetched_at=?, updated_at=?
+                  posting_status=?, content_hash=?, last_seen_at=?, fetched_at=?, updated_at_hint=?, updated_at=?
                 WHERE canonical_url=?""",
                 (company_id, title, normalized_title, title_family, description_text, description_html,
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, json.dumps(original_urls), department,
                  json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
-                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, fetched_at, now, canonical_url),
+                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, fetched_at, updated_at_hint, now, canonical_url),
             )
 
     async def get(self, job_id):
@@ -502,7 +507,7 @@ class SqliteJobRepository:
             "content_hash": row["content_hash"],
             "first_seen_at": row["first_seen_at"],
             "last_seen_at": row["last_seen_at"],
-            "fetched_at": row["fetched_at"],
+            "updated_at_hint": row["updated_at_hint"],
         }
 
     async def count(self):
@@ -511,7 +516,6 @@ class SqliteJobRepository:
         return int(row[0]) if row else 0
 
     async def mark_not_seen(self, source_id, seen_ids, cutoff, threshold=2, min_spacing_hours=24):
-        from datetime import timedelta
 
         ts = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
         # All jobs for this source.
@@ -559,6 +563,28 @@ class SqliteJobRepository:
                     pass
         await self._conn.commit()
         return removed_count
+
+    async def add_relation(self, job_id, related_job_id, relation, confidence=1.0, evidence=None, created_by="user"):
+        import datetime
+        import json
+        import uuid
+
+        await self._conn.execute(
+            "INSERT INTO job_relations(id, job_id, related_job_id, relation, confidence, evidence_json, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), job_id, related_job_id, relation, float(confidence),
+             json.dumps(list(evidence or [])),
+             datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             created_by),
+        )
+        await self._conn.commit()
+
+    async def list_relations(self, job_id):
+        import aiosqlite
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT * FROM job_relations WHERE job_id=? OR related_job_id=?", (job_id, job_id)
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
 
 class SqliteObservationRepository:

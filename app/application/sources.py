@@ -152,6 +152,7 @@ async def run_crawl(
     events: Any = None,
     pipeline: Any = None,
     invoker: Any = None,
+    cancel: Any = None,
 ) -> dict[str, object]:
     """Run one source crawl and return its stats."""
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -170,16 +171,14 @@ async def run_crawl(
         await uow.commit()
 
     if events is not None:
-        events.publish(
-            "crawl.started", {"run_id": run_id, "source_id": source.id}, task_id=run_id
-        )
+        events.publish("crawl.started", {"run_id": run_id, "source_id": source.id}, task_id=run_id)
 
     ctx = ExecutionContext(
         task_id=run_id,
         clock=_ClockAdapter(clock_now),
         http=http,
         logger=_NullLogger(),
-        cancel=CancellationToken(),
+        cancel=cancel if cancel is not None else CancellationToken(),
         deadline=None,
         config={},
     )
@@ -189,9 +188,43 @@ async def run_crawl(
 
     try:
         refs = await _collect_refs(connector, source, ctx, invoker, source.connector_id)
+        if events is not None:
+            events.publish(
+                "discovery.progress",
+                {"run_id": run_id, "source_id": source.id, "refs_discovered": len(refs)},
+                task_id=run_id,
+            )
         for ref in refs:
             ctx.cancel.throw_if_cancelled()
-            stats["discovered"] = int(str(stats["discovered"])) + 1
+            stats["discovered"] = int(str(stats.get("discovered", 0))) + 1
+            # Incremental fetch skip: if the ATS says the posting's
+            # updated_at hasn't changed since last crawl, reuse the stored
+            # record without re-fetching.
+            existing_id = None
+            if getattr(ref, "source_posting_id", None):
+                async with uow_factory() as _uow:
+                    existing_id = await _uow.jobs.find_by_source_posting(
+                        source.id, ref.source_posting_id
+                    )
+            skip_fetch = False
+            if existing_id is not None and getattr(ref, "updated_at_hint", None):
+                async with uow_factory() as _uow:
+                    existing = await _uow.jobs.get(existing_id)
+                if existing is not None and existing.get("updated_at_hint") == ref.updated_at_hint:
+                    skip_fetch = True
+            if skip_fetch and existing_id is not None:
+                async with uow_factory() as _uow:
+                    await _uow.observations.add(
+                        job_id=existing_id,
+                        source_id=source.id,
+                        observed_at=clock_now(),
+                        posting_status="active",
+                    )
+                    await _uow.commit()
+                stats["skipped"] = int(str(stats.get("skipped", 0))) + 1
+                seen_ids.append(existing_id)
+                continue
+
             result = await _call_connector(
                 invoker,
                 source.connector_id,
@@ -209,9 +242,7 @@ async def run_crawl(
             # The page may name the company more precisely than the board URL.
             company_name = str(merged.value("company_name") or default_company)
             company_id = company_id_for(company_name)
-            job = normalize_job(
-                merged.raw, source, company_name=company_name, now=clock_now()
-            )
+            job = normalize_job(merged.raw, source, company_name=company_name, now=clock_now())
             content_hash = content_hash_for(job.title, job.description_text)
             job_id, outcome = await _persist_job(
                 uow_factory=uow_factory,
@@ -221,6 +252,7 @@ async def run_crawl(
                 source=source,
                 content_hash=content_hash,
                 now=clock_now(),
+                updated_at_hint=getattr(ref, "updated_at_hint", None),
             )
             stats[outcome] = int(str(stats[outcome])) + 1
             seen_ids.append(job_id)
@@ -266,6 +298,12 @@ async def run_crawl(
             {"run_id": run_id, "source_id": source.id, "stats": stats},
             task_id=run_id,
         )
+    if events is not None:
+        events.publish(
+            "discovery.source_completed",
+            {"run_id": run_id, "source_id": source.id, "stats": stats},
+            task_id=run_id,
+        )
     return stats
 
 
@@ -278,6 +316,7 @@ async def _persist_job(
     source: SourceConfig,
     content_hash: str,
     now: datetime,
+    updated_at_hint: str | None = None,
 ) -> tuple[str, str]:
     """Store one normalized job.
 
@@ -285,15 +324,11 @@ async def _persist_job(
     ``skipped`` (the posting did not change since the last crawl).
     """
     async with uow_factory() as uow:
-        await uow.companies.upsert(
-            company_id, company_name, normalized_name=company_name.lower()
-        )
+        await uow.companies.upsert(company_id, company_name, normalized_name=company_name.lower())
         job_id = await uow.jobs.find_by_canonical_url(job.canonical_url)
         if job_id is None and job.source_posting_id:
             # Same posting seen under a new URL: keep one job, record the alias.
-            match = await uow.jobs.find_by_source_posting(
-                source.id, job.source_posting_id
-            )
+            match = await uow.jobs.find_by_source_posting(source.id, job.source_posting_id)
             if match is not None:
                 job_id = match
                 await uow.aliases.add(
@@ -303,6 +338,7 @@ async def _persist_job(
                     created_at=now,
                 )
         is_new = job_id is None
+        is_material = True
         if job_id is not None:
             existing = await uow.jobs.get(job_id)
             if existing is not None and existing.get("content_hash") == content_hash:
@@ -314,6 +350,15 @@ async def _persist_job(
                 )
                 await uow.commit()
                 return job_id, "skipped"
+            # material change assessment
+            if existing is not None:
+                is_material = False
+                if existing.get("title") != job.title:
+                    is_material = True
+                elif existing.get("seniority") != job.seniority.value:
+                    is_material = True
+                elif existing.get("workplace_type") != job.workplace_type.value:
+                    is_material = True
         else:
             job_id = f"job_{uuid.uuid4().hex[:12]}"
 
@@ -323,6 +368,7 @@ async def _persist_job(
             source_id=source.id,
             job=job,
             content_hash=content_hash,
+            updated_at_hint=updated_at_hint,
         )
         await uow.snapshots.add(
             job_id=job_id,
@@ -334,6 +380,7 @@ async def _persist_job(
                 "employment_type": job.employment_type.value,
                 "seniority": job.seniority.value,
                 "workplace_type": job.workplace_type.value,
+                "is_material_change": is_material,
             },
             created_at=now,
         )

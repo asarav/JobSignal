@@ -97,6 +97,7 @@ def _build_dispatcher(
         FetchUrlParams,
         HelloParams,
         JobFilter,
+        JobMergeParams,
         JobSearchParams,
         PluginConfigureParams,
         PluginIdParams,
@@ -168,6 +169,9 @@ def _build_dispatcher(
 
     dispatcher.register("jobs.list", discovery.jobs.list, params_model=JobFilter)
     dispatcher.register("jobs.search", discovery.jobs.search, params_model=JobSearchParams)
+    dispatcher.register("jobs.merge", discovery.jobs.merge, params_model=JobMergeParams)
+    dispatcher.register("jobs.unmerge", discovery.jobs.unmerge, params_model=JobMergeParams)
+    dispatcher.register("jobs.list_duplicates", discovery.jobs.list_duplicates, params_model=EmptyParams)
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)

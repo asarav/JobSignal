@@ -1,9 +1,6 @@
 """Resume sectioner (spec sec 10.2)."""
 from __future__ import annotations
 
-import re
-from collections.abc import Sequence
-
 _SECTIONS = {
     "experience": ["experience", "work experience", "employment", "professional experience"],
     "education": ["education", "academic"],

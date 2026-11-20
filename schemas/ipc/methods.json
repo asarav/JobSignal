@@ -140,6 +140,24 @@
       "response_schema": "schemas/ipc/jobs/jobs_search_response.json"
     },
     {
+      "method": "jobs.merge",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_merge_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_merge_response.json"
+    },
+    {
+      "method": "jobs.unmerge",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_unmerge_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_unmerge_response.json"
+    },
+    {
+      "method": "jobs.list_duplicates",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_list_duplicates_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_list_duplicates_response.json"
+    },
+    {
       "method": "crawl_runs.list",
       "long_running": false,
       "request_schema": "schemas/ipc/crawl_runs/crawl_runs_list_request.json",

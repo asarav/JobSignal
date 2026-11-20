@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 _TAXONOMY_PATH = Path(__file__).resolve().parents[3] / "data" / "taxonomy" / "v1.json"
 
 
-def load_taxonomy(path: Path | None = None) -> dict:
+def load_taxonomy(path: Path | None = None) -> dict[str, Any]:
     p = path or _TAXONOMY_PATH
-    return json.loads(p.read_text(encoding="utf-8"))
+    return json.loads(p.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
 def normalize_token(tok: str) -> str:
@@ -19,9 +19,9 @@ def normalize_token(tok: str) -> str:
 
 
 class KeywordNormalizer:
-    def __init__(self, taxonomy: dict | None = None) -> None:
-        self.taxonomy = taxonomy or load_taxonomy()
-        self._by_id = {s["id"]: s for s in self.taxonomy["skills"]}
+    def __init__(self, taxonomy: dict[str, Any] | None = None) -> None:
+        self.taxonomy: dict[str, Any] = taxonomy or load_taxonomy()
+        self._by_id: dict[str, dict[str, Any]] = {s["id"]: s for s in self.taxonomy["skills"]}
         self._alias_map: dict[str, str] = {}
         for s in self.taxonomy["skills"]:
             self._alias_map[s["canonical"].lower()] = s["id"]
@@ -33,10 +33,13 @@ class KeywordNormalizer:
         return self._alias_map.get(key)
 
     def taxonomy_version(self) -> str:
-        return self.taxonomy.get("version", "taxonomy.v1")
+        return str(self.taxonomy.get("version", "taxonomy.v1"))
 
     def implications(self) -> list[tuple[str, str, float]]:
-        return [(i["from"], i["to"], float(i["strength"])) for i in self.taxonomy.get("implications", [])]
+        out: list[tuple[str, str, float]] = []
+        for i in self.taxonomy.get("implications", []):
+            out.append((str(i["from"]), str(i["to"]), float(i["strength"])))
+        return out
 
 
 class KeywordExtractor:

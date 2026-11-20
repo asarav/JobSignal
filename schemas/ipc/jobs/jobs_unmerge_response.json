@@ -1,0 +1,11 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "default": true,
+      "type": "boolean"
+    }
+  },
+  "title": "JobsUnmergeResponse",
+  "type": "object"
+}

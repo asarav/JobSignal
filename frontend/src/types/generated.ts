@@ -115,6 +115,24 @@ export interface WorkerReadyEventWorkerReadyData {
   schema_version: number;
 }
 
+// schemas/ipc/jobs/jobs_list_duplicates_request.json
+export interface JobsListDuplicatesRequest {}
+
+// schemas/ipc/jobs/jobs_list_duplicates_response.json
+export interface JobsListDuplicatesResponse {
+  jobs: JobsListDuplicatesResponseJobSummary[];
+  total?: number;
+}
+export interface JobsListDuplicatesResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
+  provenance?: string[];
+}
+
 // schemas/ipc/jobs/jobs_list_request.json
 export interface JobsListRequest {
   source_id?: string | null;
@@ -142,6 +160,17 @@ export interface JobsListResponseJobSummary {
   provenance?: string[];
 }
 
+// schemas/ipc/jobs/jobs_merge_request.json
+export interface JobsMergeRequest {
+  job_id: string;
+  related_job_id: string;
+}
+
+// schemas/ipc/jobs/jobs_merge_response.json
+export interface JobsMergeResponse {
+  ok?: boolean;
+}
+
 // schemas/ipc/jobs/jobs_search_request.json
 export interface JobsSearchRequest {
   query: string;
@@ -161,6 +190,17 @@ export interface JobsSearchResponseJobSummary {
   posting_status?: string;
   source_id?: string | null;
   provenance?: string[];
+}
+
+// schemas/ipc/jobs/jobs_unmerge_request.json
+export interface JobsUnmergeRequest {
+  job_id: string;
+  related_job_id: string;
+}
+
+// schemas/ipc/jobs/jobs_unmerge_response.json
+export interface JobsUnmergeResponse {
+  ok?: boolean;
 }
 
 // schemas/ipc/plugins/plugins_configure_request.json

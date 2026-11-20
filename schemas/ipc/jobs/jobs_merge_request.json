@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "related_job_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id",
+    "related_job_id"
+  ],
+  "title": "JobsMergeRequest",
+  "type": "object"
+}

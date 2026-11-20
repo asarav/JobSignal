@@ -4,10 +4,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from app.domain.models.resume import ResumeFileRef
 from app.domain.services.keywords import KeywordExtractor, KeywordNormalizer
 from app.domain.services.sectioner import section_text
 from app.plugins.resume.txt import TxtResumeParser
-from app.domain.models.resume import ResumeFileRef
 
 
 def test_keyword_extraction():

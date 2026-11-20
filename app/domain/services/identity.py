@@ -3,6 +3,7 @@
 Pure domain service: takes the incoming posting's fingerprints plus a list of
 candidate existing postings and returns an :class:`IdentityDecision`. No I/O.
 """
+
 from __future__ import annotations
 
 import difflib
@@ -68,7 +69,9 @@ def _salary_sim(a: JobFingerprintSet, b: JobFingerprintSet) -> float:
     return 0.3
 
 
-def compute_similarity(a: JobFingerprintSet, b: JobFingerprintSet, weights: dict[str, float] | None = None) -> SimilarityEvidence:
+def compute_similarity(
+    a: JobFingerprintSet, b: JobFingerprintSet, weights: dict[str, float] | None = None
+) -> SimilarityEvidence:
     w = weights or _DEFAULT_WEIGHTS
     title_sim = _title_sim(a, b)
     location_sim = _location_sim(a, b)
@@ -83,7 +86,9 @@ def compute_similarity(a: JobFingerprintSet, b: JobFingerprintSet, weights: dict
         + w.get("salary", 0.05) * salary_sim
     )
     # normalize by sum of weights
-    total_w = sum(w.get(k, 0.0) for k in ("title", "location", "description", "department", "salary"))
+    total_w = sum(
+        w.get(k, 0.0) for k in ("title", "location", "description", "department", "salary")
+    )
     if total_w > 0:
         score = score / total_w
     reasons = []
@@ -117,7 +122,11 @@ def resolve(
     thresholds: dict[str, float] | None = None,
     material_change_delta: float = 0.10,
 ) -> IdentityDecision:
-    thr = thresholds or {"reposted_identical": 0.90, "materially_updated": 0.75, "similar_distinct": 0.60}
+    thr = thresholds or {
+        "reposted_identical": 0.90,
+        "materially_updated": 0.75,
+        "similar_distinct": 0.60,
+    }
     # 1. Exact alias hit.
     for c in candidates:
         if incoming.ats_key and incoming.ats_key == c.ats_key:
@@ -163,9 +172,8 @@ def resolve(
     for c in candidates:
         if incoming.company_id is None or c.company_id != incoming.company_id:
             continue
-        title_match = (
-            incoming.title_key == c.title_key
-            or (incoming.title_family is not None and incoming.title_family == c.title_family)
+        title_match = incoming.title_key == c.title_key or (
+            incoming.title_family is not None and incoming.title_family == c.title_family
         )
         if title_match:
             blocking_candidates.append(c)
@@ -210,13 +218,21 @@ def resolve(
 
     # guards
     over_merge_cap = False
-    if incoming.location_key is not None and c.location_key is not None and incoming.location_key != c.location_key:
+    if (
+        incoming.location_key is not None
+        and c.location_key is not None
+        and incoming.location_key != c.location_key
+    ):
         # non-remote different location
         if "remote" not in (incoming.location_key or "") and "remote" not in (c.location_key or ""):
             over_merge_cap = True
     if _has_different_req_ids(incoming, c):
         over_merge_cap = True
-    if incoming.department is not None and c.department is not None and incoming.department != c.department:
+    if (
+        incoming.department is not None
+        and c.department is not None
+        and incoming.department != c.department
+    ):
         over_merge_cap = True
 
     # decision table
@@ -226,13 +242,26 @@ def resolve(
 
     if incoming.desc_exact_hash == c.desc_exact_hash and title_sim >= 0.95 and location_sim >= 0.8:
         repost_class = "reposted_identical"
-    elif sim.score >= reposted_identical_thr and title_sim >= 0.9 and location_sim >= 0.8 and desc_sim >= 0.90:
+    elif (
+        sim.score >= reposted_identical_thr
+        and title_sim >= 0.9
+        and location_sim >= 0.8
+        and desc_sim >= 0.90
+    ):
         repost_class = "reposted_identical"
-    elif reposted_identical_thr > sim.score >= materially_updated_thr and title_sim >= 0.9 and location_sim >= 0.8:
+    elif (
+        reposted_identical_thr > sim.score >= materially_updated_thr
+        and title_sim >= 0.9
+        and location_sim >= 0.8
+    ):
         repost_class = "materially_updated"
     elif similar_distinct_thr <= sim.score < materially_updated_thr:
         repost_class = "similar_distinct"
-    elif incoming.title_family is not None and incoming.title_family == c.title_family and (incoming.location_key != c.location_key):
+    elif (
+        incoming.title_family is not None
+        and incoming.title_family == c.title_family
+        and (incoming.location_key != c.location_key)
+    ):
         repost_class = "similar_distinct"
     else:
         repost_class = "new_position"
@@ -260,7 +289,9 @@ def resolve(
         )
 
     # reposted_identical or materially_updated → attach alias
-    material = repost_class == "materially_updated" or _is_material(incoming, c, material_change_delta)
+    material = repost_class == "materially_updated" or _is_material(
+        incoming, c, material_change_delta
+    )
     action = "attach_alias" if repost_class == "reposted_identical" else "new_snapshot"
     return IdentityDecision(
         action=action,

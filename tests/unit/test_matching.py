@@ -5,13 +5,13 @@ from types import SimpleNamespace
 
 from app.domain.models.matching import ScoringConfig
 from app.domain.services.matching import (
-    WeightedScoringModel,
-    SkillsResumeStrategy,
-    ExperienceSeniorityStrategy,
-    ResponsibilitiesStrategy,
-    LocationWorkplaceStrategy,
     CompensationStrategy,
+    ExperienceSeniorityStrategy,
     FreshnessStrategy,
+    LocationWorkplaceStrategy,
+    ResponsibilitiesStrategy,
+    SkillsResumeStrategy,
+    WeightedScoringModel,
 )
 
 

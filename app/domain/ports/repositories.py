@@ -65,9 +65,7 @@ class SourceRepository(Protocol):
 
 
 class CompanyRepository(Protocol):
-    async def upsert(
-        self, company_id: str, canonical_name: str, **fields: object
-    ) -> None: ...
+    async def upsert(self, company_id: str, canonical_name: str, **fields: object) -> None: ...
 
     async def get(self, company_id: str) -> Mapping[str, object] | None: ...
 
@@ -85,6 +83,7 @@ class JobRepository(Protocol):
         source_id: str,
         job: NormalizedJob | JobView,
         content_hash: str | None = None,
+        updated_at_hint: str | None = None,
     ) -> None: ...
 
     async def get(self, job_id: str) -> Mapping[str, object] | None: ...
@@ -112,6 +111,13 @@ class JobRepository(Protocol):
         self, source_id: str, seen_ids: Sequence[str], cutoff: datetime,
         threshold: int = 2, min_spacing_hours: int = 24,
     ) -> int: ...
+
+    async def add_relation(
+        self, job_id: str, related_job_id: str, relation: str,
+        confidence: float = 1.0, evidence: Sequence[str] | None = None,
+        created_by: str = "user",
+    ) -> None: ...
+    async def list_relations(self, job_id: str) -> Sequence[Mapping[str, object]]: ...
 
 
 class ObservationRepository(Protocol):
