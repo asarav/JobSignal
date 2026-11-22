@@ -56,7 +56,7 @@ on the user, who would have to add sources whenever the list missed an employer.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine. As shipped, the
-   seed file is a **warm start**: 25,651 boards across nine ATSs — the five
+   seed file is a **warm start**: 25,716 boards across nine ATSs — the five
    fixed-host ATSs whose boards live at `host/{tenant}` (Greenhouse, Lever,
    Ashby, SmartRecruiters and Workable), the subdomain-addressed Workday, iCIMS
    and BambooHR boards, and path-addressed UKG Pro/UltiPro boards — each

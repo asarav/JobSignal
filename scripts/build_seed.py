@@ -122,6 +122,69 @@ MAX_BUCKET_DEPTH = 3
 #: in seconds to a couple of minutes, and abandoning the connector on the first
 #: bad pass is what made a healthy walk look like a dead end.
 CDX_IDLE_BUDGET_S = 300.0
+#: Hard wall-clock cap on one index request.  ``httpx``'s read timeout only
+#: fires between socket reads, so a gateway that trickles keepalive bytes holds
+#: a request open past every per-read timeout: one such request sat with no log
+#: line for 41 minutes and stalled a whole bucket sweep.  This cap makes every
+#: request either answer or fail inside a bounded window.
+CDX_DEADLINE_S = 300.0
+#: Pause between tenant buckets that neither shape answered.  The gateway
+#: throttles these heavy scans for long stretches, so a sweep that retries
+#: back-to-back only spends its budget inside the same bad window; spacing the
+#: probes out lets a later bucket catch the moment it starts serving again.
+BUCKET_PAUSE_S = 60.0
+#: Default wall clock a bucket sweep may spend before it stops and writes what
+#: it has.  An unanswered bucket stays checkpointed for the next run.
+BUCKET_BUDGET_S = 1800.0
+
+#: Oracle Fusion HCM pods that host Candidate Experience sites.  Oracle is
+#: enumerated per pod because the whole ``oraclecloud.com`` domain is far too
+#: large for the archive gateway, while one pod's domain query answers in
+#: 17-38 s (measured).  The discovery provider rotates the same list.
+ORACLE_PODS: tuple[str, ...] = (
+    "fa.us2.oraclecloud.com",
+    "fa.us6.oraclecloud.com",
+    "fa.em2.oraclecloud.com",
+    "fa.uk1.oraclecloud.com",
+    "fa.ap1.oraclecloud.com",
+    "fa.ap2.oraclecloud.com",
+    "fa.ap5.oraclecloud.com",
+    "fa.ca1.oraclecloud.com",
+    "fa.sa1.oraclecloud.com",
+    "fa.au1.oraclecloud.com",
+    "fa.jp1.oraclecloud.com",
+    "fa.in1.oraclecloud.com",
+    "fa.eu1.oraclecloud.com",
+    "fa.eu2.oraclecloud.com",
+    "fa.us1.oraclecloud.com",
+    "fa.us4.oraclecloud.com",
+    "fa.us5.oraclecloud.com",
+    "fa.us7.oraclecloud.com",
+    "fa.us8.oraclecloud.com",
+    "fa.us9.oraclecloud.com",
+    "fa.us10.oraclecloud.com",
+    "fa.uk2.oraclecloud.com",
+    "fa.ca2.oraclecloud.com",
+    "fa.mx1.oraclecloud.com",
+    "fa.br1.oraclecloud.com",
+    "fa.ch1.oraclecloud.com",
+    "fa.de1.oraclecloud.com",
+    "fa.fr1.oraclecloud.com",
+    "fa.it1.oraclecloud.com",
+    "fa.nl1.oraclecloud.com",
+    "fa.es1.oraclecloud.com",
+    "fa.se1.oraclecloud.com",
+    "fa.ae1.oraclecloud.com",
+    "fa.il1.oraclecloud.com",
+    "fa.za1.oraclecloud.com",
+)
+#: ``/hcmUI/CandidateExperience/{lang}/sites/{site}``; the site code is what
+#: makes the board, and the locale is a mirror of it.
+ORACLE_PATH_RE = re.compile(
+    r"^/hcmUI/CandidateExperience(?:/(?P<lang>[a-z]{2}(?:-[A-Za-z]{2,4})?))?"
+    r"/sites/(?P<site>[A-Za-z0-9_]+)(?:/|$)",
+    re.IGNORECASE,
+)
 
 #: Job-detail URL shapes, which repeat a tenant the bucket already names.
 UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -194,21 +257,36 @@ SUBDOMAIN_ATS: dict[str, _SubdomainCfg] = {
         "filters": (
             # A board-root include filter (`/[locale]/[site]`) reads better but
             # makes the archive gateway answer 504: the filter scan itself
-            # times out on this domain.  Excluding job details and assets is
-            # what the gateway can serve, so rows are reduced in memory.
+            # times out on this domain.  Exclude what cannot name a board and
+            # let the index do the deduplicating instead: measured on one
+            # shard, these clauses cut 41.7 rows per distinct board to 25.3
+            # (395 boards per 10,000-row chunk instead of ~240) without
+            # losing a single board.
             "!original:.*/assets/.*",
             "!original:.*/job/.*",
+            # Query strings are crawl noise: a board's identity is its path.
+            # They were the largest single block of rows (155 of 1,000).
+            r"!original:.*\?.*",
+            # Sitemaps, plugin manifests, icons, fonts, styles: never a board.
+            r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+            r"!original:.*\.well-known.*",
+            r"!original:.*/(login|logout|signin|talentcommunity|faq|static|media)(/|$)",
         ),
     },
     "ats.bamboohr": {
         "domain": "bamboohr.com",
         "roots": ("bamboohr.com",),
         "filters": (
-            # BambooHR's own marketing site is not a customer board.  Every row
-            # is reduced to its subdomain in memory, so job-detail URLs need no
-            # clause of their own -- and a second clause makes the gateway 504
-            # on this domain, which answers 529 tenants per 10,000 rows.
+            # BambooHR's own marketing site is not a customer board.
             "!original:.*://www[0-9]*[.]bamboohr[.]com.*",
+            # Every row is reduced to its subdomain in memory, but the index
+            # still charges the whole 10,000-row chunk for a tenant's job
+            # pages: those rows name ~450 tenants a chunk.  Dropping any URL
+            # with a second path segment leaves the tenant roots behind and
+            # names 1,808 tenants per chunk instead (measured, 4x).  A second
+            # clause used to make this domain answer 504; measured now: 200
+            # with 10,000 rows in 48 s.
+            r"!original:.*\.bamboohr\.com/[a-z]{2,}/.*",
         ),
     },
     "ats.icims": {
@@ -218,6 +296,20 @@ SUBDOMAIN_ATS: dict[str, _SubdomainCfg] = {
             # www is iCIMS' own marketing site, not a customer board.
             "!original:.*://www[0-9]*\\.icims\\.com.*",
             "!original:.*/jobs/.*",
+        ),
+    },
+    "ats.oracle_recruiting": {
+        # Oracle is walked one HCM pod at a time: the whole oraclecloud.com
+        # domain is far too large for the gateway, while one pod's domain query
+        # answers in 13-45 s (measured).  Each pod keeps its own resume key, so
+        # the walk goes *into* a pod's URL-key space instead of sampling only
+        # its first rows the way a single unpaged query does.
+        "domain": "oraclecloud.com",
+        "roots": ORACLE_PODS,
+        "filters": (
+            "!original:.*/job/.*",
+            "!original:.*/requisitions/.*",
+            "!original:.*/apply.*",
         ),
     },
 }
@@ -393,7 +485,10 @@ def _log(event: str, **fields: object) -> None:
 
 
 async def _cdx_get(
-    client: httpx.AsyncClient, params: list[tuple[str, str]], purpose: str = ""
+    client: httpx.AsyncClient,
+    params: list[tuple[str, str]],
+    purpose: str = "",
+    attempts: int = HARVEST_ATTEMPTS,
 ) -> httpx.Response | None:
     """One CDX request with patient backoff while the gateway throttles.
 
@@ -410,10 +505,24 @@ async def _cdx_get(
         "filters": [value for key, value in params if key == "filter"],
         "has_resume_key": "resumeKey" in options,
     }
-    for attempt in range(HARVEST_ATTEMPTS):
+    for attempt in range(attempts):
         started = time.monotonic()
         try:
-            response = await client.get(query, timeout=CDX_TIMEOUT_S)
+            response = await asyncio.wait_for(
+                client.get(query, timeout=CDX_TIMEOUT_S), timeout=CDX_DEADLINE_S
+            )
+        except TimeoutError:
+            # Wall clock ran out with the socket still open: same meaning as an
+            # unanswered attempt, but logged apart because it is a different
+            # failure from a refused connection or a fast 504.
+            _log(
+                "cdx_deadline",
+                purpose=purpose,
+                attempt=attempt + 1,
+                deadline_s=CDX_DEADLINE_S,
+                elapsed_s=round(time.monotonic() - started, 1),
+                **requested,
+            )
         except httpx.HTTPError as exc:
             _log(
                 "cdx_error",
@@ -436,7 +545,7 @@ async def _cdx_get(
                 )
                 return response
             retryable = response.status_code in (429, 500, 502, 503, 504)
-            wait = THROTTLE_BACKOFF_S[attempt] if attempt + 1 < HARVEST_ATTEMPTS else 0
+            wait = THROTTLE_BACKOFF_S[attempt] if attempt + 1 < attempts else 0
             _log(
                 "cdx_status",
                 purpose=purpose,
@@ -450,9 +559,9 @@ async def _cdx_get(
             )
             if not retryable:
                 return None
-        if attempt + 1 < HARVEST_ATTEMPTS:
+        if attempt + 1 < attempts:
             await asyncio.sleep(THROTTLE_BACKOFF_S[attempt])
-    _log("cdx_gave_up", purpose=purpose, attempts=HARVEST_ATTEMPTS, **requested)
+    _log("cdx_gave_up", purpose=purpose, attempts=attempts, **requested)
     return None
 
 
@@ -497,6 +606,7 @@ async def harvest_slice(
     host: str,
     bucket: str,
     sem: asyncio.Semaphore,
+    attempts: int = HARVEST_ATTEMPTS,
 ) -> tuple[int, dict[str, int]] | None:
     """``(rows seen, {tenant: url_count})`` for one ``(host, bucket)`` slice.
 
@@ -518,7 +628,9 @@ async def harvest_slice(
         params.append(("filter", host_filter))
     async with sem:
         await asyncio.sleep(REQUEST_GAP_S)
-        response = await _cdx_get(client, params, purpose=f"slice {host}/{bucket}")
+        response = await _cdx_get(
+            client, params, purpose=f"slice {host}/{bucket}", attempts=attempts
+        )
     if response is None:
         return None
     rows = _row_count(response.text)
@@ -574,19 +686,21 @@ def _checkpoint(completed: set[tuple[str, str]], boards: dict[Board, int]) -> No
     )
 
 
-async def harvest_all(client: httpx.AsyncClient, resume: bool) -> dict[Board, int]:
+async def harvest_all(client: httpx.AsyncClient) -> dict[Board, int]:
     """Harvest every fixed-host slice, reusing checkpointed results.
 
     Slices run a few at a time, and a slice the gateway truncated (a full
     ``CDX_LIMIT`` rows) is split into two-character buckets and walked again,
     so a single crowded bucket cannot hide the long tail behind it.
+
+    A slice that never answered stays out of ``completed`` so the next run
+    retries it; therefore a resumed run still has to look at the queue, or an
+    unanswered slice becomes a permanent gap in the seed.
     """
     completed, cached = _read_harvest_cache()
     boards: dict[Board, int] = defaultdict(int, cached)
     if completed:
         _log("harvest_resume", slices=len(completed), candidates=len(boards))
-        if resume:
-            return boards
 
     queue: list[tuple[str, str]] = [
         (host, bucket)
@@ -598,9 +712,11 @@ async def harvest_all(client: httpx.AsyncClient, resume: bool) -> dict[Board, in
     started = time.monotonic()
     semaphore = asyncio.Semaphore(SLICE_CONCURRENCY)
 
-    async def run_one(host: str, bucket: str) -> tuple[str, str, int, bool]:
+    async def run_one(
+        host: str, bucket: str, attempts: int
+    ) -> tuple[str, str, int, bool]:
         connector_id = next(connector for h, connector in SEED_ATS_HOSTS if h == host)
-        result = await harvest_slice(client, host, bucket, semaphore)
+        result = await harvest_slice(client, host, bucket, semaphore, attempts)
         if result is None:
             # Left out of ``completed`` on purpose: the next run retries it.
             return host, bucket, -1, False
@@ -611,12 +727,19 @@ async def harvest_all(client: httpx.AsyncClient, resume: bool) -> dict[Board, in
         truncated = rows >= CDX_LIMIT and len(bucket) < MAX_BUCKET_DEPTH
         return host, bucket, rows, truncated
 
+    idle_since: float | None = None
     while queue:
         batch = queue[:SLICE_CONCURRENCY]
         del queue[:SLICE_CONCURRENCY]
+        # While nothing is answering, ask once per slice and give the gateway
+        # time instead of spending four attempts on a request that has been
+        # timing out; the queue stays checkpointed either way.
+        attempts = 1 if idle_since is not None else HARVEST_ATTEMPTS
         outcomes = await asyncio.gather(
-            *(run_one(host, bucket) for host, bucket in batch), return_exceptions=True
+            *(run_one(host, bucket, attempts) for host, bucket in batch),
+            return_exceptions=True,
         )
+        answered = 0
         for outcome in outcomes:
             if isinstance(outcome, BaseException):
                 _log("slice_failed", error=type(outcome).__name__)
@@ -625,6 +748,7 @@ async def harvest_all(client: httpx.AsyncClient, resume: bool) -> dict[Board, in
             if rows < 0:
                 _log("slice_unanswered", host=host, bucket=bucket, retry="next run")
                 continue
+            answered += 1
             done += 1
             if truncated:
                 _log("slice_truncated", host=host, bucket=bucket, rows=rows)
@@ -633,6 +757,21 @@ async def harvest_all(client: httpx.AsyncClient, resume: bool) -> dict[Board, in
                     for char in BUCKETS
                     if (host, bucket + char) not in completed
                 )
+        if answered:
+            idle_since = None
+        else:
+            now = time.monotonic()
+            idle_since = now if idle_since is None else idle_since
+            idle = now - idle_since
+            if idle >= CDX_IDLE_BUDGET_S:
+                _log(
+                    "slices_abandoned",
+                    pending=len(queue),
+                    idle_s=round(idle),
+                    done=done,
+                )
+                _checkpoint(completed, boards)
+                break
         _checkpoint(completed, boards)
         _log(
             "harvest_progress",
@@ -669,6 +808,10 @@ def _board_for(connector_id: str, tenant: str) -> Board:
 
 def _subdomain_board(connector_id: str, url: str) -> Board | None:
     """A board derived from one indexed URL, or ``None`` for site chrome."""
+    if connector_id == "ats.oracle_recruiting":
+        # An Oracle board needs the host *and* the site code, so it cannot go
+        # through the ``{tenant}.{domain}`` reading below.
+        return _oracle_board(url)
     parts = urlsplit(url)
     host = MANGLED_HOST_RE.sub("", parts.netloc.lower())
     cfg = SUBDOMAIN_ATS[connector_id]
@@ -919,6 +1062,41 @@ async def harvest_subdomains(
     return dict(boards)
 
 
+def _oracle_board(url: str) -> Board | None:
+    """The Candidate Experience site an Oracle URL names, if any.
+
+    Identity is ``host`` plus ``site``: one Oracle tenant host can publish
+    several sites (recruiting, campus, exec), and each is its own board, while
+    ``/en`` and ``/fr-CA`` are the same site mirrored.
+    """
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if not host.endswith(".oraclecloud.com"):
+        return None
+    # The pod itself (``fa.us2.oraclecloud.com``) is Oracle's own host, not a
+    # tenant: a tenant host has its label in front of the pod's four.
+    labels = host.split(".")
+    if len(labels) < 5:
+        return None
+    match = ORACLE_PATH_RE.match(parts.path)
+    if match is None:
+        return None
+    site = match.group("site")
+    lang = match.group("lang") or "en"
+    return Board(
+        "ats.oracle_recruiting",
+        labels[0],
+        f"https://{host}/hcmUI/CandidateExperience/{lang}/sites/{site}",
+        tenant_key=f"{host}|{site}",
+    )
+
+
+def _oracle_site(board: Board) -> str | None:
+    """The ``sites/{code}`` segment of an Oracle board URL."""
+    match = ORACLE_PATH_RE.match(urlsplit(board.url).path)
+    return match.group("site") if match else None
+
+
 async def harvest_ultipro(
     client: httpx.AsyncClient, chunks: int, resume: bool
 ) -> dict[Board, int]:
@@ -949,6 +1127,7 @@ async def harvest_ultipro(
         return dict(boards)
 
     started = time.monotonic()
+    idle_since: float | None = None
     while done < chunks:
         params: list[tuple[str, str]] = [
             ("url", ULTIPRO_DOMAIN),
@@ -971,19 +1150,40 @@ async def harvest_ultipro(
         )
         await asyncio.sleep(REQUEST_GAP_S)
         response = await _cdx_get(client, params, purpose=f"ats.ultipro {ULTIPRO_DOMAIN}")
+        urls: list[str] = []
+        next_resume_key: str | None = None
+        parsed = False
         if response is None:
-            _log("chunk_unanswered", connector="ats.ultipro", root=ULTIPRO_DOMAIN, retry="now")
-            break
-        urls, next_resume_key, parsed = _chunk_urls(response.text)
+            _log("chunk_unanswered", connector="ats.ultipro", root=ULTIPRO_DOMAIN)
+        else:
+            urls, next_resume_key, parsed = _chunk_urls(response.text)
+            if not parsed:
+                _log(
+                    "chunk_unparsed",
+                    connector="ats.ultipro",
+                    root=ULTIPRO_DOMAIN,
+                    bytes=len(response.content),
+                    body=_preview(response.text),
+                )
         if not parsed:
+            # A throttled chunk says nothing about the rows still behind it and
+            # the resume key still stands, so retry instead of abandoning the
+            # walk: one bad gateway window used to end the whole connector run.
+            now = time.monotonic()
+            idle_since = now if idle_since is None else idle_since
+            idle = now - idle_since
+            if idle >= CDX_IDLE_BUDGET_S:
+                _log("roots_abandoned", connector="ats.ultipro", chunks=done, idle_s=round(idle))
+                break
             _log(
-                "chunk_unparsed",
+                "chunk_retrying",
                 connector="ats.ultipro",
-                root=ULTIPRO_DOMAIN,
-                bytes=len(response.content),
-                body=_preview(response.text),
+                chunks=done,
+                idle_s=round(idle),
+                budget_s=CDX_IDLE_BUDGET_S,
             )
-            break
+            continue
+        idle_since = None
         resume_key = next_resume_key
         before = len(boards)
         for url in urls:
@@ -1014,6 +1214,150 @@ async def harvest_ultipro(
         if not resume_key:
             _log("roots_exhausted", connector="ats.ultipro", chunks=done)
             break
+    return dict(boards)
+
+
+async def harvest_initial_buckets(
+    client: httpx.AsyncClient,
+    connector_id: str,
+    resume: bool,
+    budget_s: float = BUCKET_BUDGET_S,
+) -> dict[Board, int]:
+    """Enumerate a subdomain ATS one tenant-initial bucket at a time.
+
+    The archive's resume key does not advance through a *filtered* row space:
+    measured on BambooHR, every chunk after the first carried a resume key and
+    still returned the same 10,000 rows naming no new tenant, so a filtered
+    walk stalls.  A bucket on the tenant's first character needs no pagination
+    at all -- 36 mutually exclusive queries cover the whole tenant space, and
+    each one answers in seconds.
+    """
+    cfg = SUBDOMAIN_ATS[connector_id]
+    cache: dict[str, object] = {}
+    if SUBDOMAIN_CACHE_PATH.exists():
+        try:
+            raw = json.loads(SUBDOMAIN_CACHE_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cache = raw
+        except (OSError, ValueError):
+            cache = {}
+    slot = f"{connector_id}|buckets"
+    stored = cache.get(slot)
+    state: dict[str, object] = stored if isinstance(stored, dict) else {}
+    boards: dict[Board, int] = defaultdict(int, _ct_cached_boards(state))
+    done = {str(item) for item in (state.get("buckets") or [])}
+    if resume and len(done) >= len(BUCKETS):
+        _log("resume_cached", connector=connector_id, buckets=len(done), candidates=len(boards))
+        return dict(boards)
+
+    started = time.monotonic()
+    stalled = 0
+    for initial in BUCKETS:
+        if initial in done:
+            continue
+        if time.monotonic() - started >= budget_s:
+            _log(
+                "bucket_sweep_budget_exhausted",
+                connector=connector_id,
+                buckets=len(done),
+                candidates=len(boards),
+                budget_s=budget_s,
+                unanswered=stalled,
+            )
+            break
+        # While the gateway is failing every bucket, probe each shape once
+        # instead of twice: the point is to meet the next healthy window
+        # sooner, not to insist on a query that has been timing out.
+        attempts = 1 if stalled else 2
+        # Positive clause: one tenant initial only, so the gateway never has to
+        # page and a crowded tenant's job pages cannot crowd out the names
+        # behind them.
+        positive = f"original:https?://{initial}[a-z0-9-]*[.]{cfg['domain']}.*"
+        # Two shapes for the same bucket.  The dense one also applies the
+        # connector's own clauses, which drop job pages and marketing hosts so
+        # the 10,000-row allowance names far more tenants (measured on
+        # BambooHR: 4x); the extra scan is likelier to time out on a loaded
+        # gateway, so the plain clause stays as the fallback instead of being
+        # replaced.
+        shapes = (("dense", (positive, *cfg["filters"])), ("plain", (positive,)))
+        urls: list[str] = []
+        parsed = False
+        shape_used = ""
+        for shape, clauses in shapes:
+            params: list[tuple[str, str]] = [
+                ("url", cfg["domain"]),
+                ("matchType", "domain"),
+                ("fl", "original"),
+                ("collapse", "urlkey"),
+                ("limit", str(CDX_LIMIT)),
+                ("output", "json"),
+            ]
+            params.extend(("filter", clause) for clause in clauses)
+            await asyncio.sleep(REQUEST_GAP_S)
+            response = await _cdx_get(
+                client,
+                params,
+                purpose=f"{connector_id} bucket {initial} {shape}",
+                attempts=attempts,
+            )
+            if response is None:
+                _log(
+                    "bucket_unanswered",
+                    connector=connector_id,
+                    bucket=initial,
+                    shape=shape,
+                    retry="fallback" if shape != shapes[-1][0] else "next run",
+                )
+                continue
+            urls, _key, parsed = _chunk_urls(response.text)
+            if not parsed:
+                _log(
+                    "bucket_unparsed",
+                    connector=connector_id,
+                    bucket=initial,
+                    shape=shape,
+                    bytes=len(response.content),
+                    body=_preview(response.text),
+                )
+                continue
+            shape_used = shape
+            break
+        if not parsed:
+            # Neither shape answered.  The bucket stays undone and the sweep
+            # waits before probing the next one, so a throttled gateway costs
+            # it a pause rather than the rest of the alphabet.
+            stalled += 1
+            await asyncio.sleep(BUCKET_PAUSE_S)
+            continue
+        stalled = 0
+        before = len(boards)
+        for url in urls:
+            candidate = _subdomain_board(connector_id, url)
+            if candidate is not None:
+                boards[candidate] += 1
+        done.add(initial)
+        cache[slot] = {
+            "buckets": sorted(done),
+            "boards": {
+                f"{b.connector_id}|{b.tenant}|{b.url}|{b.tenant_key or ''}": n
+                for b, n in boards.items()
+            },
+        }
+        SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+        _log(
+            "bucket_done",
+            connector=connector_id,
+            bucket=initial,
+            shape=shape_used,
+            rows=len(urls),
+            # A full allowance means the bucket was cut off mid-alphabet: its
+            # tenants are real but incomplete, and a later pass can read more.
+            truncated=len(urls) >= CDX_LIMIT,
+            added=len(boards) - before,
+            candidates=len(boards),
+            elapsed_s=round(time.monotonic() - started),
+        )
+    _log("bucket_sweep_done", connector=connector_id, buckets=len(done), candidates=len(boards))
     return dict(boards)
 
 
@@ -1328,6 +1672,57 @@ async def _verify_bamboohr(
     return _UNREACHABLE
 
 
+async def _verify_oracle(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Live Oracle Recruiting Cloud board: its own requisition finder.
+
+    The Candidate Experience frontend calls this REST resource without auth,
+    and ``TotalJobsCount`` is the site's own number of open requisitions.  A
+    tenant behind a WAF answers 403, which is not proof either way; it is
+    reported as unreachable so a later run can ask again.
+    """
+    host = urlsplit(board.url).netloc.lower()
+    site = _oracle_site(board)
+    if not host or not site:
+        return None
+    url = (
+        f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+        f"?onlyData=true&finder=findReqs;siteNumber={site},limit=1,offset=0"
+    )
+    async with sem:
+        await asyncio.sleep(0.05)
+        for attempt in range(VERIFY_ATTEMPTS):
+            try:
+                response = await client.get(url, timeout=20.0, follow_redirects=True)
+            except httpx.HTTPError:
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                except ValueError:
+                    return None
+                items = data.get("items") if isinstance(data, dict) else None
+                if not isinstance(items, list) or not items:
+                    return None
+                head = items[0]
+                if not isinstance(head, dict):
+                    return None
+                total = head.get("TotalJobsCount")
+                if isinstance(total, int):
+                    return total
+                jobs = head.get("requisitionList")
+                return len(jobs) if isinstance(jobs, list) else 0
+            if response.status_code in (403, 429, 500, 502, 503, 504):
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+    return _UNREACHABLE
+
+
 async def _verify_ultipro(
     client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
 ) -> int | None:
@@ -1394,6 +1789,8 @@ async def verify_board(
         return await _verify_ultipro(client, board, sem)
     if board.connector_id == "ats.bamboohr":
         return await _verify_bamboohr(client, board, sem)
+    if board.connector_id == "ats.oracle_recruiting":
+        return await _verify_oracle(client, board, sem)
     template = API_TEMPLATES.get(board.connector_id)
     async with sem:
         await asyncio.sleep(0.05)
@@ -1598,7 +1995,7 @@ def _load_candidates() -> dict[Board, int]:
     known = (
         {connector for _host, connector in SEED_ATS_HOSTS}
         | set(SUBDOMAIN_ATS)
-        | {"ats.ultipro"}
+        | {"ats.ultipro", "ats.oracle_recruiting"}
     )
     boards: dict[Board, int] = {}
     for seed in seeds if isinstance(seeds, list) else []:
@@ -1611,6 +2008,13 @@ def _load_candidates() -> dict[Board, int]:
             continue
         if connector_id == "ats.ultipro":
             board = _ultipro_board(url)
+            if board is not None:
+                boards[board] = 1
+            continue
+        if connector_id == "ats.oracle_recruiting":
+            # Site codes live in the path, so the fixed-host reading below
+            # would collapse every Oracle row onto one bogus tenant.
+            board = _oracle_board(url)
             if board is not None:
                 boards[board] = 1
             continue
@@ -1772,6 +2176,32 @@ async def main() -> None:
         default=12,
         help="10,000-row CDX chunks to walk for UKG Pro/UltiPro (0 disables)",
     )
+    parser.add_argument(
+        "--bucket-sweep",
+        default="",
+        help=(
+            "comma-separated subdomain ATSs to enumerate one tenant initial at a "
+            "time, e.g. ats.bamboohr (no pagination, so it cannot stall)"
+        ),
+    )
+    parser.add_argument(
+        "--oracle-chunks",
+        type=int,
+        default=0,
+        help=(
+            "10,000-row CDX chunks to walk across Oracle's HCM pods "
+            "(0 disables); each pod keeps its own resume key"
+        ),
+    )
+    parser.add_argument(
+        "--bucket-budget-s",
+        type=float,
+        default=BUCKET_BUDGET_S,
+        help=(
+            "seconds a bucket sweep may spend probing the archive before it "
+            "stops and writes what it has (default: %(default)s)"
+        ),
+    )
     args = parser.parse_args()
     if args.refresh and args.incremental:
         parser.error("--refresh and --incremental are mutually exclusive")
@@ -1803,6 +2233,8 @@ async def main() -> None:
                 or args.icims_chunks > 0
                 or args.bamboohr_chunks > 0
                 or args.ultipro_chunks > 0
+                or bool(args.bucket_sweep)
+                or args.oracle_chunks > 0
             ):
                 _log("preflight_start")
                 reachable = 0
@@ -1850,13 +2282,14 @@ async def main() -> None:
                 _log("fixed_skipped", reason="--skip-fixed")
                 fixed: dict[Board, int] = {}
             else:
-                fixed = await harvest_all(client, args.resume)
+                fixed = await harvest_all(client)
             _log("fixed_done", candidates=len(fixed), by_connector=_by_connector(fixed))
             subdomains: dict[Board, int] = {}
             for connector_id, chunks in (
                 ("ats.workday", args.workday_chunks),
                 ("ats.icims", args.icims_chunks),
                 ("ats.bamboohr", args.bamboohr_chunks),
+                ("ats.oracle_recruiting", args.oracle_chunks),
             ):
                 found: dict[Board, int] = {}
                 if connector_id == "ats.icims" and not args.no_ct:
@@ -1870,6 +2303,17 @@ async def main() -> None:
                     )
                     _log("subdomain_candidates", connector=connector_id, candidates=len(found))
                 subdomains.update(found)
+            for swept_id in (item.strip() for item in args.bucket_sweep.split(",")):
+                if not swept_id:
+                    continue
+                if swept_id not in SUBDOMAIN_ATS:
+                    _log("bucket_sweep_skipped", connector=swept_id, reason="not a subdomain ATS")
+                    continue
+                swept = await harvest_initial_buckets(
+                    client, swept_id, args.resume, args.bucket_budget_s
+                )
+                _log("bucket_sweep_candidates", connector=swept_id, candidates=len(swept))
+                subdomains.update(swept)
             if args.ultipro_chunks > 0:
                 ultipro = await harvest_ultipro(client, args.ultipro_chunks, args.resume)
                 _log("subdomain_candidates", connector="ats.ultipro", candidates=len(ultipro))

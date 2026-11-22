@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import pytest
+import scripts.build_seed as build_seed
 from scripts.build_seed import (
+    SEED_ATS_HOSTS,
+    SUBDOMAIN_ATS,
     Board,
     _chunk_urls,
     _interleave,
@@ -245,6 +255,27 @@ def test_locale_less_workday_boards_do_not_collide_on_one_site() -> None:
     assert first.dedupe_key == localised.dedupe_key
 
 
+def test_workday_index_query_excludes_urls_that_cannot_name_a_board() -> None:
+    """The walk's density depends on these clauses staying in the query."""
+
+    filters = SUBDOMAIN_ATS["ats.workday"]["filters"]
+    joined = " ".join(filters)
+
+    assert r"\?" in joined, "query strings are crawl noise"
+    assert "job/" in joined
+    assert ".well-known" in joined
+
+
+def test_a_query_string_does_not_change_a_board() -> None:
+    plain = _subdomain_board("ats.workday", "https://acme.wd1.myworkdayjobs.com/Acme")
+    noisy = _subdomain_board(
+        "ats.workday", "https://acme.wd1.myworkdayjobs.com/Acme?utm_source=x&page=2"
+    )
+
+    assert plain is not None and noisy is not None
+    assert plain.dedupe_key == noisy.dedupe_key
+
+
 def test_workday_accepts_a_locale_less_career_site() -> None:
     """``/{site}`` is a real Workday board, and only one of its URL forms."""
 
@@ -330,3 +361,173 @@ def test_ultipro_platform_and_non_board_urls_are_not_boards() -> None:
         "https://recruiting.ultipro.com/ACME01/JobBoard/not-a-board-id",
     ):
         assert _ultipro_board(url) is None, url
+
+
+def test_oracle_board_is_the_site_not_the_locale() -> None:
+    """One Oracle tenant host can publish several sites; each is a board."""
+
+    english = build_seed._oracle_board(
+        "https://cbcz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/requisitions"
+    )
+    french = build_seed._oracle_board(
+        "https://cbcz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/fr/sites/CX"
+    )
+    campus = build_seed._oracle_board(
+        "https://cbcz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1"
+    )
+
+    assert english is not None and french is not None and campus is not None
+    assert english.url.startswith("https://cbcz.fa.us2.oraclecloud.com/hcmUI/")
+    assert english.dedupe_key == french.dedupe_key, "a locale mirrors the same site"
+    assert english.dedupe_key != campus.dedupe_key, "another site is another board"
+    assert english.tenant_key == "cbcz.fa.us2.oraclecloud.com|CX"
+
+
+def test_oracle_boards_are_walked_through_the_resumable_pod_walker() -> None:
+    """Each Oracle pod is a root with its own resume key, not one big query."""
+
+    cfg = SUBDOMAIN_ATS["ats.oracle_recruiting"]
+    url = (
+        "https://cbcz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX"
+    )
+
+    assert set(cfg["roots"]) == set(build_seed.ORACLE_PODS)
+    assert build_seed._subdomain_board("ats.oracle_recruiting", url) == build_seed._oracle_board(
+        url
+    )
+
+
+def test_oracle_needs_a_pod_host_and_a_candidate_experience_path() -> None:
+    for url in (
+        "https://fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX",
+        "https://cbcz.fa.us2.oraclecloud.com/hcmRestApi/resources/latest/x",
+        "https://acme.example.com/hcmUI/CandidateExperience/en/sites/CX",
+        "https://cbcz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/",
+    ):
+        assert build_seed._oracle_board(url) is None, url
+
+
+def test_bamboo_index_query_drops_job_pages_to_name_more_tenants() -> None:
+    """A chunk should name tenant roots, not one tenant's job pages."""
+
+    filters = SUBDOMAIN_ATS["ats.bamboohr"]["filters"]
+    joined = " ".join(filters)
+
+    assert "www" in joined, "BambooHR's own marketing site is not a customer board"
+    assert r"/[a-z]{2,}/" in joined, "deep paths spend a whole chunk on one tenant"
+
+
+class _OfflineThenJson:
+    """Stub CDX client: answer the first ``failures`` requests with an error."""
+
+    def __init__(self, failures: int, body: str, status: int = 503) -> None:
+        self.failures = failures
+        self.body = body
+        self.status = status
+        self.queries: list[str] = []
+
+    async def get(self, url: str, timeout: float | None = None) -> httpx.Response:
+        self.queries.append(url)
+        if self.failures:
+            self.failures -= 1
+            return httpx.Response(self.status, text="<html>offline</html>")
+        return httpx.Response(200, text=self.body)
+
+
+def _clauses(query: str) -> list[str]:
+    """The CDX ``filter`` clauses a request was built with."""
+
+    return parse_qs(urlsplit(query).query).get("filter", [])
+
+
+def test_fixed_host_harvest_walks_slices_that_never_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resumed run must retry the slices the gateway never answered."""
+
+    host = SEED_ATS_HOSTS[0][0]
+    every = [[h, b] for h, _connector in SEED_ATS_HOSTS for b in build_seed.BUCKETS]
+    kept = [pair for pair in every if pair != [host, "q"]]
+    (tmp_path / "cache.json").write_text(
+        json.dumps({"completed": kept, "results": {}}), encoding="utf-8"
+    )
+    monkeypatch.setattr(build_seed, "CACHE_PATH", tmp_path / "cache.json")
+    monkeypatch.setattr(build_seed, "LOG_PATH", tmp_path / "log.jsonl")
+    monkeypatch.setattr(build_seed, "REQUEST_GAP_S", 0.0)
+    client = _OfflineThenJson(
+        failures=0, body='[["original"], ["https://boards.greenhouse.io/acme"]]'
+    )
+
+    boards = asyncio.run(build_seed.harvest_all(client))  # type: ignore[arg-type]
+
+    assert len(client.queries) == 1, "only the unanswered slice is queried"
+    assert [board.tenant for board in boards] == ["acme"]
+
+
+def test_bucket_sweep_spends_no_request_once_its_budget_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep must stop on its clock even when every bucket is unanswered."""
+
+    monkeypatch.setattr(build_seed, "SUBDOMAIN_CACHE_PATH", tmp_path / "sub.json")
+    monkeypatch.setattr(build_seed, "LOG_PATH", tmp_path / "log.jsonl")
+    client = _OfflineThenJson(failures=0, body="[]")
+
+    boards = asyncio.run(
+        build_seed.harvest_initial_buckets(client, "ats.bamboohr", False, 0.0)  # type: ignore[arg-type]
+    )
+
+    assert boards == {}
+    assert client.queries == []
+
+
+def test_ultipro_walk_retries_a_throttled_chunk_instead_of_ending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One bad gateway window used to throw away the whole paginated walk."""
+
+    monkeypatch.setattr(build_seed, "SUBDOMAIN_CACHE_PATH", tmp_path / "sub.json")
+    monkeypatch.setattr(build_seed, "LOG_PATH", tmp_path / "log.jsonl")
+    monkeypatch.setattr(build_seed, "REQUEST_GAP_S", 0.0)
+    monkeypatch.setattr(build_seed, "THROTTLE_BACKOFF_S", (0.0, 0.0, 0.0, 0.0))
+    client = _OfflineThenJson(
+        failures=build_seed.HARVEST_ATTEMPTS,
+        body='[["original"], ["https://recruiting.ultipro.com/ACME01/JobBoard/'
+        '6B442184-52A5-4635-8DB5-5AA4BED2A563/OpportunityDetail"]]',
+    )
+
+    boards = asyncio.run(build_seed.harvest_ultipro(client, 2, False))  # type: ignore[arg-type]
+
+    assert len(boards) == 1
+    assert len(client.queries) == build_seed.HARVEST_ATTEMPTS + 1
+    logged = (tmp_path / "log.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line)["event"] for line in logged]
+    assert "chunk_unanswered" in events
+    assert "chunk_retrying" in events
+
+
+def test_bucket_sweep_tries_the_dense_clause_before_the_plain_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bucket asks for tenant roots first, and still lands on the plain scan."""
+
+    monkeypatch.setattr(build_seed, "SUBDOMAIN_CACHE_PATH", tmp_path / "sub.json")
+    monkeypatch.setattr(build_seed, "LOG_PATH", tmp_path / "log.jsonl")
+    monkeypatch.setattr(build_seed, "REQUEST_GAP_S", 0.0)
+    monkeypatch.setattr(build_seed, "THROTTLE_BACKOFF_S", (0.0, 0.0, 0.0, 0.0))
+    # The sweep gives each shape two attempts, so the first bucket's dense
+    # query gives up after two rows and the third request is its fallback.
+    client = _OfflineThenJson(failures=2, body='[["original"]]')
+
+    boards = asyncio.run(
+        build_seed.harvest_initial_buckets(client, "ats.bamboohr", False)  # type: ignore[arg-type]
+    )
+
+    assert boards == {}
+    dense = _clauses(client.queries[0])
+    plain = _clauses(client.queries[2])
+    assert len(dense) == 1 + len(SUBDOMAIN_ATS["ats.bamboohr"]["filters"])
+    assert len(plain) == 1
+    assert dense[0] == plain[0], "the fallback must ask about the same bucket"
+    state = json.loads((tmp_path / "sub.json").read_text(encoding="utf-8"))
+    assert len(state["ats.bamboohr|buckets"]["buckets"]) == len(build_seed.BUCKETS)
