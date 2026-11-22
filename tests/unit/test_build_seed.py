@@ -18,6 +18,7 @@ from scripts.build_seed import (
     _interleave,
     _merge,
     _new_only,
+    _paylocity_board,
     _row_count,
     _subdomain_board,
     _ultipro_board,
@@ -380,7 +381,21 @@ def test_oracle_board_is_the_site_not_the_locale() -> None:
     assert english.url.startswith("https://cbcz.fa.us2.oraclecloud.com/hcmUI/")
     assert english.dedupe_key == french.dedupe_key, "a locale mirrors the same site"
     assert english.dedupe_key != campus.dedupe_key, "another site is another board"
-    assert english.tenant_key == "cbcz.fa.us2.oraclecloud.com|CX"
+    assert english.tenant_key == "cbcz.fa.us2.oraclecloud.com|cx"
+
+
+def test_oracle_site_codes_differing_only_in_case_are_one_board() -> None:
+    """The index spells one site several ways; that must not seed it twice."""
+
+    upper = build_seed._oracle_board(
+        "https://eccs.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/nl/sites/WerkenBij"
+    )
+    lower = build_seed._oracle_board(
+        "https://eccs.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/nl/sites/werkenbij"
+    )
+
+    assert upper is not None and lower is not None
+    assert upper.dedupe_key == lower.dedupe_key
 
 
 def test_oracle_boards_are_walked_through_the_resumable_pod_walker() -> None:
@@ -496,7 +511,9 @@ def test_ultipro_walk_retries_a_throttled_chunk_instead_of_ending(
         '6B442184-52A5-4635-8DB5-5AA4BED2A563/OpportunityDetail"]]',
     )
 
-    boards = asyncio.run(build_seed.harvest_ultipro(client, 2, False))  # type: ignore[arg-type]
+    boards = asyncio.run(
+        build_seed.harvest_path_boards(client, "ats.ultipro", 2, False)  # type: ignore[arg-type]
+    )
 
     assert len(boards) == 1
     assert len(client.queries) == build_seed.HARVEST_ATTEMPTS + 1
@@ -531,3 +548,49 @@ def test_bucket_sweep_tries_the_dense_clause_before_the_plain_one(
     assert dense[0] == plain[0], "the fallback must ask about the same bucket"
     state = json.loads((tmp_path / "sub.json").read_text(encoding="utf-8"))
     assert len(state["ats.bamboohr|buckets"]["buckets"]) == len(build_seed.BUCKETS)
+
+
+def test_paylocity_board_drops_the_decorative_slug() -> None:
+    # Measured: one company id is indexed under two different slugs, so both
+    # rows have to fold onto the same board.
+    first = _paylocity_board(
+        "https://recruiting.paylocity.com/Recruiting/Jobs/All/"
+        "b280c13f-ea5c-402a-9352-398ddb2c0119/LayerCake"
+    )
+    second = _paylocity_board(
+        "https://recruiting.paylocity.com/recruiting/jobs/all/"
+        "B280C13F-EA5C-402A-9352-398DDB2C0119/SKYNET-INNOVATIONS"
+    )
+
+    assert first == second == Board(
+        "ats.paylocity",
+        "b280c13f-ea5c-402a-9352-398ddb2c0119",
+        "https://recruiting.paylocity.com/Recruiting/Jobs/All/"
+        "b280c13f-ea5c-402a-9352-398ddb2c0119",
+        tenant_key="b280c13f-ea5c-402a-9352-398ddb2c0119",
+    )
+
+
+def test_paylocity_board_needs_a_company_id() -> None:
+    assert _paylocity_board("https://recruiting.paylocity.com/Recruiting/Jobs/All") is None
+    assert (
+        _paylocity_board("https://recruiting.paylocity.com/Recruiting/Jobs/Details/1139001")
+        is None
+    )
+    assert (
+        _paylocity_board(
+            "https://example.com/Recruiting/Jobs/All/b280c13f-ea5c-402a-9352-398ddb2c0119"
+        )
+        is None
+    )
+
+
+def test_jazzhr_board_is_the_tenant_apply_page() -> None:
+    assert _subdomain_board(
+        "ats.jazzhr", "https://acme.applytojob.com/apply/jobs/details/AbC123"
+    ) == Board("ats.jazzhr", "acme", "https://acme.applytojob.com/apply", tenant_key="acme")
+
+
+def test_jazzhr_board_rejects_the_platform_host() -> None:
+    assert _subdomain_board("ats.jazzhr", "https://www.jazzhr.com/") is None
+    assert _subdomain_board("ats.jazzhr", "https://applytojob.com/apply") is None

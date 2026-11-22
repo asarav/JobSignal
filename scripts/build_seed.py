@@ -71,6 +71,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,6 +87,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.plugins.ats.icims import _job_links  # noqa: E402
+from app.plugins.ats.jazzhr import _DETAIL_RE as JAZZHR_DETAIL_RE  # noqa: E402
+from app.plugins.ats.paylocity import _DETAIL_RE as PAYLOCITY_DETAIL_RE  # noqa: E402
 from app.plugins.discovery.web_index import DEFAULT_ATS_HOSTS, _tenant_of  # noqa: E402
 
 SEEDS_PATH = ROOT / "app" / "plugins" / "discovery" / "seeds" / "ats_tenants.json"
@@ -111,6 +114,17 @@ CDX_LIMIT = 10000
 REQUEST_GAP_S = 2.0
 HARVEST_ATTEMPTS = 4
 VERIFY_ATTEMPTS = 3
+#: How many verifications are in flight per launch; the time budget is
+#: re-checked between batches.
+VERIFY_BATCH = 256
+
+#: Measured per-host request pacing.  Paylocity answers 20/20 at one request a
+#: second, 5/20 at two and 0/20 at four, with a ``Retry-After`` on every 429 --
+#: the budget is per client IP, so concurrency cannot buy anything and every
+#: extra request just spends a candidate on a refusal instead.
+HOST_PACE_S: dict[str, float] = {
+    "recruiting.paylocity.com": 1.05,
+}
 VERIFY_CONCURRENCY = min(32, max(8, (os.cpu_count() or 4) * 4))
 #: Index queries in flight at once.  The gateway rejects bursts, so this stays
 #: small enough that the per-request backoff can absorb a throttled request.
@@ -227,6 +241,21 @@ SEED_ATS_HOSTS: tuple[tuple[str, str], ...] = (
 #: ``filters`` keep board roots only: a tenant can own tens of thousands of
 #: asset, job-detail and API URLs, and every one of them used to crowd a chunk
 #: that could have named a hundred new employers instead.
+class _PathCfg(TypedDict):
+    """A path-addressed ATS: one host, the board's identity inside the path."""
+
+    domain: str
+    filter: str
+    parse: Callable[[str], Board | None]
+
+
+class _PrefixCfg(TypedDict):
+    """A path-sliced ATS: one host, every board under a known URL prefix."""
+
+    slices: tuple[str, ...]
+    parse: Callable[[str], Board | None]
+
+
 class _SubdomainCfg(TypedDict):
     domain: str
     #: Query roots, walked one chunk at a time in turn.  A shard-specific root
@@ -296,6 +325,17 @@ SUBDOMAIN_ATS: dict[str, _SubdomainCfg] = {
             # www is iCIMS' own marketing site, not a customer board.
             "!original:.*://www[0-9]*\\.icims\\.com.*",
             "!original:.*/jobs/.*",
+        ),
+    },
+    "ats.jazzhr": {
+        "domain": "applytojob.com",
+        "roots": ("applytojob.com",),
+        "filters": (
+            # A board root is ``{tenant}.applytojob.com/apply``; every posting
+            # has its own detail page under it, and those rows are what spend a
+            # 10,000-row chunk on a handful of employers.
+            "!original:.*/apply/jobs/details/.*",
+            "!original:.*/apply/[A-Za-z0-9]{6,}/.*",
         ),
     },
     "ats.oracle_recruiting": {
@@ -863,6 +903,12 @@ def _subdomain_board(connector_id: str, url: str) -> Board | None:
         # The tenant key keeps the company name from collapsing to "Careers"
         # (the last path segment) and is what the connector reads.
         return Board(connector_id, sub, f"https://{host}/careers", tenant_key=sub)
+    if connector_id == "ats.jazzhr":
+        if len(labels) != 1 or "." in sub:
+            return None
+        if sub in RESERVED_SUBDOMAINS or not TENANT_RE.match(sub):
+            return None
+        return Board(connector_id, sub, f"https://{host}/apply", tenant_key=sub)
     return None
 
 
@@ -882,6 +928,34 @@ def _ultipro_board(url: str) -> Board | None:
         tenant,
         f"https://{host}/{tenant}/JobBoard/{board_id}",
         tenant_key=board_id,
+    )
+
+
+PAYLOCITY_PATH_RE = re.compile(
+    r"^/recruiting/jobs/all/(?P<company>"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)",
+    re.IGNORECASE,
+)
+
+
+def _paylocity_board(url: str) -> Board | None:
+    """A Paylocity board from one indexed URL, or ``None`` for site chrome.
+
+    The company id is the board; the readable slug after it is decorative and
+    one employer is indexed under several slugs, so the slug is dropped.
+    """
+    parts = urlsplit(url)
+    if parts.netloc.lower() != "recruiting.paylocity.com":
+        return None
+    match = PAYLOCITY_PATH_RE.match(parts.path.lower())
+    if match is None:
+        return None
+    company = match.group("company")
+    return Board(
+        "ats.paylocity",
+        company,
+        f"https://recruiting.paylocity.com/Recruiting/Jobs/All/{company}",
+        tenant_key=company,
     )
 
 
@@ -1087,7 +1161,10 @@ def _oracle_board(url: str) -> Board | None:
         "ats.oracle_recruiting",
         labels[0],
         f"https://{host}/hcmUI/CandidateExperience/{lang}/sites/{site}",
-        tenant_key=f"{host}|{site}",
+        # The same site is indexed under several spellings (``WerkenBij`` and
+        # ``werkenbij``), so identity folds the site code's case: otherwise one
+        # board is seeded twice with URLs that differ only in case.
+        tenant_key=f"{host}|{site.lower()}",
     )
 
 
@@ -1097,10 +1174,40 @@ def _oracle_site(board: Board) -> str | None:
     return match.group("site") if match else None
 
 
-async def harvest_ultipro(
-    client: httpx.AsyncClient, chunks: int, resume: bool
+#: Path-addressed ATSs: one host, the board's identity inside the path.
+PATH_BOARDS: dict[str, _PathCfg] = {
+    "ats.ultipro": {
+        "domain": ULTIPRO_DOMAIN,
+        "filter": "original:.*/JobBoard/.*",
+        "parse": _ultipro_board,
+    },
+}
+
+#: One prefix query per company-id initial, in each spelling of the path a
+#: site uses (the index has both ``/Recruiting/Jobs/All/`` and
+#: ``/recruiting/jobs/all/`` and prefix matching is case-sensitive).
+PAYLOCITY_SLICES = tuple(
+    f"recruiting.paylocity.com{path}/{initial}"
+    for path in ("/Recruiting/Jobs/All", "/recruiting/jobs/all")
+    for initial in "0123456789abcdef"
+)
+
+PREFIX_BOARDS: dict[str, _PrefixCfg] = {
+    "ats.paylocity": {"slices": PAYLOCITY_SLICES, "parse": _paylocity_board},
+}
+
+
+async def harvest_path_boards(
+    client: httpx.AsyncClient, connector_id: str, chunks: int, resume: bool
 ) -> dict[Board, int]:
-    """Walk UKG Pro's path-based boards in resumable 10,000-row chunks."""
+    """Walk a path-addressed ATS in resumable 10,000-row chunks.
+
+    UKG Pro (``/JobBoard/{id}``) and Paylocity (``/Recruiting/Jobs/All/{id}``)
+    both address the board inside the path on one host, so a single walker
+    serves both: it pages the host behind a mid-path filter and reads each row
+    with that connector's own parser.
+    """
+    cfg = PATH_BOARDS[connector_id]
     cache: dict[str, object] = {}
     if SUBDOMAIN_CACHE_PATH.exists():
         try:
@@ -1109,7 +1216,7 @@ async def harvest_ultipro(
                 cache = raw
         except (OSError, ValueError):
             cache = {}
-    stored = cache.get("ats.ultipro")
+    stored = cache.get(connector_id)
     state: dict[str, object] = stored if isinstance(stored, dict) else {}
 
     boards: dict[Board, int] = defaultdict(int)
@@ -1123,45 +1230,45 @@ async def harvest_ultipro(
     stored_chunks = state.get("chunks", 0)
     done = stored_chunks if isinstance(stored_chunks, int) else 0
     if resume and done and (not resume_key or done >= chunks):
-        _log("resume_cached", connector="ats.ultipro", chunks=done, candidates=len(boards))
+        _log("resume_cached", connector=connector_id, chunks=done, candidates=len(boards))
         return dict(boards)
 
     started = time.monotonic()
     idle_since: float | None = None
     while done < chunks:
         params: list[tuple[str, str]] = [
-            ("url", ULTIPRO_DOMAIN),
+            ("url", cfg["domain"]),
             ("matchType", "domain"),
             ("fl", "original"),
             ("collapse", "urlkey"),
             ("limit", str(CDX_LIMIT)),
             ("output", "json"),
             ("showResumeKey", "true"),
-            ("filter", "original:.*/JobBoard/.*"),
+            ("filter", cfg["filter"]),
         ]
         if resume_key:
             params.append(("resumeKey", resume_key))
         _log(
             "chunk_start",
-            connector="ats.ultipro",
-            root=ULTIPRO_DOMAIN,
+            connector=connector_id,
+            root=cfg["domain"],
             chunk=f"{done + 1}/{chunks}",
             has_resume_key=bool(resume_key),
         )
         await asyncio.sleep(REQUEST_GAP_S)
-        response = await _cdx_get(client, params, purpose=f"ats.ultipro {ULTIPRO_DOMAIN}")
+        response = await _cdx_get(client, params, purpose=f"{connector_id} {cfg['domain']}")
         urls: list[str] = []
         next_resume_key: str | None = None
         parsed = False
         if response is None:
-            _log("chunk_unanswered", connector="ats.ultipro", root=ULTIPRO_DOMAIN)
+            _log("chunk_unanswered", connector="ats.ultipro", root=cfg["domain"])
         else:
             urls, next_resume_key, parsed = _chunk_urls(response.text)
             if not parsed:
                 _log(
                     "chunk_unparsed",
-                    connector="ats.ultipro",
-                    root=ULTIPRO_DOMAIN,
+                    connector=connector_id,
+                    root=cfg["domain"],
                     bytes=len(response.content),
                     body=_preview(response.text),
                 )
@@ -1177,7 +1284,7 @@ async def harvest_ultipro(
                 break
             _log(
                 "chunk_retrying",
-                connector="ats.ultipro",
+                connector=connector_id,
                 chunks=done,
                 idle_s=round(idle),
                 budget_s=CDX_IDLE_BUDGET_S,
@@ -1187,11 +1294,11 @@ async def harvest_ultipro(
         resume_key = next_resume_key
         before = len(boards)
         for url in urls:
-            candidate = _ultipro_board(url)
+            candidate = cfg["parse"](url)
             if candidate is not None:
                 boards[candidate] += 1
         done += 1
-        cache["ats.ultipro"] = {
+        cache[connector_id] = {
             "chunks": done,
             "key": resume_key,
             "boards": {
@@ -1202,8 +1309,8 @@ async def harvest_ultipro(
         SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
         _log(
             "chunk_done",
-            connector="ats.ultipro",
-            root=ULTIPRO_DOMAIN,
+            connector=connector_id,
+            root=cfg["domain"],
             chunk=f"{done}/{chunks}",
             rows=len(urls),
             added=len(boards) - before,
@@ -1213,6 +1320,127 @@ async def harvest_ultipro(
         )
         if not resume_key:
             _log("roots_exhausted", connector="ats.ultipro", chunks=done)
+            break
+    return dict(boards)
+
+
+async def harvest_prefix_boards(
+    client: httpx.AsyncClient, connector_id: str, budget: int, resume: bool
+) -> dict[Board, int]:
+    """Walk a shared-host ATS through URL-prefix slices.
+
+    Measured while the archive is throttling: a filtered *domain* scan -- even
+    one narrowed to a single tenant initial -- times out, while a prefix query
+    answers in seconds.  Paylocity addresses every board inside a path, so its
+    board space is covered by slicing that path instead: one query per company
+    id initial, and ``budget`` requests in total.
+    """
+    cfg = PREFIX_BOARDS[connector_id]
+    slices = cfg["slices"]
+    parse = cfg["parse"]
+    cache: dict[str, object] = {}
+    if SUBDOMAIN_CACHE_PATH.exists():
+        try:
+            raw = json.loads(SUBDOMAIN_CACHE_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cache = raw
+        except (OSError, ValueError):
+            cache = {}
+    slot = f"{connector_id}|prefix"
+    stored = cache.get(slot)
+    state: dict[str, object] = stored if isinstance(stored, dict) else {}
+
+    boards: dict[Board, int] = defaultdict(int)
+    for key, count in (state.get("boards") or {}).items():  # type: ignore[union-attr]
+        parts = str(key).split("|", 3)
+        if len(parts) == 4:
+            boards[Board(parts[0], parts[1], parts[2], parts[3] or None)] += int(count)
+    done = {str(item) for item in (state.get("slices") or [])}  # type: ignore[union-attr]
+    keys = {
+        str(name): str(value)
+        for name, value in (state.get("keys") or {}).items()  # type: ignore[union-attr]
+        if value
+    }
+    stored_spent = state.get("requests", 0)
+    spent = stored_spent if isinstance(stored_spent, int) else 0
+    if resume and len(done) >= len(slices):
+        _log("resume_cached", connector=connector_id, slices=len(done), candidates=len(boards))
+        return dict(boards)
+
+    started = time.monotonic()
+    for prefix in slices:
+        if prefix in done:
+            continue
+        while spent < budget:
+            params: list[tuple[str, str]] = [
+                ("url", prefix),
+                ("matchType", "prefix"),
+                ("fl", "original"),
+                ("collapse", "urlkey"),
+                ("limit", str(CDX_LIMIT)),
+                ("output", "json"),
+                ("showResumeKey", "true"),
+            ]
+            if keys.get(prefix):
+                params.append(("resumeKey", keys[prefix]))
+            await asyncio.sleep(REQUEST_GAP_S)
+            response = await _cdx_get(client, params, purpose=f"{connector_id} {prefix}")
+            spent += 1
+            if response is None:
+                _log("slice_unanswered", connector=connector_id, prefix=prefix)
+                break
+            urls, next_key, parsed = _chunk_urls(response.text)
+            if not parsed:
+                _log(
+                    "slice_unparsed",
+                    connector=connector_id,
+                    prefix=prefix,
+                    bytes=len(response.content),
+                    body=_preview(response.text),
+                )
+                break
+            before = len(boards)
+            for url in urls:
+                candidate = parse(url)
+                if candidate is not None:
+                    boards[candidate] += 1
+            if next_key:
+                keys[prefix] = next_key
+            else:
+                done.add(prefix)
+                keys.pop(prefix, None)
+            cache[slot] = {
+                "slices": sorted(done),
+                "keys": keys,
+                "requests": spent,
+                "boards": {
+                    f"{b.connector_id}|{b.tenant}|{b.url}|{b.tenant_key or ''}": n
+                    for b, n in boards.items()
+                },
+            }
+            SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+            _log(
+                "slice_done",
+                connector=connector_id,
+                prefix=prefix,
+                rows=len(urls),
+                added=len(boards) - before,
+                candidates=len(boards),
+                ended=not next_key,
+                requests=spent,
+                budget=budget,
+                elapsed_s=round(time.monotonic() - started),
+            )
+            if not next_key:
+                break
+        if spent >= budget:
+            _log(
+                "prefix_budget_exhausted",
+                connector=connector_id,
+                slices=len(done),
+                requests=spent,
+                budget=budget,
+            )
             break
     return dict(boards)
 
@@ -1672,6 +1900,106 @@ async def _verify_bamboohr(
     return _UNREACHABLE
 
 
+async def _verify_jazzhr(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Live JazzHR board: its own job list, served by the tenant's host.
+
+    An unknown tenant is not a 404: JazzHR redirects it to
+    ``www.jazzhr.com`` and answers **200 with the marketing site** (measured),
+    so the answer has to stay on the tenant's own host to count.
+    """
+    host = urlsplit(board.url).netloc.lower()
+    async with sem:
+        await asyncio.sleep(0.05)
+        for attempt in range(VERIFY_ATTEMPTS):
+            try:
+                response = await client.get(
+                    f"https://{host}/apply/jobs", timeout=20.0, follow_redirects=True
+                )
+            except httpx.HTTPError:
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if response.status_code == 200:
+                if urlsplit(str(response.url)).netloc.lower() != host:
+                    return None
+                return len(set(JAZZHR_DETAIL_RE.findall(response.text)))
+            if response.status_code in (429, 500, 502, 503, 504):
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+    return _UNREACHABLE
+
+
+_PACE_LOCK = asyncio.Lock()
+_PACE_NEXT: dict[str, float] = {}
+
+
+async def _pace(host: str) -> None:
+    """Wait for this host's next request slot.
+
+    The slot is reserved before sleeping instead of holding the lock through
+    the wait, so concurrent verifiers queue up at the measured rate instead of
+    racing into the rate limiter.
+    """
+    gap = HOST_PACE_S.get(host)
+    if not gap:
+        return
+    async with _PACE_LOCK:
+        slot = max(time.monotonic(), _PACE_NEXT.get(host, 0.0))
+        _PACE_NEXT[host] = slot + gap
+    delay = slot - time.monotonic()
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+def _retry_after(response: httpx.Response, default: float = 5.0) -> float:
+    """The seconds a 429 asks us to wait."""
+    try:
+        return max(0.5, float(response.headers.get("retry-after", "")))
+    except ValueError:
+        return default
+
+
+async def _verify_paylocity(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Live Paylocity board: the company id's own job list.
+
+    A retired company id still renders an empty page, so the id has to appear
+    in the answer's own URL: that is what separates "this board has no open
+    roles today" from "this company is gone".
+    """
+    company = (board.tenant_key or board.tenant).lower()
+    host = "recruiting.paylocity.com"
+    async with sem:
+        for attempt in range(VERIFY_ATTEMPTS):
+            await _pace(host)
+            try:
+                response = await client.get(board.url, timeout=20.0, follow_redirects=True)
+            except httpx.HTTPError:
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if response.status_code == 200:
+                if company not in str(response.url).lower():
+                    return None
+                return len(set(PAYLOCITY_DETAIL_RE.findall(response.text)))
+            if response.status_code == 429:
+                # Honour the host's own countdown instead of guessing.
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(_retry_after(response))
+                continue
+            if response.status_code in (500, 502, 503, 504):
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+    return _UNREACHABLE
+
+
 async def _verify_oracle(
     client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
 ) -> int | None:
@@ -1791,6 +2119,10 @@ async def verify_board(
         return await _verify_bamboohr(client, board, sem)
     if board.connector_id == "ats.oracle_recruiting":
         return await _verify_oracle(client, board, sem)
+    if board.connector_id == "ats.jazzhr":
+        return await _verify_jazzhr(client, board, sem)
+    if board.connector_id == "ats.paylocity":
+        return await _verify_paylocity(client, board, sem)
     template = API_TEMPLATES.get(board.connector_id)
     async with sem:
         await asyncio.sleep(0.05)
@@ -1826,13 +2158,15 @@ async def verify_board(
 
 
 async def verify_all(
-    client: httpx.AsyncClient, boards: dict[Board, int]
+    client: httpx.AsyncClient, boards: dict[Board, int], budget_s: float = 0.0
 ) -> tuple[list[tuple[Board, int]], dict[str, int]]:
-    """Verify every candidate.
+    """Verify candidates, strongest first, for at most ``budget_s`` seconds.
 
     Returns the ``(board, posting count)`` pairs that are live, plus one
     outcome per settled board (posting count, or ``-1`` for a board the ATS
-    does not know) so the next run can skip it.
+    does not know) so the next run can skip it.  A board the time budget
+    leaves unvisited is settled neither way: it stays a candidate for the next
+    run instead of being remembered as dead.
     """
     sem = asyncio.Semaphore(VERIFY_CONCURRENCY)
     verified: list[tuple[Board, int]] = []
@@ -1845,7 +2179,10 @@ async def verify_all(
 
     async def check(board: Board) -> None:
         nonlocal done
-        count = await verify_board(client, board, sem)
+        if budget_s and time.monotonic() - started >= budget_s:
+            count = _UNREACHABLE
+        else:
+            count = await verify_board(client, board, sem)
         done += 1
         if count is None:
             outcomes[_cache_key(board)] = -1
@@ -1868,7 +2205,24 @@ async def verify_all(
                 elapsed_s=round(time.monotonic() - started),
             )
 
-    await asyncio.gather(*(check(board) for board in boards))
+    # Highest-captured first: a board the archive kept meeting is likelier to
+    # still be hiring than one captured once, so a budgeted run spends its
+    # requests on the boards most likely to end up in the seed.
+    ordered = sorted(boards, key=lambda board: boards[board], reverse=True)
+    # Launch in bounded batches: creating every task at once would evaluate the
+    # time budget at the only instant it is still unspent, and a paced host
+    # would then keep the run going for hours regardless of it.
+    for start in range(0, len(ordered), VERIFY_BATCH):
+        if budget_s and time.monotonic() - started >= budget_s:
+            _log(
+                "verify_budget_exhausted",
+                visited=done,
+                deferred=len(ordered) - done,
+                budget_s=budget_s,
+                elapsed_s=round(time.monotonic() - started),
+            )
+            break
+        await asyncio.gather(*(check(board) for board in ordered[start : start + VERIFY_BATCH]))
     _log(
         "verify_done",
         total=len(boards),
@@ -1995,7 +2349,7 @@ def _load_candidates() -> dict[Board, int]:
     known = (
         {connector for _host, connector in SEED_ATS_HOSTS}
         | set(SUBDOMAIN_ATS)
-        | {"ats.ultipro", "ats.oracle_recruiting"}
+        | {"ats.ultipro", "ats.oracle_recruiting", "ats.paylocity"}
     )
     boards: dict[Board, int] = {}
     for seed in seeds if isinstance(seeds, list) else []:
@@ -2015,6 +2369,11 @@ def _load_candidates() -> dict[Board, int]:
             # Site codes live in the path, so the fixed-host reading below
             # would collapse every Oracle row onto one bogus tenant.
             board = _oracle_board(url)
+            if board is not None:
+                boards[board] = 1
+            continue
+        if connector_id == "ats.paylocity":
+            board = _paylocity_board(url)
             if board is not None:
                 boards[board] = 1
             continue
@@ -2185,6 +2544,24 @@ async def main() -> None:
         ),
     )
     parser.add_argument(
+        "--verify-budget-s",
+        type=float,
+        default=0.0,
+        help="seconds to spend verifying (0 verifies every candidate)",
+    )
+    parser.add_argument(
+        "--jazzhr-chunks",
+        type=int,
+        default=0,
+        help="10,000-row CDX chunks to walk for JazzHR (0 disables)",
+    )
+    parser.add_argument(
+        "--paylocity-chunks",
+        type=int,
+        default=0,
+        help="archive prefix queries to spend on Paylocity's board slices (0 disables)",
+    )
+    parser.add_argument(
         "--oracle-chunks",
         type=int,
         default=0,
@@ -2235,6 +2612,8 @@ async def main() -> None:
                 or args.ultipro_chunks > 0
                 or bool(args.bucket_sweep)
                 or args.oracle_chunks > 0
+                or args.jazzhr_chunks > 0
+                or args.paylocity_chunks > 0
             ):
                 _log("preflight_start")
                 reachable = 0
@@ -2290,6 +2669,7 @@ async def main() -> None:
                 ("ats.icims", args.icims_chunks),
                 ("ats.bamboohr", args.bamboohr_chunks),
                 ("ats.oracle_recruiting", args.oracle_chunks),
+                ("ats.jazzhr", args.jazzhr_chunks),
             ):
                 found: dict[Board, int] = {}
                 if connector_id == "ats.icims" and not args.no_ct:
@@ -2315,9 +2695,17 @@ async def main() -> None:
                 _log("bucket_sweep_candidates", connector=swept_id, candidates=len(swept))
                 subdomains.update(swept)
             if args.ultipro_chunks > 0:
-                ultipro = await harvest_ultipro(client, args.ultipro_chunks, args.resume)
+                ultipro = await harvest_path_boards(
+                    client, "ats.ultipro", args.ultipro_chunks, args.resume
+                )
                 _log("subdomain_candidates", connector="ats.ultipro", candidates=len(ultipro))
                 subdomains.update(ultipro)
+            if args.paylocity_chunks > 0:
+                paylocity = await harvest_prefix_boards(
+                    client, "ats.paylocity", args.paylocity_chunks, args.resume
+                )
+                _log("subdomain_candidates", connector="ats.paylocity", candidates=len(paylocity))
+                subdomains.update(paylocity)
             shipped = _load_candidates()
             candidates = _merge(shipped, fixed, subdomains)
             _log(
@@ -2340,7 +2728,7 @@ async def main() -> None:
             return
 
         _log("verify_start", candidates=len(candidates), by_connector=_by_connector(candidates))
-        verified, outcomes = await verify_all(client, candidates)
+        verified, outcomes = await verify_all(client, candidates, args.verify_budget_s)
     _checkpoint_verified(outcomes)
 
     _write(verified, args.limit, merge_existing=args.incremental)

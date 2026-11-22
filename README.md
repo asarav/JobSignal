@@ -154,8 +154,10 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   `ats.eightfold` reads the public Eightfold `apply/v2/jobs` listing and detail
   APIs, and `ats.phenom` is a configurable `/widgets` adapter (endpoint
   template plus field mapping) for Phenom tenants; both are validated live.
-  `ats.amazon` uses Amazon Jobs' public `search.json`; a thin `ats.taleo`
-  handles server-rendered Taleo career sections. Marketing wrappers (Beamery,
+  `ats.amazon` uses Amazon Jobs' public `search.json`; thin `ats.taleo`,
+  `ats.jazzhr` and `ats.paylocity` connectors handle server-rendered Taleo
+  career sections, JazzHR boards on `{tenant}.applytojob.com`, and Paylocity
+  boards addressed by company id. Marketing wrappers (Beamery,
   Radancy, Clinch, SmashFly and custom Phenom hosts) are not scraped
   individually: `ats.career_site` detects the embedded Workday/iCIMS/ORC/
   Taleo/Eightfold/Phenom URL in an iframe or apply link and delegates to that
@@ -175,14 +177,14 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   pods (a pod-scoped index query answers in 17–38 s) and rebuilds each
   `{host}/hcmUI/CandidateExperience/{lang}/sites/{site}` board from the URL.
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships 25,716 boards across nine ATSs (Greenhouse,
-  Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS and UKG
-  Pro/UltiPro), each
+  `discovery.ats_directory` ships 35,572 boards across eleven ATSs (Greenhouse,
+  Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS, Oracle
+  Recruiting Cloud, UKG Pro/UltiPro and Paylocity), each
   confirmed live through its own public ATS API and ordered largest-first by
   open postings (refreshed via `scripts/build_seed.py`), so a cold install has
   something to crawl within minutes while the web-index rotation fills in
-  long-tail companies. The seed covers those nine ATSs only; Eightfold and
-  Oracle Recruiting Cloud boards are found by live discovery.
+  long-tail companies. The seed covers those eleven ATSs only; Eightfold,
+  JazzHR and the remaining vendors are found by live discovery.
   Deleting the seed does not stop discovery.
 - **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
   every enabled provider for candidates, dedupes by canonical URL, registers

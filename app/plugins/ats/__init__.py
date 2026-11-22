@@ -16,8 +16,10 @@ from app.plugins.ats.career_site import CareerSiteConnector
 from app.plugins.ats.eightfold import EightfoldConnector
 from app.plugins.ats.greenhouse import GreenhouseConnector
 from app.plugins.ats.icims import IcmsConnector
+from app.plugins.ats.jazzhr import JazzHrConnector
 from app.plugins.ats.lever import LeverConnector
 from app.plugins.ats.oracle_recruiting import OracleRecruitingConnector
+from app.plugins.ats.paylocity import PaylocityConnector
 from app.plugins.ats.phenom import PhenomConnector
 from app.plugins.ats.smartrecruiters import SmartRecruitersConnector
 from app.plugins.ats.taleo import TaleoConnector
@@ -40,6 +42,8 @@ CONNECTOR_CLASSES = (
     UltiproConnector,
     WorkableConnector,
     BambooHrConnector,
+    JazzHrConnector,
+    PaylocityConnector,
     OracleRecruitingConnector,
     EightfoldConnector,
     PhenomConnector,
@@ -62,6 +66,8 @@ DESCRIPTIONS = {
     "ats.phenom": "Phenom widget career sites, configurable per tenant.",
     "ats.amazon": "Amazon Jobs (amazon.jobs public search JSON).",
     "ats.taleo": "Taleo career sections (taleo.net), server-rendered postings.",
+    "ats.jazzhr": "JazzHR career pages ({tenant}.applytojob.com), server-rendered.",
+    "ats.paylocity": "Paylocity job boards (recruiting.paylocity.com), addressed by company id.",
     "ats.career_site": (
         "Generic career page: routes embedded ATS wrappers, otherwise harvests job links."
     ),

@@ -78,9 +78,10 @@ source schedule are stored in the app database.
 
 ## Sources, not seeds
 
-`discovery.ats_directory` ships an offline seed list of 25,716 boards:
-Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS
-and UKG Pro (UltiPro), each confirmed live through the board's own public ATS API. It exists so a brand new install has
+`discovery.ats_directory` ships an offline seed list of 35,572 boards:
+Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS,
+Oracle Recruiting Cloud, UKG Pro (UltiPro) and Paylocity, each confirmed live
+through the board's own public ATS API. It exists so a brand new install has
 something to crawl immediately (and so tests do not need the network). It is
 **not** the discovery engine: the app never depends on that file to find
 employers, and the file going stale only removes a head start, not discovery.

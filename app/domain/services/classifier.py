@@ -28,6 +28,8 @@ KNOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("phenompeople.com", "ats.phenom"),
     ("amazon.jobs", "ats.amazon"),
     ("taleo.net/careersection", "ats.taleo"),
+    ("applytojob.com", "ats.jazzhr"),
+    ("recruiting.paylocity.com/recruiting/jobs/all/", "ats.paylocity"),
 )
 
 
