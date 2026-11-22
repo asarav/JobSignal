@@ -400,6 +400,27 @@ class ApplicationRepository(Protocol):
     ) -> Sequence[ApplicationOutcome]: ...
 
 
+class CrawlEventRepository(Protocol):
+    """Why a crawl stopped, was refused or was blocked (spec §6.6 / §17.4)."""
+
+    async def record(
+        self,
+        *,
+        run_id: str,
+        at: datetime,
+        level: str,
+        code: str,
+        message: str,
+        url: str | None = None,
+        plugin_id: str | None = None,
+        data: Mapping[str, object] | None = None,
+    ) -> None: ...
+
+    async def list_for_run(
+        self, run_id: str, *, limit: int = 200
+    ) -> Sequence[Mapping[str, object]]: ...
+
+
 class SuppressionRepository(Protocol):
     """Stored suppression decisions and their state transitions (spec §8.2)."""
 
@@ -417,7 +438,9 @@ class SuppressionRepository(Protocol):
 
     async def list_for_job(self, job_id: str) -> Sequence[SuppressionRecord]: ...
 
-    async def active_job_ids(self) -> Sequence[str]: ...
+    async def active_job_ids(self, now: datetime) -> Sequence[str]:
+        """Job ids hidden right now: active and not past their expiry."""
+        ...
 
     async def restore(self, job_id: str, application_id: str, at: datetime) -> bool: ...
 
@@ -502,6 +525,7 @@ class UnitOfWork(Protocol):
     plugins: PluginStateRepository
     sources: SourceRepository
     crawl_runs: CrawlRunRepository
+    crawl_events: CrawlEventRepository
     snapshots: SnapshotRepository
     aliases: AliasRepository
     dedup: DedupRepository

@@ -27,13 +27,13 @@ mod allowlist {
     include!(concat!(env!("OUT_DIR"), "/allowlist.rs"));
 }
 
-pub use allowlist::{ALLOWED_METHODS, FORBIDDEN_PREFIXES, PROTOCOL_VERSION};
+pub use allowlist::{ALLOWED_METHODS, FORBIDDEN_PREFIXES, METHOD_TIMEOUTS, PROTOCOL_VERSION};
 
 /// Maximum NDJSON line accepted from the worker (8 MB, spec §15.1).
 pub const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 /// How long a request waits for `worker.ready` / a worker restart.
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
-/// Per-request response timeout.
+/// Fallback response timeout for a method without its own entry.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RESTARTS: usize = 5;
 const RESTART_WINDOW: Duration = Duration::from_secs(300);
@@ -47,6 +47,21 @@ pub fn backoff_delay(attempt: usize) -> Duration {
         .saturating_mul(1u64 << exponent)
         .min(MAX_BACKOFF_SECS);
     Duration::from_secs(seconds)
+}
+
+/// How long the shell waits for one method's response.
+///
+/// A crawl, a discovery pass or a matching run is not bounded by a single HTTP
+/// request, so the wait is per method (declared in the generated catalogue).
+/// Timing out while the worker kept going used to report a failure for work
+/// that was still running.
+pub fn request_timeout(method: &str) -> Duration {
+    let seconds = METHOD_TIMEOUTS
+        .iter()
+        .find(|(name, _)| *name == method)
+        .map(|(_, seconds)| *seconds)
+        .unwrap_or(REQUEST_TIMEOUT.as_secs());
+    Duration::from_secs(seconds.max(1))
 }
 
 /// True when `method` may be forwarded to the worker.
@@ -362,7 +377,7 @@ impl Supervisor {
             );
         }
 
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+        match tokio::time::timeout(request_timeout(method), rx).await {
             Ok(Ok(value)) => value,
             Ok(Err(_)) => error_envelope(
                 Some(&request_id),
@@ -559,22 +574,34 @@ mod tests {
         assert!(!is_allowed("system.unknown"));
     }
 
+    /// The permanent invariant, not a milestone snapshot. Nothing that could
+    /// submit, click or script a page may ever be forwarded (§13.5); which
+    /// milestone's methods exist is the Python catalogue's business, and this
+    /// allowlist already mirrors it because both are generated from
+    /// `schemas/ipc/methods.json`.
     #[test]
-    fn forbidden_milestone_methods_are_absent() {
+    fn submission_capable_methods_are_never_allowed() {
+        for method in [
+            "browser.submit",
+            "browser.click",
+            "browser.press",
+            "browser.evaluate",
+            "browser.type",
+        ] {
+            assert!(
+                !is_allowed(method),
+                "{method} must never be forwarded: the user submits, not the app"
+            );
+        }
         for prefix in FORBIDDEN_PREFIXES {
             assert!(
                 !ALLOWED_METHODS.iter().any(|method| method.starts_with(prefix)),
-                "M1 allowlist must not contain {prefix}*, found a generated entry"
+                "allowlist must not contain {prefix}*, found a generated entry"
             );
         }
-        for method in [
-            "browser.open",
-            "matching.score",
-            "applications.create",
-            "posting_intelligence.evaluate",
-        ] {
-            assert!(!is_allowed(method), "{method} must be rejected in M0");
-        }
+        // A declared method of this build is reachable; a typo is not.
+        assert!(is_allowed("applications.create"));
+        assert!(!is_allowed("applications.does_not_exist"));
     }
 
     #[test]

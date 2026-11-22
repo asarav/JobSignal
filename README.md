@@ -8,7 +8,7 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 6 — Relevance-ranked discovery funnel (complete).**
+> **Current milestone: 7 — Applications and autofill (complete).**
 > The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
 > from Milestone 0; sources, ATS connectors and crawls from Milestone 1;
 > the universal extraction pipeline from Milestone 2; search profiles, hard
@@ -266,6 +266,26 @@ See
 [`docs/how-applications-and-autofill-work.md`](docs/how-applications-and-autofill-work.md)
 and [ADR 0008](docs/adr/0008-session-long-submission-interceptor.md) for why the
 submission guard lives for the whole session.
+
+## Hardening after Milestone 7
+
+- **Removing a source archives it.** The row stays, and so do its jobs,
+  observations and crawl runs; it leaves every list and schedule
+  (`sources.delete`). Deleting the row used to fail on its own foreign keys.
+- **Cooldowns end on their own.** The worker lapses due suppressions on a timer,
+  and the default lists ignore a suppression whose `expires_at` has passed, so a
+  hidden role reappears even if nothing else triggers a sweep.
+- **Per-source crawl budgets.** `crawl.max_refs_per_source` (500) and
+  `crawl.max_duration_s` (300), overridable per source with
+  `limits: {max_refs, max_duration_s}`. A truncated listing never retires
+  postings it did not see.
+- **A crawl event log.** Refusals, blocks and budget stops are written to
+  `crawl_events`, so a failing source is diagnosable from the database and not
+  only from a rotating log file.
+- **Per-method IPC timeouts.** A crawl, a discovery pass or a matching run is
+  not bounded by one HTTP request, so the shell waits for the method's declared
+  budget instead of a fixed 60 s, which used to report a failure for work that
+  was still running.
 
 ## Still not implemented
 
@@ -610,6 +630,14 @@ constant scoring model, extraction strategy) live in `tests/support/`.
   — seed-free discovery and the relevance-ranked funnel.
 - [`docs/adr/0007-interval-scheduling.md`](docs/adr/0007-interval-scheduling.md)
   — persisted interval schedules (and why cron expressions are out of scope).
+- [`docs/adr/0008-session-long-submission-interceptor.md`](docs/adr/0008-session-long-submission-interceptor.md)
+  — why the submission interceptor lives for the whole session and only an
+  explicit handoff turns it off.
+- [`docs/adr/0009-at-rest-encryption.md`](docs/adr/0009-at-rest-encryption.md)
+  — the mandatory SQLCipher decision: declined for now, with the triggers that
+  would reopen it.
+- [`docs/adr/0010-styled-upload-file-inputs.md`](docs/adr/0010-styled-upload-file-inputs.md)
+  — how a file input hidden behind a styled widget is still filled.
 
 ## CI
 
@@ -631,5 +659,9 @@ Reproduce any CI job locally with the commands in
   called by any UI flow today.
 - Logs redact resume text, answer books, email addresses, phone numbers, and
   password fields (`app/infrastructure/logging`).
-- The program never submits job applications. Browser automation is out of scope
-  for M0 and no Playwright dependency is installed.
+- The program never submits job applications: the browser provider has no
+  click, press or evaluate capability, and submission requests are aborted for
+  the whole life of a session (ADR 0008). Playwright is an optional extra; with
+  it absent every `browser.*` call reports an actionable error.
+- A source is archived, not deleted: its jobs, observations and crawl history
+  stay in the database (`sources.delete`).

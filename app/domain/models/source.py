@@ -39,3 +39,6 @@ class SourceConfig:
     extraction_order: Sequence[str] = ()
     limits: Mapping[str, object] = field(default_factory=dict)
     schedule: Mapping[str, object] = field(default_factory=dict)
+    #: Archived sources keep their jobs, observations and crawl history but are
+    #: hidden from every list; ``sources.delete`` archives (§15.4).
+    archived: bool = False

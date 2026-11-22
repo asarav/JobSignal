@@ -151,6 +151,19 @@ class MethodSpec:
     params: type[BaseModel]
     result: type[BaseModel]
     long_running: bool = False
+    #: How long the desktop shell waits for the response. One HTTP request is
+    #: bounded by ``http.timeout_s``; a crawl of one board, a pass over every
+    #: due source or a matching run over the whole library is not, and killing
+    #: the wait while the worker keeps working produced a false ``task.timeout``
+    #: for work that was still running to completion.
+    timeout_s: float = 60.0
+
+
+#: Ceiling for the two discovery entry points: a pass walks index slices and
+#: crawls up to ``discovery.max_crawl_sources_per_run`` boards.
+DISCOVERY_TIMEOUT_S = 900.0
+#: Matching evaluates every job against the active profile.
+MATCHING_TIMEOUT_S = 600.0
 
 
 MILESTONE_METHODS: tuple[MethodSpec, ...] = (
@@ -191,18 +204,25 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("resume.update_overrides", ResumeOverridesParams, OkResult),
     MethodSpec("resume.parse", ResumeParseParams, ResumeParseResult),
     MethodSpec("resume.set_skill_status", ResumeSkillStatusParams, OkResult),
-    MethodSpec("matching.run", MatchingRunParams, MatchingRunResult),
+    MethodSpec("matching.run", MatchingRunParams, MatchingRunResult,
+               timeout_s=MATCHING_TIMEOUT_S),
     MethodSpec("matching.get_results", ResumeProfileParams, MatchingResultsResult),
     MethodSpec("matching.update_weights", MatchingWeightsParams, MatchingWeightsResult),
     MethodSpec("keywords.extract", KeywordsExtractParams, KeywordsExtractResult),
     MethodSpec("crawl_runs.list", EmptyParams, CrawlRunListResult),
-    MethodSpec("discovery.run", DiscoveryRunParams, OkResult),
+    MethodSpec("discovery.run", DiscoveryRunParams, OkResult,
+               timeout_s=DISCOVERY_TIMEOUT_S),
     # M3: search profiles
     MethodSpec("search_profiles.list", EmptyParams, SearchProfileListResult),
     MethodSpec("search_profiles.save", SearchProfileSaveParams, SearchProfileInfo),
     MethodSpec("search_profiles.delete", SearchProfileParams, OkResult),
     # M4: auto-discovery
-    MethodSpec("discovery.auto_discover", EmptyParams, AutoDiscoverResult),
+    MethodSpec(
+        "discovery.auto_discover",
+        EmptyParams,
+        AutoDiscoverResult,
+        timeout_s=DISCOVERY_TIMEOUT_S,
+    ),
     # M7: applications, suppression and user job state
     MethodSpec("applications.create", ApplicationCreateParams, ApplicationInfo),
     MethodSpec("applications.update_status", ApplicationStatusParams, ApplicationInfo),

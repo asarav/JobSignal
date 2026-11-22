@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from typing import Any
@@ -131,7 +132,7 @@ class InMemorySourceRepository:
         return self._store.get(source_id)
 
     async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
-        items = list(self._store.values())
+        items = [s for s in self._store.values() if not s.archived]
         if enabled_only:
             items = [s for s in items if s.enabled]
         return list(items)
@@ -146,7 +147,52 @@ class InMemorySourceRepository:
         self._store[source.id] = source
 
     async def delete(self, source_id: str) -> None:
-        self._store.pop(source_id, None)
+        # Archive, never remove: the in-memory twin must behave like the real one.
+        if source_id in self._store:
+            from dataclasses import replace
+
+            self._store[source_id] = replace(
+                self._store[source_id], archived=True, enabled=False
+            )
+
+
+class InMemoryCrawlEventRepository:
+    """In-memory twin of the crawl event log (contract-tested both ways)."""
+
+    def __init__(self, store: list[dict[str, object]]) -> None:
+        self._store = store
+
+    async def record(
+        self,
+        *,
+        run_id,
+        at,
+        level,
+        code,
+        message,
+        url=None,
+        plugin_id=None,
+        data=None,
+    ):
+        import uuid
+
+        self._store.append(
+            {
+                "id": f"evt_{uuid.uuid4().hex[:16]}",
+                "crawl_run_id": run_id,
+                "at": at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "level": level,
+                "code": code,
+                "message": message,
+                "url": url,
+                "plugin_id": plugin_id,
+                "data_json": json.dumps(dict(data or {})),
+            }
+        )
+
+    async def list_for_run(self, run_id, *, limit=200):
+        rows = [row for row in self._store if row["crawl_run_id"] == run_id]
+        return sorted(rows, key=lambda row: (str(row["at"]), str(row["id"])))[:limit]
 
 
 class InMemoryCompanyRepository:
@@ -614,12 +660,14 @@ class InMemoryUnitOfWork:
         suppressions=None,
         job_user_state=None,
         suppression_policy=None,
+        crawl_events=None,
     ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
         self._plugins_store = plugins if plugins is not None else {}
         self._configs_store = configs if configs is not None else {}
         self._sources_store = sources if sources is not None else {}
+        self._crawl_events_store = crawl_events if crawl_events is not None else []
         self._companies_store = companies if companies is not None else {}
         self._jobs_store = jobs if jobs is not None else {}
         self._observations_store = observations if observations is not None else []
@@ -663,6 +711,7 @@ class InMemoryUnitOfWork:
         self.plugins = InMemoryPluginStateRepository(self._plugins_store, self._configs_store)
         self.sources = InMemorySourceRepository(self._sources_store)
         self.crawl_runs = InMemoryCrawlRunRepository(self._crawl_runs_store)
+        self.crawl_events = InMemoryCrawlEventRepository(self._crawl_events_store)
         self.snapshots = InMemorySnapshotRepository(self._snapshots_store)
         self.aliases = InMemoryAliasRepository(self._aliases_store)
         self.dedup = InMemoryDedupRepository(
@@ -693,6 +742,7 @@ class InMemoryUnitOfWorkFactory:
         self.jobs: dict[str, dict[str, object]] = {}
         self.observations: list[dict[str, object]] = []
         self.crawl_runs: dict[str, dict[str, object]] = {}
+        self.crawl_events: list[dict[str, object]] = []
         self.snapshots: list[dict[str, object]] = []
         self.aliases: dict[str, dict[str, object]] = {}
         self.fingerprints: list[dict[str, object]] = []
@@ -733,6 +783,7 @@ class InMemoryUnitOfWorkFactory:
             self.suppressions,
             self.job_user_state,
             self.suppression_policy,
+            crawl_events=self.crawl_events,
         )
 
 
@@ -1052,8 +1103,14 @@ class InMemorySuppressionRepository:
             key=lambda r: (r.created_at, r.id),
         )
 
-    async def active_job_ids(self):
-        return sorted({r.job_id for r in self._store.values() if r.state == "active"})
+    async def active_job_ids(self, now):
+        return sorted(
+            {
+                r.job_id
+                for r in self._store.values()
+                if r.state == "active" and (r.expires_at is None or r.expires_at > now)
+            }
+        )
 
     async def restore(self, job_id: str, application_id: str, at: Any) -> bool:
         key = (job_id, application_id)

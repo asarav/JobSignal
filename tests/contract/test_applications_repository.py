@@ -198,7 +198,7 @@ async def test_suppression_state_machine_and_restore_stickiness(kind, tmp_path):
         await uow.commit()
 
     async with factory() as uow:
-        assert await uow.suppressions.active_job_ids() == ["job_2"]
+        assert await uow.suppressions.active_job_ids(NOW) == ["job_2"]
         assert await uow.suppressions.restore("job_2", "app_1", NOW) is True
         await uow.commit()
 
@@ -212,14 +212,14 @@ async def test_suppression_state_machine_and_restore_stickiness(kind, tmp_path):
     async with factory() as uow:
         stored = await uow.suppressions.get("job_2", "app_1")
         assert stored is not None and stored.state == "restored"
-        assert await uow.suppressions.active_job_ids() == []
+        assert await uow.suppressions.active_job_ids(NOW) == []
         # Clearing the restore marker is the only way back.
         assert await uow.suppressions.clear_restored("job_2", "app_1") is True
         await uow.suppressions.save(_record())
         await uow.commit()
 
     async with factory() as uow:
-        assert await uow.suppressions.active_job_ids() == ["job_2"]
+        assert await uow.suppressions.active_job_ids(NOW) == ["job_2"]
 
 
 @pytest.mark.asyncio
@@ -243,7 +243,7 @@ async def test_expire_only_lapses_due_decisions(kind, tmp_path):
         assert [record.job_id for record in lapsed] == ["job_2"]
 
     async with factory() as uow:
-        assert await uow.suppressions.active_job_ids() == ["job_3"]
+        assert await uow.suppressions.active_job_ids(NOW) == ["job_3"]
         states = {record.job_id: record.state for record in await uow.suppressions.list()}
         assert states["job_2"] == "expired"
 
@@ -304,3 +304,27 @@ async def test_job_user_state_hides_jobs_from_default_lists(kind, tmp_path):
         assert [str(row["id"]) for row in page] == ["job_1"]
         assert await uow.jobs.count(exclude_job_ids=["job_2"]) == 1
         assert await uow.job_user_state.clear("job_2") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_a_lapsed_cooldown_stops_hiding_its_job_without_a_sweep(kind, tmp_path):
+    """The read path must honour ``expires_at``, not just the stored state.
+
+    A cooldown that ended while the app was idle used to keep hiding the job
+    until someone opened Previously Seen and triggered the sweep.
+    """
+    factory = await _factory(kind, tmp_path)
+    async with factory() as uow:
+        await _seed_job(uow)
+        await _seed_job(uow, "job_2")
+        await uow.applications.add(_application())
+        await uow.suppressions.save(
+            _record("job_2", expires_at=datetime(2026, 2, 1, tzinfo=UTC))
+        )
+        await uow.commit()
+
+    async with factory() as uow:
+        assert await uow.suppressions.active_job_ids(NOW) == []
+        stored = await uow.suppressions.get("job_2", "app_1")
+        assert stored is not None and stored.state == "active"

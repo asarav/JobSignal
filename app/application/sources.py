@@ -30,7 +30,7 @@ from app.application.dedup import (
     related_candidate,
     resolve_incoming,
 )
-from app.domain.models.common import Ok, Provenance
+from app.domain.models.common import Ok, PortError, Provenance
 from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.extraction import ExtractionTarget, MergedExtraction
 from app.domain.models.identity import JobFingerprintSet
@@ -151,10 +151,104 @@ class SourceRegistry:
             await uow.commit()
 
 
+#: How many failing postings keep their details in the run stats.  The counts
+#: stay complete; only the samples are bounded, so a board of dead postings
+#: cannot turn one crawl into a log flood.
+_MAX_ERROR_SAMPLES = 5
+
+#: Fetch failures that settle the *posting*, not the run.  The same URL will
+#: answer the same way however often it is asked, so such a failure is no
+#: reason to stop the source from retiring the postings it no longer lists.
+#: Counting these as run errors was how a single expired posting quietly
+#: disabled removal for a whole board.
+_SETTLED_FETCH_ERRORS = frozenset({"connector.invalid_response"})
+
+
+def _note_fetch_error(stats: dict[str, object], error: PortError, url: str) -> None:
+    """Record *why* posting fetches failed, not only that some did.
+
+    A crawl used to report ``errors: 40`` and nothing else, which reads the same
+    whether forty postings were retired or the host rate-limited the whole run.
+    Counting by error code, with the first few full cases, is what makes a
+    failing source actionable instead of merely red.
+    """
+    by_code = stats.setdefault("errors_by_code", {})
+    if isinstance(by_code, dict):
+        by_code[error.code] = int(by_code.get(error.code, 0)) + 1
+    samples = stats.setdefault("error_samples", [])
+    if isinstance(samples, list) and len(samples) < _MAX_ERROR_SAMPLES:
+        samples.append(
+            {
+                "code": error.code,
+                "retryable": error.retryable,
+                "url": url,
+                "message": error.message,
+            }
+        )
+
+
 def _with_schedule(source: SourceConfig, schedule: dict[str, Any]) -> SourceConfig:
     from dataclasses import replace
 
     return replace(source, schedule=schedule)
+
+
+#: How many crawl events one run may write. A board of dead postings should not
+#: turn a single crawl into an unbounded event log.
+_MAX_EVENTS_PER_RUN = 25
+
+
+def _source_budget(source: SourceConfig, config: Any) -> tuple[int, float]:
+    """Refs and wall-clock time this source may spend (spec §6.6).
+
+    The config carries the defaults; a source may narrow them with
+    ``limits: {max_refs, max_duration_s}``.
+    """
+    crawl = getattr(config, "crawl", None)
+    default_refs = int(getattr(crawl, "max_refs_per_source", 500) or 500)
+    default_seconds = float(getattr(crawl, "max_duration_s", 300) or 300)
+    limits = dict(getattr(source, "limits", {}) or {})
+    raw_refs = limits.get("max_refs")
+    raw_seconds = limits.get("max_duration_s")
+    max_refs = (
+        int(raw_refs)
+        if isinstance(raw_refs, int) and not isinstance(raw_refs, bool) and raw_refs > 0
+        else default_refs
+    )
+    max_seconds = (
+        float(raw_seconds)
+        if isinstance(raw_seconds, (int, float))
+        and not isinstance(raw_seconds, bool)
+        and raw_seconds > 0
+        else default_seconds
+    )
+    return max_refs, max_seconds
+
+
+async def _record_crawl_event(
+    uow_factory: UnitOfWorkFactory,
+    run_id: str,
+    *,
+    code: str,
+    message: str,
+    now: Any,
+    url: str | None = None,
+    level: str = "warning",
+) -> None:
+    """Persist why a crawl stopped or a posting failed (spec §6.6 / §17.4)."""
+    try:
+        async with uow_factory() as uow:
+            await uow.crawl_events.record(
+                run_id=run_id,
+                at=now,
+                level=level,
+                code=code,
+                message=message,
+                url=url,
+            )
+            await uow.commit()
+    except Exception:  # noqa: BLE001 - diagnostics must never fail a crawl
+        return
 
 
 async def run_crawl(
@@ -180,6 +274,10 @@ async def run_crawl(
         "skipped": 0,
         "removed": 0,
         "errors": 0,
+        #: Postings that answered with a settled "this is gone" page.  They are
+        #: counted apart from ``errors`` so they neither flag the run as failed
+        #: nor hold back the not-seen rule.
+        "gone": 0,
     }
 
     async with uow_factory() as uow:
@@ -201,9 +299,17 @@ async def run_crawl(
 
     default_company = company_name_for_source(source)
     seen_ids: list[str] = []
+    max_refs, max_duration_s = _source_budget(source, config)
+    events_recorded = 0
 
     try:
         refs = await _collect_refs(connector, source, ctx, invoker, source.connector_id)
+        refs_total = len(refs)
+        if refs_total > max_refs:
+            # A truncated listing is partial: it may not prove anything is gone.
+            refs = refs[:max_refs]
+            stats["refs_total"] = refs_total
+            stats["truncated"] = True
         if events is not None:
             events.publish(
                 "discovery.progress",
@@ -212,6 +318,9 @@ async def run_crawl(
             )
         for ref in refs:
             ctx.cancel.throw_if_cancelled()
+            if (clock_now() - started).total_seconds() >= max_duration_s:
+                stats["truncated"] = True
+                break
             stats["discovered"] = int(str(stats.get("discovered", 0))) + 1
             # Incremental fetch skip: if the ATS says the posting's
             # updated_at hasn't changed since last crawl, reuse the stored
@@ -253,7 +362,19 @@ async def run_crawl(
                 ctx,
             )
             if not isinstance(result, Ok):
-                stats["errors"] = int(str(stats["errors"])) + 1
+                counter = "gone" if result.error.code in _SETTLED_FETCH_ERRORS else "errors"
+                stats[counter] = int(str(stats.get(counter, 0))) + 1
+                _note_fetch_error(stats, result.error, ref.url)
+                if events_recorded < _MAX_EVENTS_PER_RUN:
+                    events_recorded += 1
+                    await _record_crawl_event(
+                        uow_factory,
+                        run_id,
+                        code=result.error.code,
+                        message=result.error.message,
+                        now=clock_now(),
+                        url=ref.url,
+                    )
                 continue
 
             raw = result.value
@@ -298,7 +419,16 @@ async def run_crawl(
     # Postings that the source no longer lists are marked removed, but only
     # when the listing was fully successful (partial/failed listings never
     # create not_seen observations).
-    if int(str(stats.get("errors", 0) or 0)) == 0:
+    truncated = bool(stats.get("truncated"))
+    if truncated:
+        await _record_crawl_event(
+            uow_factory,
+            run_id,
+            code="crawl.truncated",
+            message="the run stopped at its ref or duration budget",
+            now=clock_now(),
+        )
+    if int(str(stats.get("errors", 0) or 0)) == 0 and not truncated:
         async with uow_factory() as uow:
             threshold, spacing_hours = _not_seen_policy(config)
             removed = await uow.jobs.mark_not_seen(
@@ -314,9 +444,27 @@ async def run_crawl(
             )
             await uow.commit()
     else:
+        unresolved = int(str(stats.get("errors", 0) or 0))
+        if unresolved > 0:
+            # A skipped removal that says nothing is how stale postings become
+            # invisible: the run reports as finished, nothing is retired, and
+            # no record explains it.
+            await _record_crawl_event(
+                uow_factory,
+                run_id,
+                code="crawl.removal_skipped",
+                message=(
+                    f"{unresolved} postings could not be fetched, so postings this "
+                    "source no longer lists were left untouched"
+                ),
+                now=clock_now(),
+            )
+        # Truncation is a budget stop, not a failed posting: the run did what
+        # it was allowed to do. Only real fetch errors make it "with errors".
+        status = "completed_with_errors" if unresolved > 0 else "completed"
         async with uow_factory() as uow:
             await uow.crawl_runs.finish(
-                run_id, status="completed_with_errors", finished_at=clock_now(), stats=stats
+                run_id, status=status, finished_at=clock_now(), stats=stats
             )
             await uow.commit()
     if events is not None:

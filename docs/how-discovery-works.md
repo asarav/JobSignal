@@ -209,3 +209,25 @@ advanced) and are validated when saved:
 
 To stop a specific provider or source, disable it in Settings → Sources /
 Plugins; nothing else changes.
+
+## Source lifecycle, crawl budgets and the crawl event log
+
+**Removing a source archives it.** `sources.delete` keeps the row: its jobs,
+observations and crawl runs stay attached, and the source leaves every list and
+schedule. A source that has been crawled can therefore be removed without losing
+the history it produced (or, as it used to, failing on its own foreign keys). 
+Re-adding the same URL creates a new, active source; the archived one remains for
+its history.
+
+**A crawl is bounded per source.** `crawl.max_refs_per_source` (default 500)
+caps how many postings one run looks at, and `crawl.max_duration_s` (default
+300) caps how long it may take. A source can narrow either with
+`limits: {max_refs, max_duration_s}` in its schedule configuration. A truncated
+run records `truncated: true` in its stats and **never** retires postings it did
+not see, because a partial listing cannot prove a job is gone.
+
+**Failures are recorded, not just counted.** `crawl_events` holds one row per
+refusal, challenge, timeout or budget stop, with its stable code, message and
+URL. `run.stats` still carries the counts (`errors`, `errors_by_code`,
+`error_samples`); the event log is what makes a red source explain itself
+without opening the rotating log files.

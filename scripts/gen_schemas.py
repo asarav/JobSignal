@@ -118,6 +118,7 @@ def generate() -> dict[Path, str]:
             {
                 "method": spec.method,
                 "long_running": spec.long_running,
+                "timeout_s": spec.timeout_s,
                 "request_schema": request_path.relative_to(ROOT).as_posix(),
                 "response_schema": response_path.relative_to(ROOT).as_posix(),
             }

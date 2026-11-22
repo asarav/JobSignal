@@ -379,6 +379,18 @@ class SuppressionsUseCase:
             policy=policy.to_mapping(),
         )
 
+    async def sweep(self) -> int:
+        """Lapse due decisions and re-evaluate their jobs.
+
+        The worker calls this on a timer: a cooldown must end when it ends, not
+        the next time someone happens to open Previously Seen.
+        """
+        now = self._container.clock.now()
+        async with self._container.uow_factory() as uow:
+            expired = await self._sweep(uow, now)
+            await uow.commit()
+        return expired
+
     async def restore(self, params: RestoreSuppressedJobParams) -> OkResult:
         now = self._container.clock.now()
         async with self._container.uow_factory() as uow:

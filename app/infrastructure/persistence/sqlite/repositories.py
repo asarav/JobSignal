@@ -942,10 +942,12 @@ class SqliteSourceRepository:
 
     async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
         self._conn.row_factory = aiosqlite.Row
+        # An archived source is history: its jobs and runs stay, it is just no
+        # longer scheduled, listed or crawled.
+        query = "SELECT * FROM sources WHERE archived_at IS NULL"
         if enabled_only:
-            cur = await self._conn.execute("SELECT * FROM sources WHERE enabled = 1")
-        else:
-            cur = await self._conn.execute("SELECT * FROM sources")
+            query += " AND enabled = 1"
+        cur = await self._conn.execute(query)
         return [self._row(r) for r in await cur.fetchall()]
 
     async def set_enabled(self, source_id: str, enabled: bool) -> None:
@@ -977,7 +979,11 @@ class SqliteSourceRepository:
         )
 
     async def delete(self, source_id: str) -> None:
-        await self._conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        """Archive the source; deleting the row would orphan its history."""
+        await self._conn.execute(
+            "UPDATE sources SET archived_at = ?, enabled = 0, updated_at = ? WHERE id = ?",
+            (self._ts(), self._ts(), source_id),
+        )
 
     def _row(self, row: aiosqlite.Row) -> SourceConfig:
         return SourceConfig(
@@ -991,7 +997,56 @@ class SqliteSourceRepository:
             extraction_order=tuple(json.loads(row["extraction_order"] or "[]")),
             limits=json.loads(row["limits_json"] or "{}"),
             schedule=json.loads(row["schedule_json"] or "{}"),
+            archived=row["archived_at"] is not None,
         )
+
+
+class SqliteCrawlEventRepository:
+    """Append-only log of crawl outcomes that are not counts (spec §6.6)."""
+
+    def __init__(self, conn: aiosqlite.Connection, clock_now: Any) -> None:
+        self._conn = conn
+        self._now = clock_now
+
+    async def record(
+        self,
+        *,
+        run_id: str,
+        at: Any,
+        level: str,
+        code: str,
+        message: str,
+        url: str | None = None,
+        plugin_id: str | None = None,
+        data: Any = None,
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO crawl_events(
+              id, crawl_run_id, at, level, code, message, url, plugin_id, data_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"evt_{uuid.uuid4().hex[:16]}",
+                run_id,
+                at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                level,
+                code,
+                message,
+                url,
+                plugin_id,
+                json.dumps(dict(data or {})),
+            ),
+        )
+
+    async def list_for_run(
+        self, run_id: str, *, limit: int = 200
+    ) -> Sequence[Mapping[str, Any]]:
+        cur = await self._conn.execute(
+            "SELECT * FROM crawl_events WHERE crawl_run_id = ? ORDER BY at, id LIMIT ?",
+            (run_id, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
 
 
 class SqliteDedupRepository:

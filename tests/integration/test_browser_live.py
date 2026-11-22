@@ -17,13 +17,17 @@ from app.domain.services.form_filler import GenericFormFiller
 from app.domain.services.form_inspector import inspect_html
 from app.infrastructure.browser.playwright_provider import (
     PlaywrightBrowserProvider,
-    playwright_available,
+    chromium_available,
 )
 from tests.support.application_site import FixtureApplicationServer
 
+# Skip on the browser, not just on the import: an installed package with no
+# Chromium build (the usual CI runner) can open nothing, and that must read as
+# "not exercised here", never as a failing autofill assertion.
 pytestmark = pytest.mark.skipif(
-    not playwright_available(),
-    reason="Playwright is not installed (pip install 'lodestar[render]')",
+    not chromium_available(),
+    reason="Playwright or its Chromium build is missing "
+    "(pip install 'lodestar[render]' && python -m playwright install chromium)",
 )
 
 

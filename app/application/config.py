@@ -69,6 +69,11 @@ class CrawlConfig(StrictModel):
     not_seen_threshold: int = 2
     min_refetch_hours: int = 6
     block_backoff_hours: list[int] = Field(default_factory=lambda: [6, 24, 72, 168])
+    #: Per-source run budgets (spec §6.6 / §17.2): a board with thousands of
+    #: postings must not turn one crawl into an unbounded run. A source can
+    #: override both with ``limits: {max_refs, max_duration_s}``.
+    max_refs_per_source: int = Field(default=500, gt=0)
+    max_duration_s: int = Field(default=300, gt=0)
 
 
 class ExtractionCompletenessConfig(StrictModel):

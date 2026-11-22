@@ -29,7 +29,7 @@ class JobsUseCase:
         """
         if not params.filters:
             async with self._container.uow_factory() as uow:
-                excluded = await _hidden_job_ids(uow)
+                excluded = await _hidden_job_ids(uow, self._container.clock.now())
                 if params.query:
                     rows = await uow.jobs.search(
                         params.query,
@@ -50,7 +50,7 @@ class JobsUseCase:
             return JobListResult(jobs=[_summary(r) for r in rows], total=total)
 
         async with self._container.uow_factory() as uow:
-            excluded = await _hidden_job_ids(uow)
+            excluded = await _hidden_job_ids(uow, self._container.clock.now())
             rows, total = await uow.jobs.filtered_page(
                 params.filters,
                 query=params.query,
@@ -65,7 +65,7 @@ class JobsUseCase:
 
     async def search(self, params: JobSearchParams) -> JobListResult:
         async with self._container.uow_factory() as uow:
-            excluded = await _hidden_job_ids(uow)
+            excluded = await _hidden_job_ids(uow, self._container.clock.now())
             rows = await uow.jobs.search(
                 params.query, limit=params.limit, exclude_job_ids=excluded
             )
@@ -261,9 +261,13 @@ class JobsUseCase:
         return JobListResult(jobs=seen, total=len(seen))
 
 
-async def _hidden_job_ids(uow: Any) -> list[str]:
-    """Job ids the default views must not show: suppressed plus dismissed."""
-    suppressed = list(await uow.suppressions.active_job_ids())
+async def _hidden_job_ids(uow: Any, now: Any) -> list[str]:
+    """Job ids the default views must not show: suppressed plus dismissed.
+
+    ``now`` is passed so a cooldown that ended stops hiding the posting even if
+    the expiry sweep has not run yet (spec §8.2 rule 6).
+    """
+    suppressed = list(await uow.suppressions.active_job_ids(now))
     dismissed = list(await uow.job_user_state.hidden_job_ids())
     return list(dict.fromkeys([*suppressed, *dismissed]))
 

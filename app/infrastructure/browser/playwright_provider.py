@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from app.domain.models.browser import BrowserPage, OpenOptions
@@ -29,8 +30,12 @@ try:  # Playwright is an optional dependency.
     from playwright.async_api import (  # type: ignore[import-not-found]
         async_playwright,
     )
+    from playwright.sync_api import (  # type: ignore[import-not-found]
+        sync_playwright,
+    )
 except Exception:  # noqa: BLE001 - a missing browser is a normal, reported state
     async_playwright = None  # type: ignore[assignment]
+    sync_playwright = None  # type: ignore[assignment]
 
 
 #: Refuse to hand a gigantic DOM to the parser; a page this big is hostile or
@@ -47,6 +52,23 @@ CHALLENGE_SELECTORS = (
 
 def playwright_available() -> bool:
     return async_playwright is not None
+
+
+def chromium_available() -> bool:
+    """True when Playwright *and* a Chromium build are present.
+
+    ``playwright_available`` answers the wrong question for anything that opens
+    a page: CI installs the package on every runner but downloads its browser
+    only where the live suite runs, so a suite that skipped on the import alone
+    failed elsewhere with ``browser.open_failed`` instead of skipping.
+    """
+    if sync_playwright is None:
+        return False
+    try:
+        with sync_playwright() as playwright:
+            return Path(playwright.chromium.executable_path).exists()
+    except Exception:  # noqa: BLE001 - no browser is a skip, not a failure
+        return False
 
 
 def _css_string(value: str) -> str:

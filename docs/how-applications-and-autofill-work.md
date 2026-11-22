@@ -183,3 +183,11 @@ python -m playwright install chromium
 Without it, `browser.*` calls report `browser.unavailable` and everything else
 keeps working. The live safety test skips when Playwright or Chromium is
 absent; the rest of the suite still runs.
+
+## Cooldowns end on their own
+
+A suppression carries an `expires_at`. The worker lapses due decisions on a
+timer (every 15 minutes while it runs), and the ordinary job lists also ignore
+any active suppression whose expiry has passed. A role hidden by the 180-day
+similar-role cooldown therefore reappears when its cooldown ends, even if the
+app has been idle and nobody opened Previously Seen in between.

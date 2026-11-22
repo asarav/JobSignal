@@ -10,6 +10,7 @@ from app.domain.ports.repositories import (
     AliasRepository,
     ApplicationRepository,
     CompanyRepository,
+    CrawlEventRepository,
     CrawlRunRepository,
     JobRepository,
     JobUserStateRepository,
@@ -29,6 +30,7 @@ from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrat
 from app.infrastructure.persistence.sqlite.repositories import (
     SqliteAliasRepository,
     SqliteCompanyRepository,
+    SqliteCrawlEventRepository,
     SqliteCrawlRunRepository,
     SqliteDedupRepository,
     SqliteJobRepository,
@@ -62,6 +64,7 @@ class SqliteUnitOfWork:
         self.dedup = _Unimplemented()
         self.sources: SourceRepository = _Unimplemented()  # type: ignore[assignment]
         self.crawl_runs: CrawlRunRepository = _Unimplemented()  # type: ignore[assignment]
+        self.crawl_events: CrawlEventRepository = _Unimplemented()  # type: ignore[assignment]
         self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
         self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
         self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
@@ -87,6 +90,7 @@ class SqliteUnitOfWork:
         self.jobs = SqliteJobRepository(self._conn, self._clock_now)
         self.observations = SqliteObservationRepository(self._conn, self._clock_now)
         self.crawl_runs = SqliteCrawlRunRepository(self._conn, self._clock_now)
+        self.crawl_events = SqliteCrawlEventRepository(self._conn, self._clock_now)
         self.snapshots = SqliteSnapshotRepository(self._conn, self._clock_now)
         self.aliases = SqliteAliasRepository(self._conn, self._clock_now)
         self.dedup = SqliteDedupRepository(self._conn, self._clock_now)

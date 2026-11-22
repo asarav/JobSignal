@@ -309,3 +309,36 @@ async def test_jobs_grouped_by_source_and_provenance_note_clearing(kind, tmp_pat
     assert len(notes_of("job_1")) == 2, "only the note goes, not the provenance"
     assert all("via_index" not in notes for notes in notes_of("job_1"))
     assert any("via_index" in notes for notes in notes_of("job_2"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_deleting_a_source_archives_it_and_keeps_its_history(kind, tmp_path):
+    """A source with crawl history must be removable, and its history must stay.
+
+    Deleting the row used to fail the ``crawl_runs.source_id`` foreign key (and
+    would orphan jobs and observations if it had succeeded), so ``delete``
+    archives instead (spec §15.4, §14.1).
+    """
+    factory = await _make_uow_factory(kind, tmp_path)
+    source = SourceConfig(
+        id="src_1", url="https://boards.example.com/acme", kind="ats"
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.crawl_runs.create(
+            "run_1", "src_1", datetime(2026, 3, 1, tzinfo=UTC)
+        )
+        await uow.commit()
+
+    async with factory() as uow:
+        await uow.sources.delete("src_1")
+        await uow.commit()
+
+    async with factory() as uow:
+        assert list(await uow.sources.list()) == []
+        assert list(await uow.sources.list(enabled_only=True)) == []
+        archived = await uow.sources.get("src_1")
+        assert archived is not None and archived.archived is True
+        runs = await uow.crawl_runs.list()
+        assert [run["id"] for run in runs] == ["run_1"]

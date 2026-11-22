@@ -28,6 +28,7 @@ ALLOWED_TABLES = {
     "job_snapshots",
     "job_observations",
     "crawl_runs",
+    "crawl_events",
     "source_health",
     "jobs_fts",
     "jobs_fts_config",

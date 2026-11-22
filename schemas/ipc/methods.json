@@ -4,372 +4,434 @@
     {
       "method": "system.hello",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/system/system_hello_request.json",
       "response_schema": "schemas/ipc/system/system_hello_response.json"
     },
     {
       "method": "system.health",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/system/system_health_request.json",
       "response_schema": "schemas/ipc/system/system_health_response.json"
     },
     {
       "method": "system.shutdown",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/system/system_shutdown_request.json",
       "response_schema": "schemas/ipc/system/system_shutdown_response.json"
     },
     {
       "method": "tasks.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/tasks/tasks_list_request.json",
       "response_schema": "schemas/ipc/tasks/tasks_list_response.json"
     },
     {
       "method": "tasks.cancel",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/tasks/tasks_cancel_request.json",
       "response_schema": "schemas/ipc/tasks/tasks_cancel_response.json"
     },
     {
       "method": "settings.get",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/settings/settings_get_request.json",
       "response_schema": "schemas/ipc/settings/settings_get_response.json"
     },
     {
       "method": "settings.update",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/settings/settings_update_request.json",
       "response_schema": "schemas/ipc/settings/settings_update_response.json"
     },
     {
       "method": "plugins.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/plugins/plugins_list_request.json",
       "response_schema": "schemas/ipc/plugins/plugins_list_response.json"
     },
     {
       "method": "plugins.enable",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/plugins/plugins_enable_request.json",
       "response_schema": "schemas/ipc/plugins/plugins_enable_response.json"
     },
     {
       "method": "plugins.disable",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/plugins/plugins_disable_request.json",
       "response_schema": "schemas/ipc/plugins/plugins_disable_response.json"
     },
     {
       "method": "plugins.configure",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/plugins/plugins_configure_request.json",
       "response_schema": "schemas/ipc/plugins/plugins_configure_response.json"
     },
     {
       "method": "plugins.get_capabilities",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/plugins/plugins_get_capabilities_request.json",
       "response_schema": "schemas/ipc/plugins/plugins_get_capabilities_response.json"
     },
     {
       "method": "plugins.reset_circuit",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/plugins/plugins_reset_circuit_request.json",
       "response_schema": "schemas/ipc/plugins/plugins_reset_circuit_response.json"
     },
     {
       "method": "diagnostics.fetch_url",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/diagnostics/diagnostics_fetch_url_request.json",
       "response_schema": "schemas/ipc/diagnostics/diagnostics_fetch_url_response.json"
     },
     {
       "method": "diagnostics.sleep",
       "long_running": true,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/diagnostics/diagnostics_sleep_request.json",
       "response_schema": "schemas/ipc/diagnostics/diagnostics_sleep_response.json"
     },
     {
       "method": "sources.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/sources/sources_list_request.json",
       "response_schema": "schemas/ipc/sources/sources_list_response.json"
     },
     {
       "method": "sources.add",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/sources/sources_add_request.json",
       "response_schema": "schemas/ipc/sources/sources_add_response.json"
     },
     {
       "method": "sources.set_enabled",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/sources/sources_set_enabled_request.json",
       "response_schema": "schemas/ipc/sources/sources_set_enabled_response.json"
     },
     {
       "method": "sources.set_extraction_order",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/sources/sources_set_extraction_order_request.json",
       "response_schema": "schemas/ipc/sources/sources_set_extraction_order_response.json"
     },
     {
       "method": "sources.set_schedule",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/sources/sources_set_schedule_request.json",
       "response_schema": "schemas/ipc/sources/sources_set_schedule_response.json"
     },
     {
       "method": "sources.delete",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/sources/sources_delete_request.json",
       "response_schema": "schemas/ipc/sources/sources_delete_response.json"
     },
     {
       "method": "jobs.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_list_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_list_response.json"
     },
     {
       "method": "jobs.search",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_search_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_search_response.json"
     },
     {
       "method": "jobs.merge",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_merge_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_merge_response.json"
     },
     {
       "method": "jobs.unmerge",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_unmerge_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_unmerge_response.json"
     },
     {
       "method": "jobs.list_duplicates",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_list_duplicates_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_list_duplicates_response.json"
     },
     {
       "method": "jobs.list_seen",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_list_seen_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_list_seen_response.json"
     },
     {
       "method": "jobs.get_detail",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_get_detail_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_get_detail_response.json"
     },
     {
       "method": "resume.import",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_import_request.json",
       "response_schema": "schemas/ipc/resume/resume_import_response.json"
     },
     {
       "method": "resume.list_versions",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_list_versions_request.json",
       "response_schema": "schemas/ipc/resume/resume_list_versions_response.json"
     },
     {
       "method": "resume.get_profile",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_get_profile_request.json",
       "response_schema": "schemas/ipc/resume/resume_get_profile_response.json"
     },
     {
       "method": "resume.set_active",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_set_active_request.json",
       "response_schema": "schemas/ipc/resume/resume_set_active_response.json"
     },
     {
       "method": "resume.update_overrides",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_update_overrides_request.json",
       "response_schema": "schemas/ipc/resume/resume_update_overrides_response.json"
     },
     {
       "method": "resume.parse",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_parse_request.json",
       "response_schema": "schemas/ipc/resume/resume_parse_response.json"
     },
     {
       "method": "resume.set_skill_status",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/resume/resume_set_skill_status_request.json",
       "response_schema": "schemas/ipc/resume/resume_set_skill_status_response.json"
     },
     {
       "method": "matching.run",
       "long_running": false,
+      "timeout_s": 600.0,
       "request_schema": "schemas/ipc/matching/matching_run_request.json",
       "response_schema": "schemas/ipc/matching/matching_run_response.json"
     },
     {
       "method": "matching.get_results",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/matching/matching_get_results_request.json",
       "response_schema": "schemas/ipc/matching/matching_get_results_response.json"
     },
     {
       "method": "matching.update_weights",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/matching/matching_update_weights_request.json",
       "response_schema": "schemas/ipc/matching/matching_update_weights_response.json"
     },
     {
       "method": "keywords.extract",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/keywords/keywords_extract_request.json",
       "response_schema": "schemas/ipc/keywords/keywords_extract_response.json"
     },
     {
       "method": "crawl_runs.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/crawl_runs/crawl_runs_list_request.json",
       "response_schema": "schemas/ipc/crawl_runs/crawl_runs_list_response.json"
     },
     {
       "method": "discovery.run",
       "long_running": false,
+      "timeout_s": 900.0,
       "request_schema": "schemas/ipc/discovery/discovery_run_request.json",
       "response_schema": "schemas/ipc/discovery/discovery_run_response.json"
     },
     {
       "method": "search_profiles.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/search_profiles/search_profiles_list_request.json",
       "response_schema": "schemas/ipc/search_profiles/search_profiles_list_response.json"
     },
     {
       "method": "search_profiles.save",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/search_profiles/search_profiles_save_request.json",
       "response_schema": "schemas/ipc/search_profiles/search_profiles_save_response.json"
     },
     {
       "method": "search_profiles.delete",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/search_profiles/search_profiles_delete_request.json",
       "response_schema": "schemas/ipc/search_profiles/search_profiles_delete_response.json"
     },
     {
       "method": "discovery.auto_discover",
       "long_running": false,
+      "timeout_s": 900.0,
       "request_schema": "schemas/ipc/discovery/discovery_auto_discover_request.json",
       "response_schema": "schemas/ipc/discovery/discovery_auto_discover_response.json"
     },
     {
       "method": "applications.create",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_create_request.json",
       "response_schema": "schemas/ipc/applications/applications_create_response.json"
     },
     {
       "method": "applications.update_status",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_update_status_request.json",
       "response_schema": "schemas/ipc/applications/applications_update_status_response.json"
     },
     {
       "method": "applications.add_event",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_add_event_request.json",
       "response_schema": "schemas/ipc/applications/applications_add_event_response.json"
     },
     {
       "method": "applications.record_outcome",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_record_outcome_request.json",
       "response_schema": "schemas/ipc/applications/applications_record_outcome_response.json"
     },
     {
       "method": "applications.list",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_list_request.json",
       "response_schema": "schemas/ipc/applications/applications_list_response.json"
     },
     {
       "method": "applications.get_company_history",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_get_company_history_request.json",
       "response_schema": "schemas/ipc/applications/applications_get_company_history_response.json"
     },
     {
       "method": "applications.get_suppressions",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_get_suppressions_request.json",
       "response_schema": "schemas/ipc/applications/applications_get_suppressions_response.json"
     },
     {
       "method": "applications.get_suppression_policy",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_get_suppression_policy_request.json",
       "response_schema": "schemas/ipc/applications/applications_get_suppression_policy_response.json"
     },
     {
       "method": "applications.restore_suppressed_job",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_restore_suppressed_job_request.json",
       "response_schema": "schemas/ipc/applications/applications_restore_suppressed_job_response.json"
     },
     {
       "method": "applications.update_suppression_policy",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/applications/applications_update_suppression_policy_request.json",
       "response_schema": "schemas/ipc/applications/applications_update_suppression_policy_response.json"
     },
     {
       "method": "jobs.set_user_state",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_set_user_state_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_set_user_state_response.json"
     },
     {
       "method": "browser.open_job",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_open_job_request.json",
       "response_schema": "schemas/ipc/browser/browser_open_job_response.json"
     },
     {
       "method": "browser.inspect_form",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_inspect_form_request.json",
       "response_schema": "schemas/ipc/browser/browser_inspect_form_response.json"
     },
     {
       "method": "browser.autofill_plan",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_autofill_plan_request.json",
       "response_schema": "schemas/ipc/browser/browser_autofill_plan_response.json"
     },
     {
       "method": "browser.autofill",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_autofill_request.json",
       "response_schema": "schemas/ipc/browser/browser_autofill_response.json"
     },
     {
       "method": "browser.handoff",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_handoff_request.json",
       "response_schema": "schemas/ipc/browser/browser_handoff_response.json"
     },
     {
       "method": "browser.close_session",
       "long_running": false,
+      "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_close_session_request.json",
       "response_schema": "schemas/ipc/browser/browser_close_session_response.json"
     }

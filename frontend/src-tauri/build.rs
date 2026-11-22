@@ -60,6 +60,22 @@ fn main() {
     }
     generated.push_str("];\n");
 
+    // How long the shell waits for each method. Most methods are one HTTP
+    // budget; a crawl or a discovery pass is not, and a fixed 60 s wait used to
+    // abandon work that was still running.
+    generated.push_str("pub const METHOD_TIMEOUTS: &[(&str, u64)] = &[");
+    generated.push('\n');
+    for method in methods {
+        let name = method["method"]
+            .as_str()
+            .expect("methods[] entry is missing a string `method`");
+        let seconds = method["timeout_s"].as_f64().unwrap_or(60.0);
+        generated.push_str(&format!("    ({name:?}, {}),", seconds.round() as u64));
+        generated.push('\n');
+    }
+    generated.push_str("];");
+    generated.push('\n');
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     fs::write(out_dir.join("allowlist.rs"), generated).expect("failed to write allowlist.rs");
 }

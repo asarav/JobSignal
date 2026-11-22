@@ -398,9 +398,17 @@ class SqliteSuppressionRepository:
         )
         return [self._row(row) for row in await cur.fetchall()]
 
-    async def active_job_ids(self) -> Sequence[str]:
+    async def active_job_ids(self, now: datetime) -> Sequence[str]:
+        """Active decisions that have not lapsed yet.
+
+        Reading the expiry here, rather than trusting the stored state alone,
+        means a cooldown that ended while nobody was looking stops hiding the
+        job on the next list read (spec §8.2 rule 6).
+        """
         cur = await self._conn.execute(
-            "SELECT DISTINCT job_id FROM job_suppressions WHERE state = 'active'"
+            "SELECT DISTINCT job_id FROM job_suppressions WHERE state = 'active' "
+            "AND (expires_at IS NULL OR expires_at > ?)",
+            (_iso(now),),
         )
         return [str(row[0]) for row in await cur.fetchall()]
 

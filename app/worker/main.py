@@ -64,6 +64,9 @@ from app.worker.ipc.handlers.tasks import TasksHandlers
 from app.worker.ipc.transport import NdjsonTransport
 
 MAX_CONCURRENT_REQUESTS = 8
+#: How often due suppressions are lapsed in the background (spec §8.2: daily;
+#: the query is indexed and cheap, so a shorter tick only makes expiry prompt).
+MAINTENANCE_POLL_S = 900.0
 
 #: IPC methods that can change which sources exist or when they run.  Listing
 #: sources must not reschedule the world, and neither must an extraction-order
@@ -548,7 +551,18 @@ async def main() -> int:
                     await wiring.sync_scheduler(run_immediately=False)
             await asyncio.sleep(AUTO_DISCOVER_POLL_S)
 
+    async def _maintenance_loop() -> None:
+        from app.application.commands.applications import SuppressionsUseCase
+
+        while True:
+            try:
+                await SuppressionsUseCase(container).sweep()
+            except Exception as exc:  # noqa: BLE001 - maintenance must keep running
+                logger.warning("suppression.sweep_failed", error=str(exc))
+            await asyncio.sleep(MAINTENANCE_POLL_S)
+
     discovery_task = asyncio.create_task(_auto_discover_loop())
+    maintenance_task = asyncio.create_task(_maintenance_loop())
     transport = NdjsonTransport(sys.stdin, sys.stdout)
     writer_task = asyncio.create_task(event_writer(publisher.queue, transport.write))
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -653,6 +667,9 @@ async def main() -> int:
         discovery_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await discovery_task
+        maintenance_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await maintenance_task
         if runner is not None:
             await runner.stop()
         await registry.persist_state()

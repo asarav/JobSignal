@@ -199,3 +199,29 @@ async def test_outcome_and_note_events_are_recorded():
     stored = (await applications.list()).applications[0]
     assert "recruiter called" in [event["note"] for event in stored.events]
     assert [outcome["kind"] for outcome in stored.outcomes] == ["interview"]
+
+
+@pytest.mark.asyncio
+async def test_the_background_sweep_lapses_a_cooldown_nobody_looked_at():
+    """The worker's timer must end a cooldown, not the user opening a screen.
+
+    The read path already stops hiding a lapsed decision; the sweep is what
+    records the expiry and re-evaluates the row (spec §8.2 rule 6).
+    """
+    clock, applications, suppressions, jobs = _build()
+    await applications.create(ApplicationCreateParams(job_id="job_1", status="applied"))
+
+    hidden = {job.job_id for job in (await jobs.list(JobFilter())).jobs}
+    assert "job_2" not in hidden
+
+    clock.advance(timedelta(days=181).total_seconds())
+
+    # No sweep yet: the list read honours expires_at on its own.
+    visible = {job.job_id for job in (await jobs.list(JobFilter())).jobs}
+    assert "job_2" in visible
+
+    assert await suppressions.sweep() >= 1
+    states = {
+        row.job_id: row.state for row in (await suppressions.list()).suppressions
+    }
+    assert states["job_2"] == "expired"
