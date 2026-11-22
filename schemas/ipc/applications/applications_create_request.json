@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "status": {
+      "default": "applied",
+      "type": "string"
+    },
+    "applied_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "notes": {
+      "default": "",
+      "type": "string"
+    },
+    "resume_version_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "ApplicationsCreateRequest",
+  "type": "object"
+}

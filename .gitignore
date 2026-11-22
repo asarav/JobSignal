@@ -40,3 +40,6 @@ frontend/src-tauri/gen/
 Thumbs.db
 .seed_build_verified.json
 .seed_build_log.jsonl
+
+# Local scratch: manual probe screenshots and throwaway test data
+lodestar-test-data/

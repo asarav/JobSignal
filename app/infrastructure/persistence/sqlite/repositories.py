@@ -25,6 +25,14 @@ def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _exclusion(column: str, job_ids: Sequence[str] | None) -> tuple[str, list[str]]:
+    """``column NOT IN (...)`` for suppressed/dismissed ids, or nothing."""
+    wanted = [job_id for job_id in dict.fromkeys(job_ids or ()) if job_id]
+    if not wanted:
+        return "", []
+    return f"{column} NOT IN ({','.join('?' for _ in wanted)})", wanted
+
+
 class SqliteSettingsRepository:
     def __init__(self, conn: aiosqlite.Connection, clock_now: Any) -> None:
         self._conn = conn
@@ -439,7 +447,9 @@ class SqliteJobRepository:
         row = await cur.fetchone()
         return str(row["id"]) if row else None
 
-    async def list(self, *, company_id=None, source_id=None, limit=50, offset=0):
+    async def list(
+        self, *, company_id=None, source_id=None, limit=50, offset=0, exclude_job_ids=None
+    ):
         self._conn.row_factory = aiosqlite.Row
         clauses = []
         params = []
@@ -449,6 +459,10 @@ class SqliteJobRepository:
         if source_id:
             clauses.append("source_id = ?")
             params.append(source_id)
+        exclusion, excluded = _exclusion("id", exclude_job_ids)
+        if exclusion:
+            clauses.append(exclusion)
+            params.extend(excluded)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.extend([limit, offset])
         cur = await self._conn.execute(
@@ -523,15 +537,17 @@ class SqliteJobRepository:
             return ""
         return " AND ".join('"' + t.replace('"', '""') + '"' for t in terms)
 
-    async def search(self, query, *, limit=50, offset=0):
+    async def search(self, query, *, limit=50, offset=0, exclude_job_ids=None):
         self._conn.row_factory = aiosqlite.Row
         fts_query = self._fts5_query(query)
         if not fts_query:
             return []
+        exclusion, excluded = _exclusion("jobs.id", exclude_job_ids)
+        where = "jobs_fts MATCH ?" + (f" AND {exclusion}" if exclusion else "")
         cur = await self._conn.execute(
             "SELECT jobs.* FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid "
-            "WHERE jobs_fts MATCH ? ORDER BY rank, jobs.rowid LIMIT ? OFFSET ?",
-            (fts_query, limit, offset),
+            f"WHERE {where} ORDER BY rank, jobs.rowid LIMIT ? OFFSET ?",
+            (fts_query, *excluded, limit, offset),
         )
         return [self._row(r) for r in await cur.fetchall()]
 
@@ -544,6 +560,7 @@ class SqliteJobRepository:
         company_id=None,
         limit=50,
         offset=0,
+        exclude_job_ids=None,
     ):
         """Return ``(page, total)`` for hard filters, counted by SQLite.
 
@@ -559,6 +576,7 @@ class SqliteJobRepository:
                 company_id=company_id,
                 limit=limit,
                 offset=offset,
+                exclude_job_ids=exclude_job_ids,
             )
 
         conditions, params = compiled
@@ -568,6 +586,10 @@ class SqliteJobRepository:
         if company_id:
             conditions.append("jobs.company_id = ?")
             params.append(company_id)
+        exclusion, excluded = _exclusion("jobs.id", exclude_job_ids)
+        if exclusion:
+            conditions.append(exclusion)
+            params.extend(excluded)
 
         if query:
             fts_query = self._fts5_query(query)
@@ -595,7 +617,15 @@ class SqliteJobRepository:
         return [self._row(r) for r in await page_cur.fetchall()], total
 
     async def _filtered_scan(
-        self, filters, *, query=None, source_id=None, company_id=None, limit=50, offset=0
+        self,
+        filters,
+        *,
+        query=None,
+        source_id=None,
+        company_id=None,
+        limit=50,
+        offset=0,
+        exclude_job_ids=None,
     ):
         """Exhaustive, bounded-memory fallback for Python-only filters."""
         page = []
@@ -603,20 +633,26 @@ class SqliteJobRepository:
         scan_offset = 0
         while True:
             if query:
-                batch = await self.search(query, limit=500, offset=scan_offset)
+                batch = await self.search(
+                    query, limit=500, offset=scan_offset, exclude_job_ids=exclude_job_ids
+                )
             else:
                 batch = await self.list(
                     source_id=source_id,
                     company_id=company_id,
                     limit=500,
                     offset=scan_offset,
+                    exclude_job_ids=exclude_job_ids,
                 )
             if not batch:
                 break
+            excluded_set = set(exclude_job_ids or ())
             for row in apply_hard_filters(batch, filters):
                 if source_id and row.get("source_id") != source_id:
                     continue
                 if company_id and row.get("company_id") != company_id:
+                    continue
+                if excluded_set and row.get("id") in excluded_set:
                     continue
                 if total >= offset and len(page) < limit:
                     page.append(row)
@@ -661,8 +697,12 @@ class SqliteJobRepository:
             "updated_at_hint": row["updated_at_hint"],
         }
 
-    async def count(self):
-        cur = await self._conn.execute("SELECT COUNT(*) FROM jobs")
+    async def count(self, *, exclude_job_ids=None):
+        exclusion, excluded = _exclusion("id", exclude_job_ids)
+        where = f" WHERE {exclusion}" if exclusion else ""
+        cur = await self._conn.execute(
+            f"SELECT COUNT(*) FROM jobs{where}", tuple(excluded)
+        )
         row = await cur.fetchone()
         return int(row[0]) if row else 0
 

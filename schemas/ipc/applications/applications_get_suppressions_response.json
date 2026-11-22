@@ -1,0 +1,114 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "suppressions": {
+      "items": {
+        "$ref": "#/$defs/ApplicationsGetSuppressionsResponseSuppressionInfo"
+      },
+      "type": "array"
+    },
+    "total": {
+      "default": 0,
+      "type": "integer"
+    },
+    "policy": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "suppressions"
+  ],
+  "title": "ApplicationsGetSuppressionsResponse",
+  "type": "object",
+  "$defs": {
+    "ApplicationsGetSuppressionsResponseSuppressionInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "suppression_id": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "application_id": {
+          "type": "string"
+        },
+        "job_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "company_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "state": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "similarity": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "policy": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "suppression_id",
+        "job_id",
+        "application_id",
+        "state",
+        "reason",
+        "explanation"
+      ],
+      "type": "object"
+    }
+  }
+}

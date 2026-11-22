@@ -31,7 +31,12 @@ from app.application.commands.search_profiles import SearchProfilesUseCase
 from app.application.commands.settings import SettingsUseCase
 from app.application.commands.sources import SourcesUseCase
 from app.application.commands.tasks import TasksUseCase
-from app.application.config import SETTINGS_KEY, AppConfig, discovery_settings
+from app.application.config import (
+    SETTINGS_KEY,
+    AppConfig,
+    ConfigState,
+    discovery_settings,
+)
 from app.application.dto import DiscoveryRunParams
 from app.application.orchestration.scheduler import CrawlScheduler
 from app.application.sources import SourceRegistry
@@ -128,7 +133,18 @@ def _build_dispatcher(
     container: Any, wiring: DiscoveryWiring | None = None
 ) -> Dispatcher:
     from app.application.dto import (
+        ApplicationCreateParams,
+        ApplicationEventParams,
+        ApplicationOutcomeParams,
+        ApplicationStatusParams,
+        BrowserAutofillParams,
+        BrowserCloseParams,
+        BrowserHandoffParams,
+        BrowserInspectParams,
+        BrowserOpenJobParams,
+        BrowserPlanParams,
         CancelTaskParams,
+        CompanyHistoryParams,
         DiscoveryRunParams,
         EmptyParams,
         FetchUrlParams,
@@ -137,12 +153,14 @@ def _build_dispatcher(
         JobIdParams,
         JobMergeParams,
         JobSearchParams,
+        JobUserStateParams,
         KeywordsExtractParams,
         MatchingRunParams,
         MatchingWeightsParams,
         PluginConfigureParams,
         PluginIdParams,
         PluginOptionalIdParams,
+        RestoreSuppressedJobParams,
         ResumeImportParams,
         ResumeOverridesParams,
         ResumeParseParams,
@@ -158,6 +176,7 @@ def _build_dispatcher(
         SourceSetEnabledParams,
         SourceSetExtractionOrderParams,
         SourceSetScheduleParams,
+        SuppressionPolicyParams,
         TaskFilter,
     )
 
@@ -250,6 +269,88 @@ def _build_dispatcher(
     dispatcher.register("matching.get_results", matching.get_results, params_model=ResumeProfileParams)
     dispatcher.register("matching.update_weights", matching.update_weights, params_model=MatchingWeightsParams)
     dispatcher.register("keywords.extract", keywords.extract, params_model=KeywordsExtractParams)
+
+    from app.application.commands.applications import (
+        ApplicationsUseCase,
+        SuppressionsUseCase,
+    )
+    from app.worker.ipc.handlers.applications import ApplicationsHandlers
+
+    applications = ApplicationsHandlers(
+        ApplicationsUseCase(container), SuppressionsUseCase(container)
+    )
+    dispatcher.register(
+        "applications.create", applications.create, params_model=ApplicationCreateParams
+    )
+    dispatcher.register(
+        "applications.update_status",
+        applications.update_status,
+        params_model=ApplicationStatusParams,
+    )
+    dispatcher.register(
+        "applications.add_event", applications.add_event, params_model=ApplicationEventParams
+    )
+    dispatcher.register(
+        "applications.record_outcome",
+        applications.record_outcome,
+        params_model=ApplicationOutcomeParams,
+    )
+    dispatcher.register(
+        "applications.list", applications.list, params_model=EmptyParams
+    )
+    dispatcher.register(
+        "applications.get_company_history",
+        applications.get_company_history,
+        params_model=CompanyHistoryParams,
+    )
+    dispatcher.register(
+        "applications.get_suppressions",
+        applications.get_suppressions,
+        params_model=EmptyParams,
+    )
+    dispatcher.register(
+        "applications.get_suppression_policy",
+        applications.get_suppression_policy,
+        params_model=EmptyParams,
+    )
+    dispatcher.register(
+        "applications.restore_suppressed_job",
+        applications.restore_suppressed_job,
+        params_model=RestoreSuppressedJobParams,
+    )
+    dispatcher.register(
+        "applications.update_suppression_policy",
+        applications.update_suppression_policy,
+        params_model=SuppressionPolicyParams,
+    )
+    dispatcher.register(
+        "jobs.set_user_state",
+        applications.set_user_state,
+        params_model=JobUserStateParams,
+    )
+
+    from app.application.commands.browser import BrowserUseCase
+    from app.worker.ipc.handlers.browser import BrowserHandlers
+
+    browser = BrowserHandlers(BrowserUseCase(container))
+    dispatcher.register(
+        "browser.open_job", browser.open_job, params_model=BrowserOpenJobParams
+    )
+    dispatcher.register(
+        "browser.inspect_form", browser.inspect_form, params_model=BrowserInspectParams
+    )
+    dispatcher.register(
+        "browser.autofill_plan", browser.autofill_plan, params_model=BrowserPlanParams
+    )
+    dispatcher.register(
+        "browser.autofill", browser.autofill, params_model=BrowserAutofillParams
+    )
+    dispatcher.register(
+        "browser.handoff", browser.handoff, params_model=BrowserHandoffParams
+    )
+    dispatcher.register(
+        "browser.close_session", browser.close_session, params_model=BrowserCloseParams
+    )
 
     profiles = SearchProfilesHandlers(SearchProfilesUseCase(container))
     dispatcher.register("search_profiles.list", profiles.list, params_model=EmptyParams)
@@ -401,6 +502,22 @@ async def main() -> int:
     if runner is not None:
         await runner.start()
 
+    # The browser is an optional capability: without Playwright every
+    # browser.* call reports an actionable error instead of stopping the worker.
+    from dataclasses import replace as dc_replace
+
+    from app.infrastructure.browser import PlaywrightBrowserProvider
+
+    config_state = ConfigState(cfg)
+    container = dc_replace(
+        container,
+        extra={
+            **container.extra,
+            "browser_provider": PlaywrightBrowserProvider(),
+            "config_state": config_state,
+        },
+    )
+
     wiring = _build_discovery(container)
     dispatcher = _build_dispatcher(container, wiring)
     # Schedules are restored from the database, but nothing crawls on launch:
@@ -480,7 +597,11 @@ async def main() -> int:
                 elif method == "settings.update":
                     # The pass loop, its budgets and the tier intervals all read
                     # the config they were built with; reload the stored one.
-                    wiring.refresh_config(await _load_config(uow_factory, data_dir))
+                    # The live holder keeps call-time readers (autofill, the
+                    # suppression defaults) in step without a restart.
+                    reloaded = await _load_config(uow_factory, data_dir)
+                    wiring.refresh_config(reloaded)
+                    config_state.set(reloaded)
                     await wiring.sync_scheduler(run_immediately=False)
                 elif method in TIER_AFFECTING_METHODS:
                     # A profile/skill edit changes which boards are hot: retier
@@ -540,6 +661,9 @@ async def main() -> int:
         writer_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await writer_task
+        browser_provider = container.extra.get("browser_provider")
+        if browser_provider is not None:
+            await browser_provider.close_all()
         logger.info("worker.shutdown")
     return 0
 

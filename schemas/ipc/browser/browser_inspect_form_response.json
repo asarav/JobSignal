@@ -1,0 +1,50 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "step_index": {
+      "default": 0,
+      "type": "integer"
+    },
+    "step_count": {
+      "default": 1,
+      "type": "integer"
+    },
+    "is_final_step": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fields": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "controls": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "url"
+  ],
+  "title": "BrowserInspectFormResponse",
+  "type": "object"
+}

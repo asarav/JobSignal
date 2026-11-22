@@ -270,11 +270,111 @@
       "long_running": false,
       "request_schema": "schemas/ipc/discovery/discovery_auto_discover_request.json",
       "response_schema": "schemas/ipc/discovery/discovery_auto_discover_response.json"
+    },
+    {
+      "method": "applications.create",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_create_request.json",
+      "response_schema": "schemas/ipc/applications/applications_create_response.json"
+    },
+    {
+      "method": "applications.update_status",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_update_status_request.json",
+      "response_schema": "schemas/ipc/applications/applications_update_status_response.json"
+    },
+    {
+      "method": "applications.add_event",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_add_event_request.json",
+      "response_schema": "schemas/ipc/applications/applications_add_event_response.json"
+    },
+    {
+      "method": "applications.record_outcome",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_record_outcome_request.json",
+      "response_schema": "schemas/ipc/applications/applications_record_outcome_response.json"
+    },
+    {
+      "method": "applications.list",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_list_request.json",
+      "response_schema": "schemas/ipc/applications/applications_list_response.json"
+    },
+    {
+      "method": "applications.get_company_history",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_get_company_history_request.json",
+      "response_schema": "schemas/ipc/applications/applications_get_company_history_response.json"
+    },
+    {
+      "method": "applications.get_suppressions",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_get_suppressions_request.json",
+      "response_schema": "schemas/ipc/applications/applications_get_suppressions_response.json"
+    },
+    {
+      "method": "applications.get_suppression_policy",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_get_suppression_policy_request.json",
+      "response_schema": "schemas/ipc/applications/applications_get_suppression_policy_response.json"
+    },
+    {
+      "method": "applications.restore_suppressed_job",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_restore_suppressed_job_request.json",
+      "response_schema": "schemas/ipc/applications/applications_restore_suppressed_job_response.json"
+    },
+    {
+      "method": "applications.update_suppression_policy",
+      "long_running": false,
+      "request_schema": "schemas/ipc/applications/applications_update_suppression_policy_request.json",
+      "response_schema": "schemas/ipc/applications/applications_update_suppression_policy_response.json"
+    },
+    {
+      "method": "jobs.set_user_state",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_set_user_state_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_set_user_state_response.json"
+    },
+    {
+      "method": "browser.open_job",
+      "long_running": false,
+      "request_schema": "schemas/ipc/browser/browser_open_job_request.json",
+      "response_schema": "schemas/ipc/browser/browser_open_job_response.json"
+    },
+    {
+      "method": "browser.inspect_form",
+      "long_running": false,
+      "request_schema": "schemas/ipc/browser/browser_inspect_form_request.json",
+      "response_schema": "schemas/ipc/browser/browser_inspect_form_response.json"
+    },
+    {
+      "method": "browser.autofill_plan",
+      "long_running": false,
+      "request_schema": "schemas/ipc/browser/browser_autofill_plan_request.json",
+      "response_schema": "schemas/ipc/browser/browser_autofill_plan_response.json"
+    },
+    {
+      "method": "browser.autofill",
+      "long_running": false,
+      "request_schema": "schemas/ipc/browser/browser_autofill_request.json",
+      "response_schema": "schemas/ipc/browser/browser_autofill_response.json"
+    },
+    {
+      "method": "browser.handoff",
+      "long_running": false,
+      "request_schema": "schemas/ipc/browser/browser_handoff_request.json",
+      "response_schema": "schemas/ipc/browser/browser_handoff_response.json"
+    },
+    {
+      "method": "browser.close_session",
+      "long_running": false,
+      "request_schema": "schemas/ipc/browser/browser_close_session_request.json",
+      "response_schema": "schemas/ipc/browser/browser_close_session_response.json"
     }
   ],
   "forbidden_prefixes": [
-    "applications.",
-    "posting_intelligence.",
-    "browser."
+    "posting_intelligence."
   ]
 }

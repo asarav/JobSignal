@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "hidden": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "job_id",
+    "state"
+  ],
+  "title": "JobsSetUserStateResponse",
+  "type": "object"
+}

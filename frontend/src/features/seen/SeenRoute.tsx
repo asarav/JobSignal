@@ -3,22 +3,39 @@ import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { Copy } from "../../copy/copy";
 import { workerClient, WorkerError } from "../../services/workerClient";
-import type { JobsListSeenResponseJobSummary } from "../../types/generated";
+import type {
+  ApplicationsGetSuppressionsResponseSuppressionInfo,
+  JobsListSeenResponseJobSummary,
+} from "../../types/generated";
 
 const reasonLabels: Record<string, string> = {
   duplicate: "Duplicate / repost",
   posting_removed: "No longer listed",
+  suppressed: "Hidden after applying",
+  suppression_expired: "Cooldown ended",
+  suppression_restored: "Restored by you",
+  dismissed: "Dismissed",
+  hidden: "Hidden",
+  saved: "Saved",
+  new: "Marked new",
 };
 
 export function SeenRoute() {
   const [jobs, setJobs] = useState<JobsListSeenResponseJobSummary[]>([]);
+  const [suppressions, setSuppressions] = useState<
+    ApplicationsGetSuppressionsResponseSuppressionInfo[]
+  >([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const result = await workerClient.listSeenJobs();
+      const [result, suppressed] = await Promise.all([
+        workerClient.listSeenJobs(),
+        workerClient.getSuppressions(),
+      ]);
       setJobs(result.jobs);
+      setSuppressions(suppressed.suppressions);
       setError(null);
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -28,6 +45,22 @@ export function SeenRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const restore = async (jobId: string, applicationId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await workerClient.restoreSuppressedJob({
+        job_id: jobId,
+        application_id: applicationId,
+      });
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const unmerge = async (jobId: string, relatedJobId: string) => {
     setBusy(true);
@@ -46,8 +79,44 @@ export function SeenRoute() {
     <div className="space-y-6">
       <PageHeader
         title="Previously seen"
-        description="Postings that disappeared from their source and jobs linked as duplicates or reposts."
+        description="Postings that disappeared from their source, jobs linked as duplicates or reposts, and roles hidden because of applications."
       />
+
+      {suppressions.length > 0 ? (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Hidden roles</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Why each role is out of your results, and when the cooldown ends.
+          </p>
+          <ul className="mt-2 divide-y divide-slate-100">
+            {suppressions.map((row, index) => (
+              <li
+                key={`${row.job_id}-${row.application_id}-${index}`}
+                className="py-3 text-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-slate-900">
+                    {row.job_title ?? row.job_id}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy || row.state === "restored"}
+                    onClick={() => void restore(row.job_id, row.application_id)}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {row.state === "restored" ? "Restored" : "Restore"}
+                  </button>
+                </div>
+                <p className="mt-1 text-slate-600">{row.explanation}</p>
+                <div className="mt-1 text-xs text-slate-500">
+                  {reasonLabels[row.reason] ?? row.reason}
+                  {row.expires_at ? ` · until ${new Date(row.expires_at).toLocaleDateString()}` : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>

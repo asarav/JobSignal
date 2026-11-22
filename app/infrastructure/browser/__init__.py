@@ -1,5 +1,13 @@
-"""Browser adapters (M2)."""
+"""Browser infrastructure (spec §13).
 
-from app.infrastructure.browser.playwright import PlaywrightBrowserProvider
+Playwright never leaks past this package: callers see the domain ports only.
+"""
 
-__all__ = ["PlaywrightBrowserProvider"]
+from __future__ import annotations
+
+from app.infrastructure.browser.playwright_provider import (
+    PlaywrightBrowserProvider,
+    playwright_available,
+)
+
+__all__ = ["PlaywrightBrowserProvider", "playwright_available"]

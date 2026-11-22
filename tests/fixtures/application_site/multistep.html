@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head><title>Step 1 of 3 — Application</title></head>
+  <body>
+    <h1>Your details (step 1 of 3)</h1>
+    <form id="step_form" data-step="1" action="/apply" method="post">
+      <fieldset>
+        <legend>Contact</legend>
+        <p>
+          <label for="full_name">Full name</label>
+          <input id="full_name" name="full_name" autocomplete="name" />
+        </p>
+        <p>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" />
+        </p>
+        <p>
+          <label for="linkedin">LinkedIn profile</label>
+          <input id="linkedin" name="linkedin" type="url" />
+        </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Availability</legend>
+        <p>
+          <label for="start">Earliest start date</label>
+          <input id="start" name="start_date" type="date" />
+        </p>
+        <p>
+          <label for="notice">Notice period</label>
+          <input id="notice" name="notice_period" />
+        </p>
+      </fieldset>
+
+      <div class="actions">
+        <button type="button" id="back">Back</button>
+        <button type="button" id="next">Continue</button>
+      </div>
+    </form>
+  </body>
+</html>

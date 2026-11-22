@@ -22,6 +22,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any, cast
 
+from app.application import suppression as suppression_glue
 from app.application.dedup import (
     build_fingerprint,
     record_fingerprint,
@@ -609,6 +610,14 @@ async def _persist_job(
             posting_status="active",
         )
         await record_fingerprint(uow, job_id=job_id, fingerprint=fingerprint, now=now)
+        # A new or materially updated posting is checked against the user's
+        # applications straight away, so it never flashes into the results.
+        await suppression_glue.evaluate_job(
+            uow,
+            job_id,
+            policy=await suppression_glue.load_policy(uow, config),
+            now=now,
+        )
         if decision is not None:
             await record_repost_event(
                 uow,

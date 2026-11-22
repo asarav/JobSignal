@@ -175,7 +175,7 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   pods (a pod-scoped index query answers in 17–38 s) and rebuilds each
   `{host}/hcmUI/CandidateExperience/{lang}/sites/{site}` board from the URL.
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships 25,651 boards across nine ATSs (Greenhouse,
+  `discovery.ats_directory` ships 25,716 boards across nine ATSs (Greenhouse,
   Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS and UKG
   Pro/UltiPro), each
   confirmed live through its own public ATS API and ordered largest-first by
@@ -230,13 +230,48 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
 - **Provenance** surfaces in the data model and the Discover screen.
 
 
+## What Milestone 7 adds
+
+- **Application tracking** (`applications.*`): a job snapshot, a free-form
+  status history with an append-only event log, outcomes, and per-company
+  history. Pre-application states (`interested`, `saved`) never start a
+  cooldown.
+- **Company-aware suppression**: an applied job hides its own reposts, similar
+  roles at the same company for 180 days, and — only when enabled — every role
+  at the company for 90 days. Each decision stores its evidence, explanation,
+  expiry and the policy that produced it. Hidden roles leave the default
+  result lists and appear in Previously Seen with a Restore action; restoring
+  is sticky.
+- **Suppression policy UI**: cooldown lengths, similarity threshold, exact-repost
+  and company-wide toggles, applied immediately with a re-evaluation of hidden
+  roles.
+- **Reviewed autofill** (`browser.*`): a headed browser you control, a form
+  model and classifier, a review panel that lists what will be filled and what
+  is blocked, and a filler restricted to fill/select/check/upload primitives.
+  Nothing can submit: there is no click, press or evaluate capability, step
+  navigation is disabled, and submission requests are aborted at the network
+  layer for the whole life of the window. You submit by clicking
+  **I'll submit in the browser**, which is the only thing that turns the guard
+  off (`browser.handoff`); another fill turns it back on. A CI-blocking safety
+  suite proves it against fixture forms, and a real Playwright run against a
+  local fixture server counts zero submissions — including a POST delayed well
+  past the fill — while confirming a human Submit click still works.
+- **Autofill answers**: Settings → Autofill answers is the answer book — the
+  only values the filler may type. Re-checking a form re-inspects the current
+  step, saving applies without a restart, and one step is bounded in writes.
+
+See
+[`docs/how-applications-and-autofill-work.md`](docs/how-applications-and-autofill-work.md)
+and [ADR 0008](docs/adr/0008-session-long-submission-interceptor.md) for why the
+submission guard lives for the whole session.
+
 ## Still not implemented
 
 These are **intentionally absent** so far, and the IPC allowlist rejects them
 (there is a test for it):
 
-- Saved jobs — not part of the Milestone 6 deliverables
-- Application tracking, suppression, company intelligence, outcome analytics — Milestone 7
+- A Saved-jobs screen — job user state is stored, the screen is not built
+- Company intelligence, outcome analytics — Milestone 9
 - Ghost-job / posting-quality risk models — Milestone 8
 - Outcome feedback and analytics — Milestone 9
 - Posting intelligence UI refinement — Milestone 10

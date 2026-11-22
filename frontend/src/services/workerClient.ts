@@ -1,5 +1,33 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  ApplicationsCreateRequest,
+  BrowserAutofillPlanRequest,
+  BrowserAutofillPlanResponse,
+  BrowserAutofillRequest,
+  BrowserAutofillResponse,
+  BrowserCloseSessionRequest,
+  BrowserCloseSessionResponse,
+  BrowserHandoffRequest,
+  BrowserHandoffResponse,
+  BrowserInspectFormRequest,
+  BrowserInspectFormResponse,
+  BrowserOpenJobRequest,
+  BrowserOpenJobResponse,
+  ApplicationsCreateResponse,
+  ApplicationsGetCompanyHistoryRequest,
+  ApplicationsGetCompanyHistoryResponse,
+  ApplicationsGetSuppressionPolicyRequest,
+  ApplicationsGetSuppressionPolicyResponse,
+  ApplicationsGetSuppressionsRequest,
+  ApplicationsGetSuppressionsResponse,
+  ApplicationsListRequest,
+  ApplicationsListResponse,
+  ApplicationsRestoreSuppressedJobRequest,
+  ApplicationsRestoreSuppressedJobResponse,
+  ApplicationsUpdateStatusRequest,
+  ApplicationsUpdateStatusResponse,
+  ApplicationsUpdateSuppressionPolicyRequest,
+  ApplicationsUpdateSuppressionPolicyResponse,
   CrawlRunsListRequest,
   CrawlRunsListResponse,
   DiagnosticsFetchUrlRequest,
@@ -40,6 +68,8 @@ import type {
   JobsListSeenRequest,
   JobsListSeenResponse,
   JobsSearchRequest,
+  JobsSetUserStateRequest,
+  JobsSetUserStateResponse,
   JobsSearchResponse,
   JobsUnmergeRequest,
   JobsUnmergeResponse,
@@ -121,6 +151,23 @@ export type WorkerMethod =
   | "search_profiles.delete"
   | "discovery.run"
   | "discovery.auto_discover"
+  | "applications.list"
+  | "applications.create"
+  | "applications.update_status"
+  | "applications.add_event"
+  | "applications.record_outcome"
+  | "applications.get_company_history"
+  | "applications.get_suppressions"
+  | "applications.get_suppression_policy"
+  | "applications.restore_suppressed_job"
+  | "applications.update_suppression_policy"
+  | "jobs.set_user_state"
+  | "browser.open_job"
+  | "browser.inspect_form"
+  | "browser.autofill_plan"
+  | "browser.autofill"
+  | "browser.handoff"
+  | "browser.close_session"
   | "resume.import"
   | "resume.list_versions"
   | "resume.get_profile"
@@ -347,6 +394,89 @@ export class WorkerClient {
 
   fetchUrl(request: DiagnosticsFetchUrlRequest): Promise<DiagnosticsFetchUrlResponse> {
     return this.request("diagnostics.fetch_url", { ...request });
+  }
+
+  listApplications(
+    request: ApplicationsListRequest = {},
+  ): Promise<ApplicationsListResponse> {
+    return this.request("applications.list", { ...request });
+  }
+
+  createApplication(
+    request: ApplicationsCreateRequest,
+  ): Promise<ApplicationsCreateResponse> {
+    return this.request("applications.create", { ...request });
+  }
+
+  updateApplicationStatus(
+    request: ApplicationsUpdateStatusRequest,
+  ): Promise<ApplicationsUpdateStatusResponse> {
+    return this.request("applications.update_status", { ...request });
+  }
+
+  getCompanyHistory(
+    request: ApplicationsGetCompanyHistoryRequest,
+  ): Promise<ApplicationsGetCompanyHistoryResponse> {
+    return this.request("applications.get_company_history", { ...request });
+  }
+
+  getSuppressions(
+    request: ApplicationsGetSuppressionsRequest = {},
+  ): Promise<ApplicationsGetSuppressionsResponse> {
+    return this.request("applications.get_suppressions", { ...request });
+  }
+
+  getSuppressionPolicy(
+    request: ApplicationsGetSuppressionPolicyRequest = {},
+  ): Promise<ApplicationsGetSuppressionPolicyResponse> {
+    return this.request("applications.get_suppression_policy", { ...request });
+  }
+
+  restoreSuppressedJob(
+    request: ApplicationsRestoreSuppressedJobRequest,
+  ): Promise<ApplicationsRestoreSuppressedJobResponse> {
+    return this.request("applications.restore_suppressed_job", { ...request });
+  }
+
+  updateSuppressionPolicy(
+    request: ApplicationsUpdateSuppressionPolicyRequest,
+  ): Promise<ApplicationsUpdateSuppressionPolicyResponse> {
+    return this.request("applications.update_suppression_policy", { ...request });
+  }
+
+  setJobUserState(request: JobsSetUserStateRequest): Promise<JobsSetUserStateResponse> {
+    return this.request("jobs.set_user_state", { ...request });
+  }
+
+  openJobInBrowser(request: BrowserOpenJobRequest): Promise<BrowserOpenJobResponse> {
+    return this.request("browser.open_job", { ...request });
+  }
+
+  inspectApplicationForm(
+    request: BrowserInspectFormRequest,
+  ): Promise<BrowserInspectFormResponse> {
+    return this.request("browser.inspect_form", { ...request });
+  }
+
+  planAutofill(request: BrowserAutofillPlanRequest): Promise<BrowserAutofillPlanResponse> {
+    return this.request("browser.autofill_plan", { ...request });
+  }
+
+  autofillForm(request: BrowserAutofillRequest): Promise<BrowserAutofillResponse> {
+    return this.request("browser.autofill", { ...request });
+  }
+
+  /** Turn the submission interceptor off because the user is submitting now. */
+  handoffBrowserSession(
+    request: BrowserHandoffRequest,
+  ): Promise<BrowserHandoffResponse> {
+    return this.request("browser.handoff", { ...request });
+  }
+
+  closeBrowserSession(
+    request: BrowserCloseSessionRequest,
+  ): Promise<BrowserCloseSessionResponse> {
+    return this.request("browser.close_session", { ...request });
   }
 
   onEvent(handler: (event: Envelope) => void): Promise<UnlistenFn> {

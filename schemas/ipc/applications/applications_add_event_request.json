@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "application_id": {
+      "type": "string"
+    },
+    "kind": {
+      "default": "note",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    },
+    "data": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "application_id"
+  ],
+  "title": "ApplicationsAddEventRequest",
+  "type": "object"
+}

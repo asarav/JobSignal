@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "application_id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "occurred_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "application_id",
+    "kind"
+  ],
+  "title": "ApplicationsRecordOutcomeRequest",
+  "type": "object"
+}

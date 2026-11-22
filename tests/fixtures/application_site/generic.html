@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head><title>Apply — Backend Engineer at Acme</title></head>
+  <body>
+    <h1>Apply for Backend Engineer</h1>
+    <form id="application" action="/apply" method="post" enctype="multipart/form-data">
+      <fieldset>
+        <legend>Personal details</legend>
+        <p>
+          <label for="first_name">First name</label>
+          <input id="first_name" name="first_name" autocomplete="given-name" required />
+        </p>
+        <p>
+          <label for="last_name">Last name</label>
+          <input id="last_name" name="last_name" autocomplete="family-name" />
+        </p>
+        <p>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" />
+        </p>
+        <p>
+          <label for="phone">Phone</label>
+          <input id="phone" name="phone" type="tel" autocomplete="tel" />
+        </p>
+        <!-- Honeypot: visually hidden, must never be filled. -->
+        <input
+          type="text"
+          name="website_confirm"
+          id="website_confirm"
+          style="display:none"
+          tabindex="-1"
+          aria-hidden="true"
+        />
+      </fieldset>
+
+      <fieldset>
+        <legend>Documents</legend>
+        <p>
+          <label for="resume">Resume/CV</label>
+          <input id="resume" name="resume" type="file" />
+        </p>
+        <p>
+          <label for="cover">Cover letter</label>
+          <textarea id="cover" name="cover_letter" rows="6"></textarea>
+        </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Voluntary self-identification</legend>
+        <p>
+          <label for="gender">Gender</label>
+          <select id="gender" name="gender">
+            <option value="">Select…</option>
+            <option value="decline">Decline to answer</option>
+            <option value="woman">Woman</option>
+            <option value="man">Man</option>
+          </select>
+        </p>
+        <p>
+          <label for="race">Race/ethnicity</label>
+          <select id="race" name="race">
+            <option value="">Select…</option>
+            <option value="decline">Decline to answer</option>
+            <option value="asian">Asian</option>
+          </select>
+        </p>
+        <p>
+          <label for="veteran">Veteran status</label>
+          <select id="veteran" name="veteran_status">
+            <option value="">Select…</option>
+            <option value="decline">I don't wish to answer</option>
+            <option value="yes">I am a protected veteran</option>
+          </select>
+        </p>
+        <p>
+          <label for="disability">Disability status</label>
+          <select id="disability" name="disability_status">
+            <option value="">Select…</option>
+            <option value="decline">I don't wish to answer</option>
+          </select>
+        </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Authorization</legend>
+        <p>
+          <label>
+            <input id="certify" name="certify" type="checkbox" />
+            I certify that the information provided is true and complete.
+          </label>
+        </p>
+        <p>
+          <label for="ssn">Social security number</label>
+          <input id="ssn" name="ssn" type="text" />
+        </p>
+        <p>
+          <label for="auth">Are you authorized to work in this country?</label>
+          <select id="auth" name="work_authorization">
+            <option value="">Select…</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </p>
+      </fieldset>
+
+      <button type="submit" id="submit_application">Submit application</button>
+    </form>
+  </body>
+</html>

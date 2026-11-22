@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { Copy } from "./copy";
 
 describe("copy module", () => {
-  it("lists only the features still absent after M6", () => {
+  it("lists only the features still absent after M7", () => {
     const joined = Copy.home.notImplementedList.join(" ").toLowerCase();
-    for (const term of ["application", "ghost", "browser"]) {
-      expect(joined).toContain(term);
-    }
-    for (const shipped of ["crawl", "ats connectors", "resume parsing"]) {
+    expect(joined).toContain("ghost");
+    for (const shipped of [
+      "application tracking",
+      "suppression",
+      "browser",
+      "autofill",
+      "crawl",
+      "ats connectors",
+      "resume parsing",
+    ]) {
       expect(joined).not.toContain(shipped);
     }
   });

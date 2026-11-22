@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "plan_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "url": {
+      "default": "",
+      "type": "string"
+    },
+    "step_index": {
+      "default": 0,
+      "type": "integer"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "plan_id",
+    "session_id"
+  ],
+  "title": "BrowserAutofillPlanResponse",
+  "type": "object"
+}

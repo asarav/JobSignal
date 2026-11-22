@@ -3,8 +3,18 @@ import { useParams } from "react-router-dom";
 import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { Copy } from "../../copy/copy";
+import { AutofillPanel } from "./AutofillPanel";
 import { workerClient, WorkerError } from "../../services/workerClient";
-import type { JobsGetDetailResponse } from "../../types/generated";
+import type {
+  ApplicationsListResponseApplicationInfo,
+  JobsGetDetailResponse,
+} from "../../types/generated";
+
+const TRACKING_STATES: { status: string; label: string }[] = [
+  { status: "interested", label: "Interested" },
+  { status: "saved", label: "Saved" },
+  { status: "applied", label: "Applied" },
+];
 
 function text(value: unknown, fallback = ""): string {
   return typeof value === "string" && value ? value : fallback;
@@ -34,16 +44,25 @@ function formatTimestamp(value: unknown): string {
 export function JobDetailRoute() {
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<JobsGetDetailResponse | null>(null);
+  const [application, setApplication] =
+    useState<ApplicationsListResponseApplicationInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       if (!id) return;
       try {
-        const result = await workerClient.getJobDetail({ job_id: id });
+        const [result, tracked] = await Promise.all([
+          workerClient.getJobDetail({ job_id: id }),
+          workerClient.listApplications(),
+        ]);
         if (!cancelled) {
           setDetail(result);
+          setApplication(
+            tracked.applications.find((row) => row.job_id === id) ?? null,
+          );
           setError(null);
         }
       } catch (exc) {
@@ -57,6 +76,28 @@ export function JobDetailRoute() {
       cancelled = true;
     };
   }, [id]);
+
+  const track = async (status: string) => {
+    if (!id) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (application) {
+        await workerClient.updateApplicationStatus({
+          application_id: application.application_id,
+          status,
+        });
+      } else {
+        await workerClient.createApplication({ job_id: id, status });
+      }
+      const tracked = await workerClient.listApplications();
+      setApplication(tracked.applications.find((row) => row.job_id === id) ?? null);
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const job = detail?.job ?? {};
   const reposts = detail?.reposts ?? [];
@@ -98,6 +139,38 @@ export function JobDetailRoute() {
           </div>
         </dl>
       </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Your application</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Tracking a job only records your history. Marking “Applied” hides similar
+          roles at this company for the cooldown; saving or dismissing never does.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {TRACKING_STATES.map((state) => (
+            <button
+              key={state.status}
+              type="button"
+              disabled={busy}
+              onClick={() => void track(state.status)}
+              className={`rounded border px-2 py-1 text-xs font-medium disabled:opacity-50 ${
+                application?.status === state.status
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-slate-300 text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {state.label}
+            </button>
+          ))}
+          {application ? (
+            <span className="text-xs text-slate-500">
+              Current status: {application.status}
+            </span>
+          ) : null}
+        </div>
+      </section>
+
+      {id ? <AutofillPanel jobId={id} /> : null}
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900" aria-label="Repost history">

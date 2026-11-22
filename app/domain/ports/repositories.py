@@ -6,6 +6,13 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Protocol
 
+from app.domain.models.application import (
+    Application,
+    ApplicationEvent,
+    ApplicationOutcome,
+    AppliedJob,
+    SuppressionRecord,
+)
 from app.domain.models.candidate import SearchProfile
 from app.domain.models.identity import JobFingerprintSet
 from app.domain.models.job import JobView, NormalizedJob
@@ -102,6 +109,7 @@ class JobRepository(Protocol):
         source_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        exclude_job_ids: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, object]]: ...
 
     async def list_for_sources(
@@ -115,7 +123,12 @@ class JobRepository(Protocol):
         ...
 
     async def search(
-        self, query: str, *, limit: int = 50, offset: int = 0
+        self,
+        query: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        exclude_job_ids: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, object]]: ...
 
     async def filtered_page(
@@ -127,11 +140,12 @@ class JobRepository(Protocol):
         company_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        exclude_job_ids: Sequence[str] | None = None,
     ) -> tuple[Sequence[Mapping[str, object]], int]:
         """Return one filtered page plus the total number of matches."""
         ...
 
-    async def count(self) -> int: ...
+    async def count(self, *, exclude_job_ids: Sequence[str] | None = None) -> int: ...
 
     async def mark_not_seen(
         self, source_id: str, seen_ids: Sequence[str], cutoff: datetime,
@@ -345,7 +359,107 @@ class MatchRepository(Protocol):
 class KeywordRepository(Protocol): ...
 
 
-class ApplicationRepository(Protocol): ...
+class ApplicationRepository(Protocol):
+    """Application history with an append-only event log (spec §8.1)."""
+
+    async def add(self, application: Application) -> None: ...
+
+    async def get(self, application_id: str) -> Application | None: ...
+
+    async def list(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> Sequence[Application]: ...
+
+    async def save(
+        self,
+        application_id: str,
+        *,
+        status: str,
+        applied_at: datetime | None,
+        notes: str,
+        resume_version_id: str | None,
+        updated_at: datetime,
+    ) -> Application | None: ...
+
+    async def find_for_job(self, job_id: str) -> Sequence[Application]: ...
+
+    async def list_applied(
+        self, *, company_id: str | None = None
+    ) -> Sequence[AppliedJob]:
+        """Applications that reached ``applied``, for suppression evaluation."""
+        ...
+
+    async def add_event(self, event: ApplicationEvent) -> None: ...
+
+    async def list_events(self, application_id: str) -> Sequence[ApplicationEvent]: ...
+
+    async def add_outcome(self, outcome: ApplicationOutcome) -> None: ...
+
+    async def list_outcomes(
+        self, application_id: str
+    ) -> Sequence[ApplicationOutcome]: ...
+
+
+class SuppressionRepository(Protocol):
+    """Stored suppression decisions and their state transitions (spec §8.2)."""
+
+    async def save(self, record: SuppressionRecord) -> None:
+        """Insert or refresh a decision; a restored pair stays restored."""
+        ...
+
+    async def get(
+        self, job_id: str, application_id: str
+    ) -> SuppressionRecord | None: ...
+
+    async def list(
+        self, *, state: str | None = None, limit: int = 200
+    ) -> Sequence[SuppressionRecord]: ...
+
+    async def list_for_job(self, job_id: str) -> Sequence[SuppressionRecord]: ...
+
+    async def active_job_ids(self) -> Sequence[str]: ...
+
+    async def restore(self, job_id: str, application_id: str, at: datetime) -> bool: ...
+
+    async def expire(self, now: datetime) -> Sequence[SuppressionRecord]:
+        """Lapse every due decision and return the rows that expired."""
+        ...
+
+    async def clear_restored(self, job_id: str, application_id: str) -> bool: ...
+
+    async def delete_for_application(self, application_id: str) -> int: ...
+
+    async def clear_job(self, job_id: str) -> int:
+        """Drop non-restored decisions for a job; a restore always survives."""
+        ...
+
+    async def get_policy(self) -> Mapping[str, object] | None:
+        """The stored default policy, or ``None`` when the user never changed it."""
+        ...
+
+    async def put_policy(
+        self, policy: Mapping[str, object], at: datetime
+    ) -> None: ...
+
+
+class JobUserStateRepository(Protocol):
+    """Saved/dismissed/hidden state; never an application (spec §8.1)."""
+
+    async def set(
+        self, job_id: str, state: str, *, note: str | None, updated_at: datetime
+    ) -> None: ...
+
+    async def get(self, job_id: str) -> Mapping[str, object] | None: ...
+
+    async def get_many(self, job_ids: Sequence[str]) -> Mapping[str, str]: ...
+
+    async def list(
+        self, *, state: str | None = None, limit: int = 200
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    async def hidden_job_ids(self) -> Sequence[str]: ...
+
+    async def clear(self, job_id: str) -> bool: ...
 
 
 class PluginStateRepository(Protocol):
@@ -377,6 +491,8 @@ class UnitOfWork(Protocol):
     jobs: JobRepository
     companies: CompanyRepository
     applications: ApplicationRepository
+    suppressions: SuppressionRepository
+    job_user_state: JobUserStateRepository
     settings: SettingsRepository
     observations: ObservationRepository
     resumes: ResumeRepository

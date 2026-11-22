@@ -3,6 +3,324 @@
 // Source of truth: Pydantic models in app/worker/ipc/method_catalog.py
 // CI fails if this file is stale.
 
+// schemas/ipc/applications/applications_add_event_request.json
+export interface ApplicationsAddEventRequest {
+  application_id: string;
+  kind?: string;
+  note?: string;
+  data?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/applications/applications_add_event_response.json
+export interface ApplicationsAddEventResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/applications/applications_create_request.json
+export interface ApplicationsCreateRequest {
+  job_id: string;
+  status?: string;
+  applied_at?: string | null;
+  notes?: string;
+  resume_version_id?: string | null;
+}
+
+// schemas/ipc/applications/applications_create_response.json
+export interface ApplicationsCreateResponse {
+  application_id: string;
+  company_id: string;
+  job_id: string;
+  job_title: string;
+  job_title_family?: string | null;
+  status: string;
+  applied_at?: string | null;
+  resume_version_id?: string | null;
+  notes?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  events?: {
+    [k: string]: unknown;
+  }[];
+  outcomes?: {
+    [k: string]: unknown;
+  }[];
+  suppressions?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/applications/applications_get_company_history_request.json
+export interface ApplicationsGetCompanyHistoryRequest {
+  company_id: string;
+}
+
+// schemas/ipc/applications/applications_get_company_history_response.json
+export interface ApplicationsGetCompanyHistoryResponse {
+  company_id: string;
+  applications: ApplicationsGetCompanyHistoryResponseApplicationInfo[];
+  total?: number;
+  total_applied?: number;
+  last_applied_at?: string | null;
+}
+export interface ApplicationsGetCompanyHistoryResponseApplicationInfo {
+  application_id: string;
+  company_id: string;
+  job_id: string;
+  job_title: string;
+  job_title_family?: string | null;
+  status: string;
+  applied_at?: string | null;
+  resume_version_id?: string | null;
+  notes?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  events?: {
+    [k: string]: unknown;
+  }[];
+  outcomes?: {
+    [k: string]: unknown;
+  }[];
+  suppressions?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/applications/applications_get_suppression_policy_request.json
+export interface ApplicationsGetSuppressionPolicyRequest {}
+
+// schemas/ipc/applications/applications_get_suppression_policy_response.json
+export interface ApplicationsGetSuppressionPolicyResponse {
+  policy: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/applications/applications_get_suppressions_request.json
+export interface ApplicationsGetSuppressionsRequest {}
+
+// schemas/ipc/applications/applications_get_suppressions_response.json
+export interface ApplicationsGetSuppressionsResponse {
+  suppressions: ApplicationsGetSuppressionsResponseSuppressionInfo[];
+  total?: number;
+  policy?: {
+    [k: string]: unknown;
+  };
+}
+export interface ApplicationsGetSuppressionsResponseSuppressionInfo {
+  suppression_id: string;
+  job_id: string;
+  application_id: string;
+  job_title?: string | null;
+  company_id?: string | null;
+  state: string;
+  reason: string;
+  explanation: string;
+  similarity?: number;
+  expires_at?: string | null;
+  created_at?: string | null;
+  evidence?: {
+    [k: string]: unknown;
+  };
+  policy?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/applications/applications_list_request.json
+export interface ApplicationsListRequest {}
+
+// schemas/ipc/applications/applications_list_response.json
+export interface ApplicationsListResponse {
+  applications: ApplicationsListResponseApplicationInfo[];
+  total?: number;
+}
+export interface ApplicationsListResponseApplicationInfo {
+  application_id: string;
+  company_id: string;
+  job_id: string;
+  job_title: string;
+  job_title_family?: string | null;
+  status: string;
+  applied_at?: string | null;
+  resume_version_id?: string | null;
+  notes?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  events?: {
+    [k: string]: unknown;
+  }[];
+  outcomes?: {
+    [k: string]: unknown;
+  }[];
+  suppressions?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/applications/applications_record_outcome_request.json
+export interface ApplicationsRecordOutcomeRequest {
+  application_id: string;
+  kind: string;
+  occurred_at?: string | null;
+  note?: string;
+}
+
+// schemas/ipc/applications/applications_record_outcome_response.json
+export interface ApplicationsRecordOutcomeResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/applications/applications_restore_suppressed_job_request.json
+export interface ApplicationsRestoreSuppressedJobRequest {
+  job_id: string;
+  application_id?: string | null;
+}
+
+// schemas/ipc/applications/applications_restore_suppressed_job_response.json
+export interface ApplicationsRestoreSuppressedJobResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/applications/applications_update_status_request.json
+export interface ApplicationsUpdateStatusRequest {
+  application_id: string;
+  status: string;
+  applied_at?: string | null;
+  note?: string;
+}
+
+// schemas/ipc/applications/applications_update_status_response.json
+export interface ApplicationsUpdateStatusResponse {
+  application_id: string;
+  company_id: string;
+  job_id: string;
+  job_title: string;
+  job_title_family?: string | null;
+  status: string;
+  applied_at?: string | null;
+  resume_version_id?: string | null;
+  notes?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  events?: {
+    [k: string]: unknown;
+  }[];
+  outcomes?: {
+    [k: string]: unknown;
+  }[];
+  suppressions?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/applications/applications_update_suppression_policy_request.json
+export interface ApplicationsUpdateSuppressionPolicyRequest {
+  policy?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/applications/applications_update_suppression_policy_response.json
+export interface ApplicationsUpdateSuppressionPolicyResponse {
+  policy: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/browser/browser_autofill_plan_request.json
+export interface BrowserAutofillPlanRequest {
+  session_id: string;
+}
+
+// schemas/ipc/browser/browser_autofill_plan_response.json
+export interface BrowserAutofillPlanResponse {
+  plan_id: string;
+  session_id: string;
+  url?: string;
+  step_index?: number;
+  items?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/browser/browser_autofill_request.json
+export interface BrowserAutofillRequest {
+  session_id: string;
+  plan_id: string;
+}
+
+// schemas/ipc/browser/browser_autofill_response.json
+export interface BrowserAutofillResponse {
+  plan_id: string;
+  filled?: {
+    [k: string]: unknown;
+  }[];
+  skipped?: {
+    [k: string]: unknown;
+  }[];
+  blocked?: {
+    [k: string]: unknown;
+  }[];
+  errors?: string[];
+  submitted?: boolean;
+}
+
+// schemas/ipc/browser/browser_close_session_request.json
+export interface BrowserCloseSessionRequest {
+  session_id: string;
+}
+
+// schemas/ipc/browser/browser_close_session_response.json
+export interface BrowserCloseSessionResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/browser/browser_handoff_request.json
+export interface BrowserHandoffRequest {
+  session_id: string;
+}
+
+// schemas/ipc/browser/browser_handoff_response.json
+export interface BrowserHandoffResponse {
+  session_id: string;
+  interceptor_active?: boolean;
+  submitted?: boolean;
+}
+
+// schemas/ipc/browser/browser_inspect_form_request.json
+export interface BrowserInspectFormRequest {
+  session_id: string;
+}
+
+// schemas/ipc/browser/browser_inspect_form_response.json
+export interface BrowserInspectFormResponse {
+  session_id: string;
+  url: string;
+  step_index?: number;
+  step_count?: number;
+  is_final_step?: boolean | null;
+  fields?: {
+    [k: string]: unknown;
+  }[];
+  controls?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/browser/browser_open_job_request.json
+export interface BrowserOpenJobRequest {
+  job_id: string;
+}
+
+// schemas/ipc/browser/browser_open_job_response.json
+export interface BrowserOpenJobResponse {
+  session_id: string;
+  url: string;
+  job_id?: string;
+}
+
 // schemas/ipc/crawl_runs/crawl_runs_list_request.json
 export interface CrawlRunsListRequest {}
 
@@ -247,6 +565,20 @@ export interface JobsSearchResponseJobSummary {
   via_index?: boolean;
   reason?: string | null;
   related_job_ids?: string[];
+}
+
+// schemas/ipc/jobs/jobs_set_user_state_request.json
+export interface JobsSetUserStateRequest {
+  job_id: string;
+  state?: "new" | "saved" | "dismissed" | "hidden";
+  note?: string | null;
+}
+
+// schemas/ipc/jobs/jobs_set_user_state_response.json
+export interface JobsSetUserStateResponse {
+  job_id: string;
+  state: string;
+  hidden?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_unmerge_request.json

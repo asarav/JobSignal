@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "state": {
+      "default": "saved",
+      "enum": [
+        "new",
+        "saved",
+        "dismissed",
+        "hidden"
+      ],
+      "type": "string"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "JobsSetUserStateRequest",
+  "type": "object"
+}

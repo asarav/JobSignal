@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head><title>Application form</title></head>
+  <body>
+    <h2>Tell us about yourself</h2>
+    <form action="/apply/now" method="post">
+      <fieldset>
+        <legend>Personal details</legend>
+        <p>
+          <label for="full_name">Full name</label>
+          <input id="full_name" name="applicant_name" autocomplete="name" />
+        </p>
+        <p>
+          <!-- A benign label on a demographic id: the id must win. -->
+          <label for="gender">Preferred name</label>
+          <input id="gender" name="preferred_name" />
+        </p>
+        <p>
+          <!-- Label-soup: a first name asked inside a consent sentence. -->
+          <label for="first_name_consent">
+            I agree to the privacy policy and confirm my first name is correct
+          </label>
+          <input id="first_name_consent" name="first_name" />
+        </p>
+        <p>
+          <label for="submit_note">Full name on your resume</label>
+          <input id="submit_note" name="submit_note" />
+        </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Voluntary self-identification</legend>
+        <p>
+          <label for="pronouns">Pronouns</label>
+          <input id="pronouns" name="pronouns" />
+        </p>
+      </fieldset>
+
+      <p>
+        <label for="why">Why do you want to work here?</label>
+        <textarea id="why" name="why_us"></textarea>
+      </p>
+
+      <div class="actions">
+        <button type="button" id="apply_now" class="btn btn-primary">Apply now</button>
+        <button type="button" id="next_step">Continue</button>
+      </div>
+    </form>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "policy": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "policy"
+  ],
+  "title": "ApplicationsGetSuppressionPolicyResponse",
+  "type": "object"
+}

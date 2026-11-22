@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "application_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "applied_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "application_id",
+    "status"
+  ],
+  "title": "ApplicationsUpdateStatusRequest",
+  "type": "object"
+}

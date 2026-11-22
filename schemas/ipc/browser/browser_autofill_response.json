@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "plan_id": {
+      "type": "string"
+    },
+    "filled": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "skipped": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "blocked": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "errors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "submitted": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "plan_id"
+  ],
+  "title": "BrowserAutofillResponse",
+  "type": "object"
+}

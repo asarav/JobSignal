@@ -24,14 +24,14 @@ export const Copy = {
     discover: "Add a career page, crawl it and browse the jobs found.",
     searchProfiles: "Search your job database and save reusable filters.",
     saved: "Jobs you saved. Not available in this build.",
-    applications: "Applications you have sent. Not available in this build.",
+    applications: "Applications you have sent and the roles they hide.",
     companies: "Company history and hiring activity. Not available in this build.",
     postingIntelligence: "Repost and posting-quality signals. Not available in this build.",
     keywords: "Skill demand across postings. Not available in this build.",
     resume: "Import a resume, edit your profile and run job matching.",
     settings: "Sources, crawl schedules, feature flags and plugins.",
     diagnostics: "Worker health, tasks and recent events.",
-    seen: "Postings that disappeared or were linked as duplicates and reposts.",
+    seen: "Postings that disappeared, were linked as duplicates, or are hidden.",
   },
   status: {
     idle: "Not connected",
@@ -48,9 +48,9 @@ export const Copy = {
       "The worker finds career sites on its own, crawls the boards that matter most, links reposts and duplicates, matches jobs against your resume and shows which source each posting came from. Everything stays on this computer.",
     notImplemented: "Not available in this build",
     notImplementedList: [
-      "Application tracking and company-aware suppression",
       "Posting-quality / ghost-job risk signals",
-      "Browser automation and autofill",
+      "Company history and hiring activity",
+      "Skill demand across postings",
     ],
     health: "Worker health",
     version: "App version",
@@ -122,7 +122,7 @@ export const Copy = {
     },
     applications: {
       title: "Applications",
-      body: "This screen will track applications and hide roles you have already applied to. Application tracking is not available in this build.",
+      body: "Track what you applied to and review the roles hidden because of it.",
     },
     companies: {
       title: "Companies",

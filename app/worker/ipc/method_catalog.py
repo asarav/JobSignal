@@ -18,8 +18,27 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.application.dto import (
+    ApplicationCreateParams,
+    ApplicationEventParams,
+    ApplicationInfo,
+    ApplicationListResult,
+    ApplicationOutcomeParams,
+    ApplicationStatusParams,
     AutoDiscoverResult,
+    BrowserAutofillParams,
+    BrowserCloseParams,
+    BrowserFillReportResult,
+    BrowserFormResult,
+    BrowserHandoffParams,
+    BrowserHandoffResult,
+    BrowserInspectParams,
+    BrowserOpenJobParams,
+    BrowserPlanParams,
+    BrowserPlanResult,
+    BrowserSessionResult,
     CancelTaskParams,
+    CompanyHistoryParams,
+    CompanyHistoryResult,
     CrawlRunListResult,
     DiscoveryRunParams,
     EmptyParams,
@@ -34,6 +53,8 @@ from app.application.dto import (
     JobListResult,
     JobMergeParams,
     JobSearchParams,
+    JobUserStateParams,
+    JobUserStateResult,
     KeywordsExtractParams,
     KeywordsExtractResult,
     MatchingResultsResult,
@@ -46,6 +67,7 @@ from app.application.dto import (
     PluginIdParams,
     PluginListResult,
     PluginOptionalIdParams,
+    RestoreSuppressedJobParams,
     ResumeImportParams,
     ResumeImportResult,
     ResumeOverridesParams,
@@ -70,6 +92,9 @@ from app.application.dto import (
     SourceSetEnabledParams,
     SourceSetExtractionOrderParams,
     SourceSetScheduleParams,
+    SuppressionListResult,
+    SuppressionPolicyParams,
+    SuppressionPolicyResult,
     TaskAcceptedResult,
     TaskFilter,
     TaskListResult,
@@ -178,6 +203,37 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("search_profiles.delete", SearchProfileParams, OkResult),
     # M4: auto-discovery
     MethodSpec("discovery.auto_discover", EmptyParams, AutoDiscoverResult),
+    # M7: applications, suppression and user job state
+    MethodSpec("applications.create", ApplicationCreateParams, ApplicationInfo),
+    MethodSpec("applications.update_status", ApplicationStatusParams, ApplicationInfo),
+    MethodSpec("applications.add_event", ApplicationEventParams, OkResult),
+    MethodSpec("applications.record_outcome", ApplicationOutcomeParams, OkResult),
+    MethodSpec("applications.list", EmptyParams, ApplicationListResult),
+    MethodSpec(
+        "applications.get_company_history", CompanyHistoryParams, CompanyHistoryResult
+    ),
+    MethodSpec("applications.get_suppressions", EmptyParams, SuppressionListResult),
+    MethodSpec(
+        "applications.get_suppression_policy", EmptyParams, SuppressionPolicyResult
+    ),
+    MethodSpec(
+        "applications.restore_suppressed_job", RestoreSuppressedJobParams, OkResult
+    ),
+    MethodSpec(
+        "applications.update_suppression_policy",
+        SuppressionPolicyParams,
+        SuppressionPolicyResult,
+    ),
+    MethodSpec("jobs.set_user_state", JobUserStateParams, JobUserStateResult),
+    # M7: headed browsing and reviewed autofill (never submits)
+    MethodSpec("browser.open_job", BrowserOpenJobParams, BrowserSessionResult),
+    MethodSpec("browser.inspect_form", BrowserInspectParams, BrowserFormResult),
+    MethodSpec("browser.autofill_plan", BrowserPlanParams, BrowserPlanResult),
+    MethodSpec("browser.autofill", BrowserAutofillParams, BrowserFillReportResult),
+    # The only way to stop intercepting: the user takes the window over to
+    # submit themselves (§13.4.5). It cannot submit anything itself.
+    MethodSpec("browser.handoff", BrowserHandoffParams, BrowserHandoffResult),
+    MethodSpec("browser.close_session", BrowserCloseParams, OkResult),
 )
 
 MILESTONE_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in MILESTONE_METHODS)
@@ -185,8 +241,6 @@ MILESTONE_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in MILESTON
 # Method prefixes that MUST remain absent until their milestone lands. The
 # negative test in CI asserts none appears in MILESTONE_METHOD_NAMES or Rust's
 # generated allowlist.
-FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = (
-    "applications.",
-    "posting_intelligence.",
-    "browser.",
-)
+#: ``browser.submit`` and ``browser.click`` must never appear: autofill can
+#: fill, and the user submits.
+FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = ("posting_intelligence.",)

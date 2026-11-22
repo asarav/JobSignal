@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping, Sequence
+from dataclasses import replace as dataclasses_replace
 from typing import Any
 
 from app.domain.models.candidate import SearchProfile
@@ -280,8 +281,11 @@ class InMemoryJobRepository:
         if job is not None:
             job["last_seen_at"] = seen_at
 
-    async def list(self, *, company_id=None, source_id=None, limit=50, offset=0):
-        items = list(self._store.values())
+    async def list(
+        self, *, company_id=None, source_id=None, limit=50, offset=0, exclude_job_ids=None
+    ):
+        excluded = set(exclude_job_ids or ())
+        items = [j for jid, j in self._store.items() if jid not in excluded]
         if company_id:
             items = [j for j in items if j.get("company_id") == company_id]
         if source_id:
@@ -314,10 +318,13 @@ class InMemoryJobRepository:
                 changed = True
         return changed
 
-    async def search(self, query, *, limit=50, offset=0):
+    async def search(self, query, *, limit=50, offset=0, exclude_job_ids=None):
         q = query.lower()
+        excluded = set(exclude_job_ids or ())
         matches = [
-            j for j in self._store.values() if q in str(j.get("title", "")).lower()
+            j
+            for jid, j in self._store.items()
+            if jid not in excluded and q in str(j.get("title", "")).lower()
         ]
         return matches[offset : offset + limit]
 
@@ -330,10 +337,12 @@ class InMemoryJobRepository:
         company_id=None,
         limit=50,
         offset=0,
+        exclude_job_ids=None,
     ):
         from app.domain.services.hard_filters import apply_hard_filters
 
-        items = list(self._store.values())
+        excluded = set(exclude_job_ids or ())
+        items = [j for jid, j in self._store.items() if jid not in excluded]
         if company_id:
             items = [j for j in items if j.get("company_id") == company_id]
         if source_id:
@@ -344,8 +353,9 @@ class InMemoryJobRepository:
         matches = apply_hard_filters(items, filters)
         return matches[offset : offset + limit], len(matches)
 
-    async def count(self) -> int:
-        return len(self._store)
+    async def count(self, *, exclude_job_ids=None) -> int:
+        excluded = set(exclude_job_ids or ())
+        return sum(1 for jid in self._store if jid not in excluded)
 
     async def mark_not_seen(self, source_id, seen_ids, cutoff, threshold=2, min_spacing_hours=24):
         from datetime import datetime
@@ -598,6 +608,12 @@ class InMemoryUnitOfWork:
         fingerprints=None,
         reposts=None,
         relations=None,
+        applications=None,
+        application_events=None,
+        application_outcomes=None,
+        suppressions=None,
+        job_user_state=None,
+        suppression_policy=None,
     ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
@@ -613,10 +629,31 @@ class InMemoryUnitOfWork:
         self._fingerprints_store = fingerprints if fingerprints is not None else []
         self._reposts_store = reposts if reposts is not None else []
         self._relations_store = relations if relations is not None else []
+        self._applications_store = applications if applications is not None else {}
+        self._application_events_store = (
+            application_events if application_events is not None else []
+        )
+        self._application_outcomes_store = (
+            application_outcomes if application_outcomes is not None else []
+        )
+        self._suppressions_store = suppressions if suppressions is not None else {}
+        self._suppression_policy_store = suppression_policy if suppression_policy is not None else {}
+        self._job_user_state_store = job_user_state if job_user_state is not None else {}
         self._search_profiles_store = search_profiles if search_profiles is not None else {}
         self.jobs = InMemoryJobRepository(self._jobs_store, self._relations_store)
         self.companies = InMemoryCompanyRepository(self._companies_store)
-        self.applications = _Unimplemented()
+        self.applications = InMemoryApplicationRepository(
+            self._applications_store,
+            self._application_events_store,
+            self._application_outcomes_store,
+            self._relations_store,
+        )
+        self.suppressions = InMemorySuppressionRepository(
+            self._suppressions_store, self._suppression_policy_store
+        )
+        self.job_user_state = InMemoryJobUserStateRepository(
+            self._job_user_state_store
+        )
         self.observations = InMemoryObservationRepository(self._observations_store)
         self.resumes = resumes if resumes is not None else InMemoryResumeRepository()
         self.matches = matches if matches is not None else InMemoryMatchRepository()
@@ -664,6 +701,12 @@ class InMemoryUnitOfWorkFactory:
         self.search_profiles: dict[str, SearchProfile] = {}
         self.resumes = InMemoryResumeRepository()
         self.matches = InMemoryMatchRepository()
+        self.applications: dict[str, Any] = {}
+        self.application_events: list[dict[str, object]] = []
+        self.application_outcomes: list[dict[str, object]] = []
+        self.suppressions: dict[tuple[str, str], Any] = {}
+        self.suppression_policy: dict[str, dict[str, object]] = {}
+        self.job_user_state: dict[str, dict[str, object]] = {}
 
     def __call__(self) -> InMemoryUnitOfWork:
         return InMemoryUnitOfWork(
@@ -684,6 +727,12 @@ class InMemoryUnitOfWorkFactory:
             self.fingerprints,
             self.reposts,
             self.relations,
+            self.applications,
+            self.application_events,
+            self.application_outcomes,
+            self.suppressions,
+            self.job_user_state,
+            self.suppression_policy,
         )
 
 
@@ -867,3 +916,243 @@ class InMemoryMatchRepository:
 
     async def set_weights(self, profile_id, weights):
         self._weights[profile_id] = dict(weights)
+
+
+class InMemoryApplicationRepository:
+    """Application history in memory; the event log is append-only here too."""
+
+    def __init__(
+        self,
+        store: dict[str, Any],
+        events: list[dict[str, object]],
+        outcomes: list[dict[str, object]],
+        relations: list[dict[str, object]],
+    ) -> None:
+        self._store = store
+        self._events = events
+        self._outcomes = outcomes
+        self._relations = relations
+
+    async def add(self, application: Any) -> None:
+        self._store[application.id] = application
+
+    async def get(self, application_id: str) -> Any:
+        return self._store.get(application_id)
+
+    async def list(self, *, limit: int = 50, offset: int = 0):
+        rows = sorted(
+            self._store.values(),
+            key=lambda a: (a.applied_at or a.created_at, a.id),
+            reverse=True,
+        )
+        return rows[offset : offset + limit]
+
+    async def save(
+        self,
+        application_id: str,
+        *,
+        status: str,
+        applied_at: Any,
+        notes: str,
+        resume_version_id: str | None,
+        updated_at: Any,
+    ):
+        current = self._store.get(application_id)
+        if current is None:
+            return None
+        updated = dataclasses_replace(
+            current,
+            status=status,
+            applied_at=applied_at,
+            notes=notes,
+            resume_version_id=resume_version_id,
+            updated_at=updated_at,
+        )
+        self._store[application_id] = updated
+        return updated
+
+    async def find_for_job(self, job_id: str):
+        return [a for a in self._store.values() if a.job_id == job_id]
+
+    async def list_applied(self, *, company_id: str | None = None):
+        from app.domain.models.application import AppliedJob
+
+        out: list[AppliedJob] = []
+        for application in self._store.values():
+            if application.applied_at is None:
+                continue
+            if company_id and application.company_id != company_id:
+                continue
+            related: list[str] = []
+            for row in self._relations:
+                if row.get("relation") == "user_unmerged":
+                    continue
+                if row.get("job_id") == application.job_id:
+                    related.append(str(row.get("related_job_id")))
+                elif row.get("related_job_id") == application.job_id:
+                    related.append(str(row.get("job_id")))
+            out.append(
+                AppliedJob(
+                    application_id=application.id,
+                    job_id=application.job_id,
+                    company_id=application.company_id,
+                    title=application.job_title,
+                    title_family=application.job_title_family,
+                    description_text=application.job_description_text,
+                    canonical_url=application.job_canonical_url,
+                    applied_at=application.applied_at,
+                    department=application.job_department,
+                    locations=application.job_locations,
+                    workplace_type=application.job_workplace_type,
+                    related_job_ids=tuple(related),
+                )
+            )
+        return out
+
+    async def add_event(self, event: Any) -> None:
+        self._events.append(event)
+
+    async def list_events(self, application_id: str):
+        return [e for e in self._events if e.application_id == application_id]
+
+    async def add_outcome(self, outcome: Any) -> None:
+        self._outcomes.append(outcome)
+
+    async def list_outcomes(self, application_id: str):
+        return [o for o in self._outcomes if o.application_id == application_id]
+
+
+class InMemorySuppressionRepository:
+    def __init__(
+        self,
+        store: dict[tuple[str, str], Any],
+        policies: dict[str, dict[str, object]] | None = None,
+    ) -> None:
+        self._store = store
+        self._policies = policies if policies is not None else {}
+
+    async def save(self, record: Any) -> None:
+        key = (record.job_id, record.application_id)
+        current = self._store.get(key)
+        if current is not None and current.state == "restored":
+            return
+        self._store[key] = record
+
+    async def get(self, job_id: str, application_id: str):
+        return self._store.get((job_id, application_id))
+
+    async def list(self, *, state: str | None = None, limit: int = 200):
+        rows = [r for r in self._store.values() if state is None or r.state == state]
+        rows.sort(key=lambda r: (r.created_at, r.id), reverse=True)
+        return rows[:limit]
+
+    async def list_for_job(self, job_id: str):
+        return sorted(
+            (r for r in self._store.values() if r.job_id == job_id),
+            key=lambda r: (r.created_at, r.id),
+        )
+
+    async def active_job_ids(self):
+        return sorted({r.job_id for r in self._store.values() if r.state == "active"})
+
+    async def restore(self, job_id: str, application_id: str, at: Any) -> bool:
+        key = (job_id, application_id)
+        current = self._store.get(key)
+        if current is None or current.state == "restored":
+            return False
+        self._store[key] = dataclasses_replace(current, state="restored", updated_at=at)
+        return True
+
+    async def expire(self, now: Any):
+        lapsed = []
+        for key, record in list(self._store.items()):
+            if record.state != "active" or record.expires_at is None:
+                continue
+            if record.expires_at > now:
+                continue
+            updated = dataclasses_replace(record, state="expired", updated_at=now)
+            self._store[key] = updated
+            lapsed.append(updated)
+        return lapsed
+
+    async def clear_restored(self, job_id: str, application_id: str) -> bool:
+        key = (job_id, application_id)
+        current = self._store.get(key)
+        if current is None or current.state != "restored":
+            return False
+        del self._store[key]
+        return True
+
+    async def clear_job(self, job_id: str) -> int:
+        keys = [
+            key
+            for key, record in self._store.items()
+            if key[0] == job_id and record.state != "restored"
+        ]
+        for key in keys:
+            del self._store[key]
+        return len(keys)
+
+    async def get_policy(self):
+        return self._policies.get("default")
+
+    async def put_policy(self, policy, at) -> None:
+        self._policies["default"] = dict(policy)
+
+    async def delete_for_application(self, application_id: str) -> int:
+        keys = [k for k in self._store if k[1] == application_id]
+        for key in keys:
+            del self._store[key]
+        return len(keys)
+
+
+class InMemoryJobUserStateRepository:
+    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+        self._store = store
+
+    async def set(self, job_id: str, state: str, *, note, updated_at) -> None:
+        self._store[job_id] = {
+            "job_id": job_id,
+            "state": state,
+            "note": note,
+            "updated_at": updated_at.isoformat()
+            if hasattr(updated_at, "isoformat")
+            else str(updated_at),
+        }
+
+    async def get(self, job_id: str):
+        return self._store.get(job_id)
+
+    async def get_many(self, job_ids):
+        return {
+            job_id: str(self._store[job_id]["state"])
+            for job_id in job_ids
+            if job_id in self._store
+        }
+
+    async def list(self, *, state: str | None = None, limit: int = 200):
+        rows = [
+            row
+            for row in self._store.values()
+            if state is None or row.get("state") == state
+        ]
+        return rows[:limit]
+
+    async def hidden_job_ids(self):
+        return sorted(
+            job_id
+            for job_id, row in self._store.items()
+            if row.get("state") in ("dismissed", "hidden")
+        )
+
+    async def clear(self, job_id: str) -> bool:
+        return self._store.pop(job_id, None) is not None
+
+
+__all__ = [
+    "InMemoryApplicationRepository",
+    "InMemoryJobUserStateRepository",
+    "InMemorySuppressionRepository",
+    "InMemoryUnitOfWork",
+    "InMemoryUnitOfWorkFactory",
+]

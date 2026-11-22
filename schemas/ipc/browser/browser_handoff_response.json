@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "interceptor_active": {
+      "default": false,
+      "type": "boolean"
+    },
+    "submitted": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "title": "BrowserHandoffResponse",
+  "type": "object"
+}

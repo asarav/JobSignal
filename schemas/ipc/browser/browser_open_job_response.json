@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "job_id": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "url"
+  ],
+  "title": "BrowserOpenJobResponse",
+  "type": "object"
+}

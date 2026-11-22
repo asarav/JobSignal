@@ -39,6 +39,11 @@ ALLOWED_TABLES = {
     "job_relations",
     "repost_events",
     "job_user_state",
+    "applications",
+    "application_events",
+    "application_outcomes",
+    "suppression_policies",
+    "job_suppressions",
     "candidate_profiles",
     "resume_files",
     "resume_versions",
@@ -117,10 +122,23 @@ def test_production_code_imports_no_browser_or_parser_library(module):
 
 
 def test_no_form_submission_code():
+    """No production module may carry a submission path.
+
+    Autofill landed with M7 and is legitimate; what stays forbidden is anything
+    that would push the form: submit handlers, ``requestSubmit``, dispatching
+    submit events, or a scripted click on a submit control.
+    """
+    tokens = (
+        "submit_application",
+        "click_submit",
+        "form.submit(",
+        "requestsubmit(",
+        "dispatchevent(",
+    )
     offenders = []
     for path in _production_files():
         text = path.read_text("utf-8").lower()
-        if any(token in text for token in ("submit_application", "click_submit", "autofill(")):
+        if any(token in text for token in tokens):
             offenders.append(str(path.relative_to(ROOT)))
     assert offenders == [], f"application submission code found in {offenders}"
 

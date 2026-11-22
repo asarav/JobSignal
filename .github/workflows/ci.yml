@@ -29,7 +29,14 @@ jobs:
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,render]"
+
+      # The live Playwright suite skips when Chromium is absent. Installing it
+      # on one OS makes the real "autofill never submits" tests CI-blocking
+      # instead of something only a local machine ever exercises.
+      - name: Install Chromium for the live autofill suite
+        if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium
 
       - name: Ruff
         run: python -m ruff check app tests

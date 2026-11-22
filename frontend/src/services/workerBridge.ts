@@ -115,6 +115,17 @@ class PreviewBridge implements WorkerBridge {
         return response({ jobs: previewSeenJobs(), total: previewSeenJobs().length });
       case "jobs.get_detail":
         return response(previewJobDetail(String(params.job_id ?? "preview-job-1")));
+      case "applications.list":
+        // Preview samples are discovery data only: no application history.
+        return response({ applications: [], total: 0 });
+      case "applications.get_suppressions":
+        return response({ suppressions: [], total: 0 });
+      case "applications.get_suppression_policy":
+        return response({ policy: previewSuppressionPolicy() });
+      case "applications.update_suppression_policy":
+        return response({
+          policy: { ...previewSuppressionPolicy(), ...(params.policy ?? {}) },
+        });
       case "jobs.merge":
       case "jobs.unmerge":
         return response({ ok: true });
@@ -381,6 +392,16 @@ function previewMatchResults(): Array<Record<string, unknown>> {
       explanations: [],
     },
   ];
+}
+
+function previewSuppressionPolicy(): Record<string, unknown> {
+  return {
+    exact_repost_suppress: true,
+    similar_role_cooldown_days: 180,
+    similar_role_threshold: 0.75,
+    company_wide_cooldown_enabled: false,
+    company_wide_cooldown_days: 90,
+  };
 }
 
 function previewJobs(): Array<Record<string, unknown>> {

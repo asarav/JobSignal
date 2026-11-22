@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SETTINGS_KEY = "app_config"
@@ -229,6 +229,8 @@ class RankingConfig(StrictModel):
 
 class AutofillConfig(StrictModel):
     min_field_confidence: float = 0.85
+    #: Kept for spec parity; this build's provider refuses step navigation
+    #: outright, so turning it on cannot make it click anything.
     allow_step_navigation: bool = False
     submit_lexicon: list[str] = Field(
         default_factory=lambda: [
@@ -242,6 +244,33 @@ class AutofillConfig(StrictModel):
             "done",
         ]
     )
+    #: The answer book: values the filler may type, keyed by the canonical key
+    #: (``first_name``, ``email``, ``work_authorization`` …). Nothing is ever
+    #: inferred from a resume or a posting (§13.3).
+    answers: dict[str, str] = Field(default_factory=dict)
+    #: Free-text answers keyed by the question's own text (the form's wording),
+    #: matched ignoring case, spacing and punctuation; an exact ``field_id``
+    #: key from earlier builds is still honoured.
+    snippets: dict[str, str] = Field(default_factory=dict)
+    #: Work bound per step: a pathological page cannot keep the worker writing
+    #: fields for minutes.
+    max_fills: int = Field(default=200, ge=1, le=2000)
+    #: Minimal pause between writes, so a form is not filled instantly.
+    fill_delay_ms: int = Field(default=40, ge=0, le=1000)
+
+    @field_validator("answers", "snippets")
+    @classmethod
+    def _bounded_entries(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 256:
+            raise ValueError("at most 256 autofill entries are stored")
+        for key, item in value.items():
+            if not key.strip():
+                raise ValueError("an autofill key cannot be empty")
+            if not isinstance(item, str):
+                raise ValueError(f"autofill value for {key!r} must be text")
+            if len(item) > 4096:
+                raise ValueError(f"autofill value for {key!r} is longer than 4096 characters")
+        return value
 
 
 class LoggingConfig(StrictModel):
@@ -302,6 +331,37 @@ class AppConfig(BaseSettings):
             return AppConfig.model_validate(merged)
         except ValidationError:
             raise
+
+
+class ConfigState:
+    """Mutable holder for the config the running worker should use.
+
+    ``Container`` is frozen by design, but a settings update must take effect
+    without a restart. Use cases that read tunables at call time ask this
+    holder instead of the container's startup snapshot.
+    """
+
+    __slots__ = ("_config",)
+
+    def __init__(self, config: AppConfig) -> None:
+        self._config = config
+
+    @property
+    def config(self) -> AppConfig:
+        return self._config
+
+    def set(self, config: AppConfig) -> None:
+        self._config = config
+
+
+def live_config(container: Any) -> AppConfig:
+    """The current config: the live holder when present, else the startup one."""
+    extra = getattr(container, "extra", None)
+    if isinstance(extra, dict):
+        state = extra.get("config_state")
+        if isinstance(state, ConfigState):
+            return state.config
+    return container.config  # type: ignore[no-any-return]
 
 
 def discovery_settings(config: object) -> dict[str, Any]:

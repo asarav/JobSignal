@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import { Copy } from "../copy/copy";
+import { ApplicationsRoute } from "../features/applications/ApplicationsRoute";
 import { DiagnosticsRoute } from "../features/diagnostics/DiagnosticsRoute";
 import { DiscoverRoute } from "../features/discover/DiscoverRoute";
 import { HomeRoute } from "../features/home/HomeRoute";
@@ -54,7 +55,7 @@ export function AppRoutes() {
       <Route path="/discover" element={<DiscoverRoute />} />
       <Route path="/search-profiles" element={<SearchRoute />} />
       <Route path="/saved" element={<PlaceholderRoute screen="saved" />} />
-      <Route path="/applications" element={<PlaceholderRoute screen="applications" />} />
+      <Route path="/applications" element={<ApplicationsRoute />} />
       <Route path="/companies" element={<PlaceholderRoute screen="companies" />} />
       <Route path="/companies/:id" element={<PlaceholderRoute screen="companies" />} />
       <Route

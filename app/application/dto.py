@@ -161,6 +161,187 @@ class OkResult(DTO):
     ok: bool = True
 
 
+# --- M7: applications, suppression, user job state -------------------------
+
+
+class ApplicationCreateParams(DTO):
+    job_id: str
+    status: str = "applied"
+    applied_at: str | None = None
+    notes: str = ""
+    resume_version_id: str | None = None
+
+
+class ApplicationStatusParams(DTO):
+    application_id: str
+    status: str
+    applied_at: str | None = None
+    note: str = ""
+
+
+class ApplicationEventParams(DTO):
+    application_id: str
+    kind: str = "note"
+    note: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ApplicationOutcomeParams(DTO):
+    application_id: str
+    kind: str
+    occurred_at: str | None = None
+    note: str = ""
+
+
+class ApplicationInfo(DTO):
+    application_id: str
+    company_id: str
+    job_id: str
+    job_title: str
+    job_title_family: str | None = None
+    status: str
+    applied_at: str | None = None
+    resume_version_id: str | None = None
+    notes: str = ""
+    created_at: str | None = None
+    updated_at: str | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    suppressions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ApplicationListResult(DTO):
+    applications: list[ApplicationInfo]
+    total: int = 0
+
+
+class CompanyHistoryParams(DTO):
+    company_id: str
+
+
+class CompanyHistoryResult(DTO):
+    company_id: str
+    applications: list[ApplicationInfo]
+    total: int = 0
+    total_applied: int = 0
+    last_applied_at: str | None = None
+
+
+class SuppressionInfo(DTO):
+    suppression_id: str
+    job_id: str
+    application_id: str
+    job_title: str | None = None
+    company_id: str | None = None
+    state: str
+    reason: str
+    explanation: str
+    similarity: float = 0.0
+    expires_at: str | None = None
+    created_at: str | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class SuppressionListResult(DTO):
+    suppressions: list[SuppressionInfo]
+    total: int = 0
+    #: The effective policy, so the Suppressed view can show the current rules.
+    policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class RestoreSuppressedJobParams(DTO):
+    job_id: str
+    application_id: str | None = None
+
+
+class SuppressionPolicyParams(DTO):
+    policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class SuppressionPolicyResult(DTO):
+    policy: dict[str, Any]
+
+
+class JobUserStateParams(DTO):
+    job_id: str
+    state: Literal["new", "saved", "dismissed", "hidden"] = "saved"
+    note: str | None = None
+
+
+class JobUserStateResult(DTO):
+    job_id: str
+    state: str
+    hidden: bool = False
+
+
+class BrowserOpenJobParams(DTO):
+    job_id: str
+
+
+class BrowserSessionResult(DTO):
+    session_id: str
+    url: str
+    job_id: str = ""
+
+
+class BrowserInspectParams(DTO):
+    session_id: str
+
+
+class BrowserFormResult(DTO):
+    session_id: str
+    url: str
+    step_index: int = 0
+    step_count: int = 1
+    is_final_step: bool | None = None
+    fields: list[dict[str, Any]] = Field(default_factory=list)
+    controls: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BrowserPlanParams(DTO):
+    session_id: str
+
+
+class BrowserPlanResult(DTO):
+    plan_id: str
+    session_id: str
+    url: str = ""
+    step_index: int = 0
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BrowserAutofillParams(DTO):
+    session_id: str
+    plan_id: str
+
+
+class BrowserFillReportResult(DTO):
+    plan_id: str
+    filled: list[dict[str, Any]] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+    blocked: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    #: Always false: no code path can submit (spec §13.5).
+    submitted: bool = False
+
+
+class BrowserCloseParams(DTO):
+    session_id: str
+
+
+class BrowserHandoffParams(DTO):
+    session_id: str
+
+
+class BrowserHandoffResult(DTO):
+    session_id: str
+    #: False once the guard is off, i.e. the user is submitting from now on.
+    interceptor_active: bool = False
+    #: Always false: handing over is the user's action, not the app's (§13.5).
+    submitted: bool = False
+
+
 class SourceInfo(DTO):
     source_id: str
     url: str

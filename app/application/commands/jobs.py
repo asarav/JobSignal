@@ -22,11 +22,20 @@ class JobsUseCase:
         self._container = container
 
     async def list(self, params: JobFilter) -> JobListResult:
+        """Default result lists never show suppressed or dismissed jobs.
+
+        Suppression removes a job from the ordinary views but keeps it in the
+        Seen view and searchable history (spec §8.2 rule 9).
+        """
         if not params.filters:
             async with self._container.uow_factory() as uow:
+                excluded = await _hidden_job_ids(uow)
                 if params.query:
                     rows = await uow.jobs.search(
-                        params.query, limit=params.limit, offset=params.offset
+                        params.query,
+                        limit=params.limit,
+                        offset=params.offset,
+                        exclude_job_ids=excluded,
                     )
                 else:
                     rows = await uow.jobs.list(
@@ -34,12 +43,14 @@ class JobsUseCase:
                         company_id=params.company_id,
                         limit=params.limit,
                         offset=params.offset,
+                        exclude_job_ids=excluded,
                     )
-                total = await uow.jobs.count()
+                total = await uow.jobs.count(exclude_job_ids=excluded)
                 await uow.commit()
             return JobListResult(jobs=[_summary(r) for r in rows], total=total)
 
         async with self._container.uow_factory() as uow:
+            excluded = await _hidden_job_ids(uow)
             rows, total = await uow.jobs.filtered_page(
                 params.filters,
                 query=params.query,
@@ -47,13 +58,17 @@ class JobsUseCase:
                 company_id=params.company_id,
                 limit=params.limit,
                 offset=params.offset,
+                exclude_job_ids=excluded,
             )
             await uow.commit()
         return JobListResult(jobs=[_summary(r) for r in rows], total=total)
 
     async def search(self, params: JobSearchParams) -> JobListResult:
         async with self._container.uow_factory() as uow:
-            rows = await uow.jobs.search(params.query, limit=params.limit)
+            excluded = await _hidden_job_ids(uow)
+            rows = await uow.jobs.search(
+                params.query, limit=params.limit, exclude_job_ids=excluded
+            )
             await uow.commit()
         return JobListResult(jobs=[_summary(r) for r in rows], total=len(rows))
 
@@ -172,7 +187,7 @@ class JobsUseCase:
         return JobListResult(jobs=jobs, total=len(jobs))
 
     async def list_seen(self) -> JobListResult:
-        """Previously seen / removed / duplicate jobs (spec §8.3 / §16.2)."""
+        """Previously seen / removed / duplicate / suppressed jobs (§8.3)."""
         async with self._container.uow_factory() as uow:
             rows = await uow.jobs.list(limit=200)
             duplicate_ids = set(await uow.jobs.relation_job_ids())
@@ -183,8 +198,25 @@ class JobsUseCase:
                     relations[job_id] = [
                         dict(item) for item in await uow.jobs.list_relations(job_id)
                     ]
+            suppressions = await uow.suppressions.list(limit=500)
+            states = await uow.job_user_state.list(limit=500)
+            already = {str(row.get("id")) for row in rows}
+            extra_ids = [
+                job_id
+                for job_id in (
+                    [record.job_id for record in suppressions]
+                    + [str(state.get("job_id")) for state in states]
+                )
+                if job_id and job_id not in already
+            ]
+            extra = await uow.jobs.list_by_ids(extra_ids)
             await uow.commit()
+
+        by_id = {str(row.get("id")): row for row in rows}
+        for row in extra:
+            by_id.setdefault(str(row.get("id")), row)
         seen: list[JobSummary] = []
+        listed: set[str] = set()
         for row in rows:
             job_id = str(row.get("id"))
             status = str(row.get("posting_status") or "active")
@@ -192,10 +224,48 @@ class JobsUseCase:
                 continue
             related = _related_ids(relations.get(job_id, []), job_id)
             reason = "duplicate" if job_id in duplicate_ids else f"posting_{status}"
+            seen.append(_summary(row, reason=reason, related_job_ids=related))
+            listed.add(job_id)
+
+        # Suppressed and dismissed jobs are never in the ordinary lists, so the
+        # Seen view is where their explanation lives.
+        reasons: dict[str, str] = {
+            "active": "suppressed",
+            "expired": "suppression_expired",
+            "restored": "suppression_restored",
+        }
+        suppressed_job_ids = {record.job_id for record in suppressions}
+        for record in suppressions:
+            if record.job_id in listed:
+                continue
+            suppressed_row = by_id.get(record.job_id)
+            if suppressed_row is None:
+                continue
             seen.append(
-                _summary(row, reason=reason, related_job_ids=related)
+                _summary(
+                    suppressed_row, reason=reasons.get(record.state, "suppressed")
+                )
             )
+            listed.add(record.job_id)
+        for state in states:
+            job_id = str(state.get("job_id"))
+            if job_id in listed or job_id in suppressed_job_ids:
+                continue
+            state_row = by_id.get(job_id)
+            if state_row is None:
+                continue
+            seen.append(
+                _summary(state_row, reason=str(state.get("state") or "seen"))
+            )
+            listed.add(job_id)
         return JobListResult(jobs=seen, total=len(seen))
+
+
+async def _hidden_job_ids(uow: Any) -> list[str]:
+    """Job ids the default views must not show: suppressed plus dismissed."""
+    suppressed = list(await uow.suppressions.active_job_ids())
+    dismissed = list(await uow.job_user_state.hidden_job_ids())
+    return list(dict.fromkeys([*suppressed, *dismissed]))
 
 
 def _summary(

@@ -12,11 +12,18 @@ from app.domain.ports.repositories import (
     CompanyRepository,
     CrawlRunRepository,
     JobRepository,
+    JobUserStateRepository,
     KeywordRepository,
     ObservationRepository,
     SearchProfileRepository,
     SnapshotRepository,
     SourceRepository,
+    SuppressionRepository,
+)
+from app.infrastructure.persistence.sqlite.applications import (
+    SqliteApplicationRepository,
+    SqliteJobUserStateRepository,
+    SqliteSuppressionRepository,
 )
 from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrate
 from app.infrastructure.persistence.sqlite.repositories import (
@@ -58,6 +65,8 @@ class SqliteUnitOfWork:
         self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
         self.companies: CompanyRepository = _Unimplemented()  # type: ignore[assignment]
         self.applications: ApplicationRepository = _Unimplemented()  # type: ignore[assignment]
+        self.suppressions: SuppressionRepository = _Unimplemented()  # type: ignore[assignment]
+        self.job_user_state: JobUserStateRepository = _Unimplemented()  # type: ignore[assignment]
         self.observations: ObservationRepository = _Unimplemented()  # type: ignore[assignment]
         self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
         self.matches = SqliteMatchRepository(self._conn, self._clock_now)
@@ -82,6 +91,9 @@ class SqliteUnitOfWork:
         self.aliases = SqliteAliasRepository(self._conn, self._clock_now)
         self.dedup = SqliteDedupRepository(self._conn, self._clock_now)
         self.search_profiles = SqliteSearchProfileRepository(self._conn, self._clock_now)
+        self.applications = SqliteApplicationRepository(self._conn, self._clock_now)
+        self.suppressions = SqliteSuppressionRepository(self._conn, self._clock_now)
+        self.job_user_state = SqliteJobUserStateRepository(self._conn, self._clock_now)
         self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
         self.matches = SqliteMatchRepository(self._conn, self._clock_now)
         return self
