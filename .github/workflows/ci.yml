@@ -47,8 +47,12 @@ jobs:
       - name: Import boundaries
         run: python -c "from importlinter.cli import lint_imports_command; lint_imports_command()"
 
-      - name: Pytest (unit, contract, integration, swapability)
-        run: python -m pytest tests/ -q
+      - name: Pytest with coverage (unit, contract, integration, swapability)
+        run: python -m pytest tests/ -q --cov=app --cov-report=term-missing:skip-covered
+
+      # Spec section 19.1: domain >= 90%, application >= 85%, adapters >= 75%.
+      - name: Coverage gates
+        run: python scripts/check_coverage.py
 
   node:
     name: Frontend (${{ matrix.os }})

@@ -441,6 +441,10 @@ Tauri bridge.
 # Python: unit + contract + integration + safety + swapability (S1-S9)
 python -m pytest -q
 
+# Python with coverage and the per-layer gates (spec section 19.1)
+python -m pytest -q --cov=app --cov-report=term-missing:skip-covered
+python scripts/check_coverage.py
+
 # Python lint and architecture
 python -m ruff check app tests
 python -m mypy
@@ -464,6 +468,13 @@ node scripts/gen-ts-types.mjs
 `python scripts/gen_schemas.py --check` and
 `node scripts/gen-ts-types.mjs --check` fail when committed generated files are
 stale. CI runs both and then `git diff --exit-code`.
+
+`scripts/check_coverage.py` enforces the section 19.1 coverage gates on the data
+`pytest-cov` just wrote: **domain ≥ 90%**, **application ≥ 85%**, **adapters
+(`app/infrastructure` + `app/plugins`) ≥ 75%** line coverage. Each layer is
+checked separately, so a large, lightly-tested adapter package cannot hide a
+regression in the domain. A layer with no measured files fails rather than
+passing trivially. CI runs the gate in the same job as the suite.
 
 Integration tests spawn the real worker subprocess and cover the handshake,
 hello/health, invalid params, forbidden methods, settings validation, plugin
@@ -604,7 +615,8 @@ constant scoring model, extraction strategy) live in `tests/support/`.
 
 `.github/workflows/ci.yml` runs a matrix across **Windows, macOS, and Ubuntu**:
 
-- Python: `ruff`, strict `mypy`, `import-linter`, full `pytest`
+- Python: `ruff`, strict `mypy`, `import-linter`, full `pytest` with the
+  section 19.1 coverage gates
 - Frontend: `tsc --noEmit`, `vitest`, production `vite build`
 - Rust: `cargo test --lib` with the generated allowlist and backoff tests
 - Schema job: regenerates JSON Schemas and TypeScript types and fails on drift
