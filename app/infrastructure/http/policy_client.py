@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from app.domain.models.common import Err, Ok, PortError, Result
 from app.domain.models.http import HttpRequest, HttpResponse
 from app.domain.ports.http import HttpClient
+from app.domain.services.url_guard import unsafe_url_reason
 
 #: Markers that indicate a challenge / anti-bot page.
 _CHALLENGE_MARKERS = (
@@ -180,6 +181,10 @@ class PolicyHttpClient:
     max_timeout_s: float = 120.0
     max_bytes: int = 5_000_000
     max_redirects: int = 5
+    #: Test-only escape hatch for fixture servers. Nothing in the settings or
+    #: the worker turns it on: the app never fetches loopback, private or
+    #: link-local addresses (§16, §19.5.8).
+    allow_private_hosts: bool = False
     robots_ttl_s: float = 24 * 3600.0
     _robots_cache: dict[str, _RobotsRules] = field(default_factory=dict)
     _inflight: dict[str, asyncio.Future] = field(default_factory=dict)
@@ -208,6 +213,20 @@ class PolicyHttpClient:
             self._inflight.pop(req.url, None)
 
     async def _send_once(self, req: HttpRequest, host: str) -> Result[HttpResponse, PortError]:
+        # Never send anything to the machine itself or the local network. This
+        # runs before the robots fetch so a blocked URL cannot even probe the
+        # origin.
+        if not self.allow_private_hosts:
+            reason = unsafe_url_reason(req.url)
+            if reason is not None:
+                return Err(
+                    PortError(
+                        code="crawl.unsafe_url",
+                        message=f"refusing to fetch {req.url}: {reason}",
+                        retryable=False,
+                    )
+                )
+
         # Robots check.
         if req.respect_robots:
             allowed, crawl_delay = await self._robots_allowed(host, req.url)
@@ -276,9 +295,9 @@ class PolicyHttpClient:
                 # Anti-bot challenge detection.
                 if resp.status in _AUTH_STATUSES:
                     body_lower = resp.body[:4096].decode("utf-8", "ignore").lower()
-                    if any(m in body_lower for m in _CHALLENGE_MARKERS) or resp.status == 403:
-                        # back off origin
-                        backoff = self.rate_limiter._origin(host).backoff_until  # noqa
+                    if any(m in body_lower for m in _CHALLENGE_MARKERS):
+                        # A challenge page is "blocked": the origin is backed
+                        # off and the run makes no further attempts (§19.5.5).
                         self.rate_limiter.backoff(host, 6 * 3600)
                         self.rate_limiter.release(host)
                         return Err(
@@ -286,7 +305,9 @@ class PolicyHttpClient:
                                 code="blocked", message="challenge page detected", retryable=False
                             )
                         )
-                    # auth boundary
+                    # A plain 401/403 is an auth boundary, not a challenge:
+                    # report it without guessing a credential or changing
+                    # headers (§19.5.6).
                     self.rate_limiter.release(host)
                     return Err(
                         PortError(

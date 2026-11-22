@@ -1,22 +1,41 @@
-"""Privacy: resume import and matching must not touch the network."""
+"""Privacy: nothing personal leaves the machine or reaches the logs (§19.5.7)."""
 from __future__ import annotations
 
+import io
 from datetime import UTC
 from types import SimpleNamespace
 
 import pytest
+from app.application.commands.applications import (
+    ApplicationsUseCase,
+    SuppressionsUseCase,
+)
 from app.application.commands.matching import MatchingUseCase
 from app.application.commands.resume import ResumeUseCase
+from app.application.config import AppConfig
+from app.application.dto import ApplicationCreateParams
+from app.infrastructure.logging import configure_logging
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
-from tests.support.fakes import FakeClock, FakeHttpClient
+from tests.support.fakes import FakeClock, FakeHttpClient, FakeIdGenerator
+
+RESUME_TEXT = "Python developer with React experience."
 
 
 @pytest.mark.asyncio
-async def test_resume_and_matching_are_network_free(tmp_path):
+async def test_resume_matching_and_tracking_are_network_free_and_quiet(tmp_path):
+    stream = io.StringIO()
+    configure_logging(stream=stream)
+
     http = FakeHttpClient()
     http.block_socket = True
     factory = InMemoryUnitOfWorkFactory()
-    container = SimpleNamespace(uow_factory=factory, clock=FakeClock(), http=http)
+    container = SimpleNamespace(
+        uow_factory=factory,
+        clock=FakeClock(),
+        http=http,
+        ids=FakeIdGenerator(),
+        config=AppConfig(),
+    )
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "resumes").mkdir()
@@ -24,7 +43,7 @@ async def test_resume_and_matching_are_network_free(tmp_path):
     matching_uc = MatchingUseCase(container)  # type: ignore[arg-type]
 
     rpath = tmp_path / "r.txt"
-    rpath.write_text("Python developer with React experience.", encoding="utf-8")
+    rpath.write_text(RESUME_TEXT, encoding="utf-8")
     res = await resume_uc.import_resume(str(rpath), "v1")
     assert res["version_id"]
 
@@ -74,4 +93,35 @@ async def test_resume_and_matching_are_network_free(tmp_path):
 
     results = await matching_uc.run("default")
     assert isinstance(results, list)
+
+    # Application tracking is local too: it records what the user did.
+    tracked = await ApplicationsUseCase(container).create(  # type: ignore[arg-type]
+        ApplicationCreateParams(job_id="job1")
+    )
+    assert tracked.status == "applied"
+    suppressions = await SuppressionsUseCase(container).list()  # type: ignore[arg-type]
+    assert isinstance(suppressions.suppressions, list)
+
     assert http.sent == []
+    logs = stream.getvalue()
+    assert RESUME_TEXT not in logs
+    assert "Python required" not in logs
+
+
+def test_a_logged_pii_field_is_redacted():
+    stream = io.StringIO()
+    logger = configure_logging(stream=stream)
+
+    logger.info(
+        "resume.imported",
+        resume_text=RESUME_TEXT,
+        email="ada@example.com",
+        phone="+44 20 0000 0000",
+        note="reference ada@example.com",
+    )
+    logs = stream.getvalue()
+
+    assert RESUME_TEXT not in logs
+    assert "ada@example.com" not in logs
+    assert "+44 20 0000 0000" not in logs
+    assert "[redacted]" in logs

@@ -78,7 +78,7 @@ source schedule are stored in the app database.
 
 ## Sources, not seeds
 
-`discovery.ats_directory` ships an offline seed list of 25,651 boards:
+`discovery.ats_directory` ships an offline seed list of 25,716 boards:
 Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS
 and UKG Pro (UltiPro), each confirmed live through the board's own public ATS API. It exists so a brand new install has
 something to crawl immediately (and so tests do not need the network). It is
@@ -121,6 +121,13 @@ telemetry and no cloud database.
 | `discovery.oracle_recruiting` | the Internet Archive CDX API (`web.archive.org`) | one Oracle HCM pod, filtered to Candidate Experience URLs |
 | `discovery.ats_directory` | nothing | nothing |
 | crawl of a registered board | that ATS's public job pages | ordinary page requests |
+
+The crawler also refuses anything that is not a public `http(s)` URL. Loopback,
+private and link-local address literals (`127.0.0.1`, `169.254.169.254`,
+`10.x`, `192.168.x`, `[::1]`), their numeric aliases, `localhost`-style names
+and non-http schemes are rejected before a request is sent, and every redirect
+hop is checked again. There is no setting that turns this off; the test-only
+override is a constructor argument used by fixture servers.
 
 There is no personal data in any of those requests: no resume, no name, no
 search history, and no search-profile text. The current build ships no
