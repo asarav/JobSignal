@@ -49,6 +49,8 @@ ALLOWED_TABLES = {
     "user_skill_status",
     "matching_results",
     "matching_dimension_scores",
+    "matching_explanations",
+    "scoring_configurations",
     "keyword_taxonomy",
     "sqlite_sequence",
     "sqlite_stat1",

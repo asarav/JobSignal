@@ -18,6 +18,7 @@ from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpRequest
 from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
+from app.plugins.ats.schema import listing_items
 
 API_BASE = "https://api.smartrecruiters.com/v1/companies"
 
@@ -50,7 +51,7 @@ class SmartRecruitersConnector:
                     code="connector.fetch_failed", message="smartrecruiters list failed"
                 )
             data = _json(response.value.body)
-            for posting in data.get("content", []):
+            for posting in listing_items(data, "content", ats="smartrecruiters"):
                 posting_id = posting.get("id")
                 yield RawJobRef(
                     source_id=source.id,

@@ -55,6 +55,43 @@ def test_materially_updated():
     assert d.action in ("new_snapshot", "attach_alias")
 
 
+def test_ambiguous_tie_is_similar_distinct():
+    inc = _fp(
+        url_key="https://example.com/jobs/new",
+        ats_key=None,
+        desc_exact_hash="h-new",
+        desc_minhash=[1, 2, 3],
+        desc_simhash64=0,
+    )
+    a = _fp(
+        url_key="https://example.com/jobs/a",
+        ats_key=None,
+        desc_exact_hash="ha",
+        desc_minhash=[1, 2, 3],
+        desc_simhash64=0,
+    )
+    b = _fp(
+        url_key="https://example.com/jobs/b",
+        ats_key=None,
+        desc_exact_hash="hb",
+        desc_minhash=[1, 2, 3],
+        desc_simhash64=0,
+    )
+    d = resolve(inc, [a, b])
+    assert d.ambiguous is True
+    assert d.repost_class == "similar_distinct"
+    assert d.action == "new_job"
+
+
+def test_changed_requirement_skills_are_material():
+    inc = _fp(desc_exact_hash="h1", req_skills=("python", "kubernetes"))
+    cand = _fp(desc_exact_hash="h1", req_skills=("python", "terraform"))
+    d = resolve(inc, [cand])
+    assert d.material is True
+    assert d.repost_class == "materially_updated"
+    assert d.action == "new_snapshot"
+
+
 def test_guard_req_ids_prevents_merge():
     inc = _fp(req_ids=("REQ-2",), url_key="https://example.com/jobs/2", ats_key="ats.greenhouse|acme|2")
     cand = _fp(req_ids=("REQ-1",))

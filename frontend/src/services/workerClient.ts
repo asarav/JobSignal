@@ -11,6 +11,8 @@ import type {
   DiscoveryRunRequest,
   DiscoveryRunResponse,
   Envelope,
+  KeywordsExtractRequest,
+  KeywordsExtractResponse,
   MatchingRunRequest,
   MatchingRunResponse,
   MatchingGetResultsRequest,
@@ -19,6 +21,10 @@ import type {
   MatchingUpdateWeightsResponse,
   ResumeImportRequest,
   ResumeImportResponse,
+  ResumeParseRequest,
+  ResumeParseResponse,
+  ResumeSetSkillStatusRequest,
+  ResumeSetSkillStatusResponse,
   ResumeListVersionsRequest,
   ResumeListVersionsResponse,
   ResumeGetProfileRequest,
@@ -27,10 +33,16 @@ import type {
   ResumeSetActiveResponse,
   ResumeUpdateOverridesRequest,
   ResumeUpdateOverridesResponse,
+  JobsGetDetailRequest,
+  JobsGetDetailResponse,
   JobsListRequest,
   JobsListResponse,
+  JobsListSeenRequest,
+  JobsListSeenResponse,
   JobsSearchRequest,
   JobsSearchResponse,
+  JobsUnmergeRequest,
+  JobsUnmergeResponse,
   PluginsConfigureRequest,
   PluginsConfigureResponse,
   PluginsDisableRequest,
@@ -101,6 +113,8 @@ export type WorkerMethod =
   | "jobs.merge"
   | "jobs.unmerge"
   | "jobs.list_duplicates"
+  | "jobs.list_seen"
+  | "jobs.get_detail"
   | "crawl_runs.list"
   | "search_profiles.list"
   | "search_profiles.save"
@@ -112,6 +126,9 @@ export type WorkerMethod =
   | "resume.get_profile"
   | "resume.set_active"
   | "resume.update_overrides"
+  | "resume.parse"
+  | "resume.set_skill_status"
+  | "keywords.extract"
   | "matching.run"
   | "matching.get_results"
   | "matching.update_weights";
@@ -232,6 +249,18 @@ export class WorkerClient {
     return this.request("jobs.search", { ...request });
   }
 
+  listSeenJobs(request: JobsListSeenRequest = {}): Promise<JobsListSeenResponse> {
+    return this.request("jobs.list_seen", { ...request });
+  }
+
+  getJobDetail(request: JobsGetDetailRequest): Promise<JobsGetDetailResponse> {
+    return this.request("jobs.get_detail", { ...request });
+  }
+
+  unmergeJobs(request: JobsUnmergeRequest): Promise<JobsUnmergeResponse> {
+    return this.request("jobs.unmerge", { ...request });
+  }
+
   listCrawlRuns(request: CrawlRunsListRequest = {}): Promise<CrawlRunsListResponse> {
     return this.request("crawl_runs.list", { ...request });
   }
@@ -270,6 +299,15 @@ export class WorkerClient {
   }
   updateResumeOverrides(request: ResumeUpdateOverridesRequest): Promise<ResumeUpdateOverridesResponse> {
     return this.request("resume.update_overrides", { ...request });
+  }
+  parseResume(request: ResumeParseRequest): Promise<ResumeParseResponse> {
+    return this.request("resume.parse", { ...request });
+  }
+  setResumeSkillStatus(request: ResumeSetSkillStatusRequest): Promise<ResumeSetSkillStatusResponse> {
+    return this.request("resume.set_skill_status", { ...request });
+  }
+  extractKeywords(request: KeywordsExtractRequest): Promise<KeywordsExtractResponse> {
+    return this.request("keywords.extract", { ...request });
   }
   runMatching(request: MatchingRunRequest = {}): Promise<MatchingRunResponse> {
     return this.request("matching.run", { ...request });

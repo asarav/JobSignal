@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Copy } from "../../copy/copy";
+import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
@@ -19,6 +20,12 @@ interface SettingsConfig {
 function intervalMinutes(intervalS: number | undefined): string {
   return String(Math.round((intervalS ?? 0) / 60));
 }
+
+const PLUGIN_HEALTH_LABELS: Record<string, string> = {
+  closed: "Healthy",
+  half_open: "Recovering",
+  open: "Failing",
+};
 
 export function SettingsRoute() {
   const [settings, setSettings] = useState<SettingsGetResponse | null>(null);
@@ -127,13 +134,23 @@ export function SettingsRoute() {
             <dd className="font-medium text-slate-900">{config.app_version ?? Copy.settings.none}</dd>
           </div>
           <div>
-            <dt className="text-slate-500">{Copy.settings.protocolVersion}</dt>
+            <dt className="text-slate-500">
+              {Copy.settings.protocolVersion}
+              <InfoTip label={Copy.settings.protocolVersion}>
+                Version of the message format used between the app and the local worker.
+              </InfoTip>
+            </dt>
             <dd className="font-medium text-slate-900">
               {config.protocol_version ?? Copy.settings.none}
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">{Copy.settings.schemaVersion}</dt>
+            <dt className="text-slate-500">
+              {Copy.settings.settingsFormatVersion}
+              <InfoTip label={Copy.settings.settingsFormatVersion}>
+                {Copy.tooltips.settingsSchema}
+              </InfoTip>
+            </dt>
             <dd className="font-medium text-slate-900">
               {settings?.schema_version ?? Copy.settings.none}
             </dd>
@@ -160,7 +177,13 @@ export function SettingsRoute() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.settings.featureFlags}</h2>
+        <h2
+          className="text-lg font-semibold text-slate-900"
+          aria-label={Copy.settings.featureFlags}
+        >
+          {Copy.settings.featureFlags}
+          <InfoTip label={Copy.settings.featureFlags}>{Copy.tooltips.featureFlags}</InfoTip>
+        </h2>
         <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
           {Object.entries(featureFlags).map(([flag, enabled]) => (
             <li
@@ -169,7 +192,7 @@ export function SettingsRoute() {
             >
               <span className="font-mono text-xs text-slate-700">{flag}</span>
               <span className={enabled ? "text-emerald-700" : "text-slate-500"}>
-                {enabled ? "on" : "off"}
+                {enabled ? "enabled" : "disabled"}
               </span>
             </li>
           ))}
@@ -183,7 +206,10 @@ export function SettingsRoute() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Sources</h2>
+        <h2 className="text-lg font-semibold text-slate-900" aria-label="Sources">
+          Sources
+          <InfoTip label="Sources">{Copy.tooltips.sources}</InfoTip>
+        </h2>
         {sources.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">No sources configured. Add one on the Discover screen.</p>
         ) : (
@@ -192,8 +218,11 @@ export function SettingsRoute() {
               <li key={source.source_id} className="flex items-center justify-between gap-3 py-2 text-sm">
                 <span className="truncate font-mono text-xs text-slate-700">{source.url}</span>
                 <div className="flex shrink-0 items-center gap-2">
-                  <label className="flex items-center gap-1 text-xs text-slate-500">
-                    every
+                  <label
+                    className="flex items-center gap-1 text-xs text-slate-500"
+                    title={Copy.tooltips.crawlInterval}
+                  >
+                    crawl every
                     <input
                       type="number"
                       min={0}
@@ -221,7 +250,7 @@ export function SettingsRoute() {
                     }
                     className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >
-                    Save
+                    Save interval
                   </button>
                   <button
                     type="button"
@@ -237,7 +266,7 @@ export function SettingsRoute() {
                     onClick={() => void deleteSource(source.source_id)}
                     className="rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
                   >
-                    Delete
+                    Delete source
                   </button>
                 </div>
               </li>
@@ -247,7 +276,10 @@ export function SettingsRoute() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.settings.plugins}</h2>
+        <h2 className="text-lg font-semibold text-slate-900" aria-label={Copy.settings.plugins}>
+          {Copy.settings.plugins}
+          <InfoTip label={Copy.settings.plugins}>{Copy.tooltips.plugins}</InfoTip>
+        </h2>
         {plugins.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">{Copy.settings.pluginNone}</p>
         ) : (
@@ -270,7 +302,9 @@ export function SettingsRoute() {
                     <td className="px-2 py-2">{plugin.kind}</td>
                     <td className="px-2 py-2">{plugin.version}</td>
                     <td className="px-2 py-2">
-                      {String((plugin.health as { state?: string }).state ?? "unknown")}
+                      {PLUGIN_HEALTH_LABELS[
+                        String((plugin.health as { state?: string }).state ?? "")
+                      ] ?? "Unknown"}
                     </td>
                     <td className="px-2 py-2 font-mono text-xs">
                       {plugin.network_hosts.length > 0 ? plugin.network_hosts.join(", ") : "-"}

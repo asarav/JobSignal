@@ -6,7 +6,7 @@ worker accepts/returns. Domain models remain the source of truth for meaning.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -170,6 +170,8 @@ class SourceInfo(DTO):
     enabled: bool = True
     interval_s: float = 0.0
     extraction_order: list[str] = Field(default_factory=list)
+    tier: str | None = None
+    tier_reason: str | None = None
 
 
 class SourceListResult(DTO):
@@ -210,6 +212,11 @@ class JobSummary(DTO):
     posting_status: str = "active"
     source_id: str | None = None
     provenance: list[str] = Field(default_factory=list)
+    via_index: bool = False
+    #: Why a row appears in the Seen/Duplicates view (``duplicate``,
+    #: ``posting_removed`` …); ``None`` in ordinary result lists.
+    reason: str | None = None
+    related_job_ids: list[str] = Field(default_factory=list)
 
 
 class JobListResult(DTO):
@@ -235,11 +242,25 @@ class JobMergeParams(DTO):
     job_id: str
     related_job_id: str
 
+
+class JobIdParams(DTO):
+    job_id: str
+
+
+class JobDetailResult(DTO):
+    job: dict[str, Any]
+    snapshots: list[dict[str, Any]] = Field(default_factory=list)
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+    relations: list[dict[str, Any]] = Field(default_factory=list)
+    reposts: list[dict[str, Any]] = Field(default_factory=list)
+
 class ResumeImportResult(DTO):
     profile_id: str
     version_id: str
     skills: list[str] = Field(default_factory=list)
     sections: list[str] = Field(default_factory=list)
+    contact: dict[str, str] = Field(default_factory=dict)
+    years_experience: float | None = None
 
 class ResumeVersionsResult(DTO):
     versions: list[dict[str, Any]] = Field(default_factory=list)
@@ -252,6 +273,38 @@ class MatchingRunResult(DTO):
 
 class MatchingResultsResult(DTO):
     results: list[dict[str, Any]] = Field(default_factory=list)
+    weights: dict[str, float] = Field(default_factory=dict)
+
+
+class MatchingWeightsResult(DTO):
+    ok: bool = True
+    weights: dict[str, float] = Field(default_factory=dict)
+
+
+class ResumeSkillStatusParams(DTO):
+    profile_id: str = "default"
+    keyword_id: str
+    status: Literal["have_experience", "learning", "no_experience", "not_relevant"]
+
+
+class ResumeParseParams(DTO):
+    resume_version_id: str
+
+
+class ResumeParseResult(DTO):
+    version_id: str
+    text: str
+    sections: dict[str, str] = Field(default_factory=dict)
+    skills: list[str] = Field(default_factory=list)
+    years_experience: float | None = None
+
+
+class KeywordsExtractParams(DTO):
+    text: str
+
+
+class KeywordsExtractResult(DTO):
+    keywords: list[str] = Field(default_factory=list)
 
 class ResumeImportParams(DTO):
     file_path: str
@@ -301,6 +354,9 @@ class AutoDiscoverResult(DTO):
     registered: int = 0
     crawled: int = 0
     failed: int = 0
+    postings_harvested: int = 0
+    postings_verified: int = 0
+    tiers_changed: int = 0
 
 
 def task_summary(task: Any) -> TaskSummary:

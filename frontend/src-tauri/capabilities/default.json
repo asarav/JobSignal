@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Minimal capability for the Lodestar M0 shell.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:event:default"]
+  "permissions": ["core:default", "core:event:default", "dialog:default"]
 }

@@ -1,0 +1,34 @@
+{
+  "complete": {
+    "title": "Senior Backend Engineer",
+    "description": "We are hiring a Senior Backend Engineer to build Python services on AWS with PostgreSQL and Docker. You will own data pipelines and partner with product teams.",
+    "seniority": "senior",
+    "required_skills": ["python", "sql", "aws"],
+    "preferred_skills": ["docker", "kubernetes"],
+    "workplace_type": "remote",
+    "locations": [
+      {"raw": "Berlin, Germany", "city": "Berlin", "country": "Germany"}
+    ],
+    "salary": {
+      "min_amount": 90000,
+      "max_amount": 120000,
+      "currency": "EUR",
+      "period": "year",
+      "annualized_min": 90000,
+      "annualized_max": 120000,
+      "raw_text": "EUR 90,000 - EUR 120,000"
+    },
+    "posted_days_ago": 14
+  },
+  "sparse": {
+    "title": "Operations Assistant",
+    "description": "Support internal tools and scheduling for the operations team.",
+    "seniority": "entry",
+    "required_skills": [],
+    "preferred_skills": [],
+    "workplace_type": "unknown",
+    "locations": [],
+    "salary": null,
+    "posted_days_ago": null
+  }
+}

@@ -15,6 +15,19 @@ KNOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("myworkdayjobs.com", "ats.workday"),
     ("myworkdaysite.com", "ats.workday"),
     ("icims.com", "ats.icims"),
+    ("recruiting.ultipro.com", "ats.ultipro"),
+    ("recruiting2.ultipro.com", "ats.ultipro"),
+    ("recruiting3.ultipro.com", "ats.ultipro"),
+    ("recruiting.ultipro.ca", "ats.ultipro"),
+    ("apply.workable.com", "ats.workable"),
+    ("workable.com", "ats.workable"),
+    ("bamboohr.com", "ats.bamboohr"),
+    ("oraclecloud.com/hcmui/candidateexperience", "ats.oracle_recruiting"),
+    ("oraclecloud.com/hcmrestapi", "ats.oracle_recruiting"),
+    ("eightfold.ai", "ats.eightfold"),
+    ("phenompeople.com", "ats.phenom"),
+    ("amazon.jobs", "ats.amazon"),
+    ("taleo.net/careersection", "ats.taleo"),
 )
 
 
@@ -28,4 +41,6 @@ def classify_url(url: str, sniff: PageSniff | None = None) -> tuple[str | None, 
         for pattern, connector_id in KNOWN_PATTERNS:
             if pattern in html:
                 return connector_id, 0.6
+        if any(marker in html for marker in ("ddokey", "refinesearch", "phenompeople")):
+            return "ats.phenom", 0.6
     return None, 0.0

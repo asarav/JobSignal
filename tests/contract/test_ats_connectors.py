@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
-from app.domain.models.common import Ok
+from app.domain.models.common import Ok, PortError
 from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.http import HttpRequest, HttpResponse
 from app.domain.models.source import SourceConfig
 from app.plugins.ats.icims import IcmsConnector
 from app.plugins.ats.smartrecruiters import SmartRecruitersConnector
+from app.plugins.ats.ultipro import UltiproConnector
 from app.plugins.ats.workday import WorkdayConnector
 from tests.support.fakes import FakeClock, FakeHttpClient, FakeStructuredLogger
 
@@ -261,3 +262,106 @@ async def test_connector_posts_the_workday_search_body():
     assert request.method == "POST"
     assert request.json_body is not None
     assert request.json_body["limit"] == 20
+
+
+ULTIPRO_BASE = (
+    "https://recruiting.ultipro.com/ACME01/JobBoard/"
+    "6b442184-52a5-4635-8db5-5aa4bed2a563"
+)
+
+
+async def test_ultipro_lists_and_fetches_postings():
+    """UKG Pro lists via LoadSearchResults and embeds the detail JSON in HTML."""
+    list_url = f"{ULTIPRO_BASE}/JobBoardView/LoadSearchResults"
+    detail_url = f"{ULTIPRO_BASE}/OpportunityDetail?opportunityId=abc"
+    detail_html = """
+    <html><body><script>
+      var opportunity = new US.Opportunity.CandidateOpportunityDetail({
+        "Id":"abc","Title":"Platform Engineer","FullTime":true,
+        "Description":"<p>Build {platforms} and \\"tools\\".</p>",
+        "Locations":[{"LocalizedName":null,"Address":{"City":"Austin",
+          "State":{"Code":"TX"},"Country":{"Name":"United States"}}}],
+        "PostedDate":"2026-11-01T00:00:00Z","RequisitionNumber":"REQ-7"
+      });
+    </script></body></html>
+    """
+    http = FakeHttpClient(
+        {
+            list_url: _response(
+                list_url,
+                {
+                    "opportunities": [
+                        {
+                            "Id": "abc",
+                            "Title": "Platform Engineer",
+                            "PostedDate": "2026-11-01T00:00:00Z",
+                            "Locations": [
+                                {
+                                    "LocalizedName": "Acme",
+                                    "Address": {
+                                        "City": "Austin",
+                                        "State": {"Code": "TX"},
+                                        "Country": {"Name": "United States"},
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                    "totalCount": 1,
+                },
+            ),
+            detail_url: HttpResponse(
+                status=200, url=detail_url, headers={"content-type": "text/html"},
+                body=detail_html.encode(), elapsed_ms=5,
+            ),
+        }
+    )
+    connector = UltiproConnector()
+    assert connector.matches(ULTIPRO_BASE).matched is True
+
+    source = SourceConfig(
+        id="s1", url=ULTIPRO_BASE, kind="ats", connector_id="ats.ultipro",
+    )
+    refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
+    assert len(refs) == 1
+    assert refs[0].source_posting_id == "abc"
+    assert refs[0].url == detail_url
+    assert refs[0].updated_at_hint == "2026-11-01T00:00:00Z"
+
+    request = http.sent[0]
+    assert request.method == "POST"
+    assert request.json_body is not None
+    assert request.json_body["opportunitySearch"]["Skip"] == 0  # type: ignore[index]
+
+    result = await connector.fetch_job(refs[0], source, _ctx(http))
+    assert isinstance(result, Ok)
+    assert result.value.title == "Platform Engineer"
+    # Braces and quotes inside the description do not break the JSON parser.
+    assert "Build {platforms}" in (result.value.body_text or "")
+    assert result.value.payload["employmentType"] == "FULL_TIME"
+    assert result.value.payload["locations"] == ["Austin, TX"]
+    assert result.value.payload["requisitionNumber"] == "REQ-7"
+
+
+def test_classifier_maps_ukg_pro_urls_to_the_connector():
+    from app.domain.services.classifier import classify_url
+
+    connector_id, confidence = classify_url(ULTIPRO_BASE)
+
+    assert connector_id == "ats.ultipro"
+    assert confidence == 0.9
+
+
+def test_ultipro_only_matches_job_board_urls():
+    connector = UltiproConnector()
+    assert connector.matches("https://www.ultipro.com/pricing").matched is False
+    assert connector.matches("https://recruiting.ultipro.com/ACME01").matched is False
+
+
+async def test_ultipro_rejects_a_source_without_a_board_id():
+    source = SourceConfig(
+        id="s1", url="https://recruiting.ultipro.com/ACME01", kind="ats",
+        connector_id="ats.ultipro",
+    )
+    with pytest.raises(PortError):
+        [ref async for ref in await UltiproConnector().list_jobs(source, _ctx(FakeHttpClient()))]

@@ -16,6 +16,18 @@
     "failed": {
       "default": 0,
       "type": "integer"
+    },
+    "postings_harvested": {
+      "default": 0,
+      "type": "integer"
+    },
+    "postings_verified": {
+      "default": 0,
+      "type": "integer"
+    },
+    "tiers_changed": {
+      "default": 0,
+      "type": "integer"
     }
   },
   "title": "DiscoveryAutoDiscoverResponse",

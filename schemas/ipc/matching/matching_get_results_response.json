@@ -7,6 +7,12 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "weights": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
     }
   },
   "title": "MatchingGetResultsResponse",

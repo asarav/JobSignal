@@ -38,3 +38,5 @@ frontend/src-tauri/gen/
 .env
 .DS_Store
 Thumbs.db
+.seed_build_verified.json
+.seed_build_log.jsonl

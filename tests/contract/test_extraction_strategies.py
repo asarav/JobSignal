@@ -236,3 +236,21 @@ async def test_partial_never_fails_and_uses_the_url():
     assert isinstance(result, Ok)
     assert result.value.raw.title == "Backend Engineer"
     assert result.value.field_confidence["title"] < 0.2
+
+
+@pytest.mark.asyncio
+async def test_partial_decodes_percent_encoded_unicode_slugs():
+    strategy = PartialStrategy()
+    target = _target(url="https://example.com/jobs/d%C3%A9veloppeur-python")
+    result = await strategy.extract(target, _ctx())
+    assert isinstance(result, Ok)
+    assert result.value.raw.title == "Développeur Python"
+
+
+@pytest.mark.asyncio
+async def test_partial_does_not_use_a_posting_id_as_the_title():
+    strategy = PartialStrategy()
+    target = _target(url="https://boards.greenhouse.io/acme/jobs/4083293003")
+    result = await strategy.extract(target, _ctx())
+    assert isinstance(result, Ok)
+    assert result.value.raw.title is None

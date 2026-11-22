@@ -120,6 +120,7 @@ def resolve(
     candidates: Sequence[JobFingerprintSet],
     *,
     thresholds: dict[str, float] | None = None,
+    weights: dict[str, float] | None = None,
     material_change_delta: float = 0.10,
 ) -> IdentityDecision:
     thr = thresholds or {
@@ -130,7 +131,8 @@ def resolve(
     # 1. Exact alias hit.
     for c in candidates:
         if incoming.ats_key and incoming.ats_key == c.ats_key:
-            if incoming.desc_exact_hash == c.desc_exact_hash:
+            material = is_material_change(incoming, c, material_change_delta)
+            if incoming.desc_exact_hash == c.desc_exact_hash and not material:
                 return IdentityDecision(
                     action="attach_alias",
                     job_id=None,
@@ -138,8 +140,18 @@ def resolve(
                     confidence=1.0,
                     evidence=("exact alias hit, identical content",),
                 )
+            if incoming.desc_exact_hash == c.desc_exact_hash:
+                # Same text, material metadata change (e.g. requirements).
+                return IdentityDecision(
+                    action="new_snapshot",
+                    job_id=None,
+                    repost_class="materially_updated",
+                    confidence=0.9,
+                    evidence=("exact alias hit, requirement sections changed",),
+                    material=True,
+                    related_job_ids=(c.url_key,),
+                )
             # differs
-            material = _is_material(incoming, c, material_change_delta)
             return IdentityDecision(
                 action="new_snapshot",
                 job_id=None,
@@ -149,7 +161,8 @@ def resolve(
                 material=material,
             )
         if incoming.url_key and incoming.url_key == c.url_key:
-            if incoming.desc_exact_hash == c.desc_exact_hash:
+            material = is_material_change(incoming, c, material_change_delta)
+            if incoming.desc_exact_hash == c.desc_exact_hash and not material:
                 return IdentityDecision(
                     action="attach_alias",
                     job_id=None,
@@ -157,7 +170,16 @@ def resolve(
                     confidence=1.0,
                     evidence=("url alias hit, identical content",),
                 )
-            material = _is_material(incoming, c, material_change_delta)
+            if incoming.desc_exact_hash == c.desc_exact_hash:
+                return IdentityDecision(
+                    action="new_snapshot",
+                    job_id=None,
+                    repost_class="materially_updated",
+                    confidence=0.9,
+                    evidence=("url alias hit, requirement sections changed",),
+                    material=True,
+                    related_job_ids=(c.url_key,),
+                )
             return IdentityDecision(
                 action="new_snapshot",
                 job_id=None,
@@ -190,7 +212,7 @@ def resolve(
     # 3. Pairwise similarity.
     scored: list[tuple[JobFingerprintSet, SimilarityEvidence]] = []
     for c in blocking_candidates:
-        sim = compute_similarity(incoming, c)
+        sim = compute_similarity(incoming, c, weights)
         scored.append((c, sim))
 
     # guards: different location (non-remote) caps at similar_distinct.
@@ -240,15 +262,20 @@ def resolve(
     materially_updated_thr = thr.get("materially_updated", 0.75)
     similar_distinct_thr = thr.get("similar_distinct", 0.60)
 
-    if incoming.desc_exact_hash == c.desc_exact_hash and title_sim >= 0.95 and location_sim >= 0.8:
-        repost_class = "reposted_identical"
+    material = is_material_change(incoming, c, material_change_delta)
+    if (
+        incoming.desc_exact_hash == c.desc_exact_hash
+        and title_sim >= 0.95
+        and location_sim >= 0.8
+    ):
+        repost_class = "materially_updated" if material else "reposted_identical"
     elif (
         sim.score >= reposted_identical_thr
         and title_sim >= 0.9
         and location_sim >= 0.8
         and desc_sim >= 0.90
     ):
-        repost_class = "reposted_identical"
+        repost_class = "materially_updated" if material else "reposted_identical"
     elif (
         reposted_identical_thr > sim.score >= materially_updated_thr
         and title_sim >= 0.9
@@ -289,9 +316,7 @@ def resolve(
         )
 
     # reposted_identical or materially_updated → attach alias
-    material = repost_class == "materially_updated" or _is_material(
-        incoming, c, material_change_delta
-    )
+    material = repost_class == "materially_updated" or material
     action = "attach_alias" if repost_class == "reposted_identical" else "new_snapshot"
     return IdentityDecision(
         action=action,
@@ -304,7 +329,9 @@ def resolve(
     )
 
 
-def _is_material(incoming: JobFingerprintSet, existing: JobFingerprintSet, delta: float) -> bool:
+def is_material_change(
+    incoming: JobFingerprintSet, existing: JobFingerprintSet, delta: float
+) -> bool:
     # title/location/salary/seniority change
     if incoming.title_key != existing.title_key:
         return True
@@ -312,6 +339,12 @@ def _is_material(incoming: JobFingerprintSet, existing: JobFingerprintSet, delta
         return True
     if incoming.salary_min != existing.salary_min:
         return True
+    # Requirement sections: at least one skill added or removed (spec §7.3).
+    # Missing data is not evidence of a change, so compare only when both
+    # postings carry requirement skills.
+    if incoming.req_skills and existing.req_skills:
+        if set(incoming.req_skills) != set(existing.req_skills):
+            return True
     # description jaccard delta
     from app.domain.services.fingerprints import jaccard_est
 

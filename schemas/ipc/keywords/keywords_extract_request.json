@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "KeywordsExtractRequest",
+  "type": "object"
+}

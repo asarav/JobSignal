@@ -142,6 +142,11 @@ impl Supervisor {
         }
     }
 
+    /// Directory the worker stores its data in; openable files must live here.
+    pub fn data_dir(&self) -> &Path {
+        &self.inner.data_dir
+    }
+
     /// Spawn the supervisor loop on the Tauri runtime.
     fn start(self) {
         tauri::async_runtime::spawn(async move { self.supervise().await });
@@ -472,6 +477,29 @@ fn data_dir(app: &AppHandle) -> PathBuf {
         .join("worker")
 }
 
+/// Resolves `candidate` and refuses anything outside `root` (resume copies
+/// live under the worker data dir, so no other path may be opened).
+fn resolve_inside(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("data directory unavailable: {error}"))?;
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|error| format!("file unavailable: {error}"))?;
+    if !resolved.starts_with(&root) {
+        return Err("refusing to open a file outside the app data directory".to_string());
+    }
+    Ok(resolved)
+}
+
+/// Opens a stored resume copy in the OS default application.
+#[tauri::command]
+fn open_original_file(state: State<'_, Supervisor>, path: String) -> Result<(), String> {
+    let resolved = resolve_inside(state.data_dir(), Path::new(&path))?;
+    tauri_plugin_opener::open_path(resolved.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| format!("could not open the file: {error}"))
+}
+
 #[tauri::command]
 async fn worker_request(
     state: State<'_, Supervisor>,
@@ -492,6 +520,7 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let directory = data_dir(&handle);
@@ -503,7 +532,11 @@ pub fn run() {
             app.manage(supervisor);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![worker_request, worker_shutdown])
+        .invoke_handler(tauri::generate_handler![
+            worker_request,
+            worker_shutdown,
+            open_original_file
+        ])
         .build(tauri::generate_context!())
         .expect("error while building Lodestar")
         .run(|app, event| {
@@ -536,11 +569,9 @@ mod tests {
         }
         for method in [
             "browser.open",
-            "resume.parse",
             "matching.score",
             "applications.create",
             "posting_intelligence.evaluate",
-            "keywords.extract",
         ] {
             assert!(!is_allowed(method), "{method} must be rejected in M0");
         }
@@ -597,6 +628,22 @@ mod tests {
         let unique: std::collections::HashSet<&&str> = ALLOWED_METHODS.iter().collect();
         assert_eq!(unique.len(), ALLOWED_METHODS.len());
         assert!(ALLOWED_METHODS.iter().all(|method| !method.trim().is_empty()));
+    }
+
+    #[test]
+    fn open_validation_rejects_paths_outside_the_data_dir() {
+        let base = std::env::temp_dir().join(format!("lodestar-open-{}", uuid::Uuid::new_v4()));
+        let root = base.join("worker");
+        let outside = base.join("outside.txt");
+        std::fs::create_dir_all(root.join("resumes")).unwrap();
+        std::fs::write(root.join("resumes").join("cv.txt"), b"x").unwrap();
+        std::fs::write(&outside, b"x").unwrap();
+
+        assert!(resolve_inside(&root, &root.join("resumes").join("cv.txt")).is_ok());
+        assert!(resolve_inside(&root, &outside).is_err());
+        assert!(resolve_inside(&root, &root.join("missing.txt")).is_err());
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

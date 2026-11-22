@@ -4,6 +4,12 @@
     "ok": {
       "default": true,
       "type": "boolean"
+    },
+    "weights": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
     }
   },
   "title": "MatchingUpdateWeightsResponse",

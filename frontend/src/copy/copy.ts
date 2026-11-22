@@ -1,10 +1,10 @@
 export const Copy = {
-  productName: "Lodestar",
+  productName: "Job Signal",
   productNameSubtitle: "local-first job intelligence",
   footer:
-    "Lodestar (JobSignal) — local-first job intelligence. Milestone 0: desktop foundation only. This build never submits applications.",
+    "Job Signal (JobSignal) — local-first job intelligence. This build never submits applications.",
   previewBanner:
-    "Preview mode: the Tauri worker bridge is not available. Values shown below are placeholders.",
+    "Preview mode: the desktop worker is not connected, so the values below are sample data.",
   nav: {
     dashboard: "Dashboard",
     discover: "Discover Jobs",
@@ -19,72 +19,84 @@ export const Copy = {
     diagnostics: "Diagnostics",
     seen: "Previously Seen",
   },
+  navDescriptions: {
+    dashboard: "Overview of the local worker and what this build can do.",
+    discover: "Add a career page, crawl it and browse the jobs found.",
+    searchProfiles: "Search your job database and save reusable filters.",
+    saved: "Jobs you saved. Not available in this build.",
+    applications: "Applications you have sent. Not available in this build.",
+    companies: "Company history and hiring activity. Not available in this build.",
+    postingIntelligence: "Repost and posting-quality signals. Not available in this build.",
+    keywords: "Skill demand across postings. Not available in this build.",
+    resume: "Import a resume, edit your profile and run job matching.",
+    settings: "Sources, crawl schedules, feature flags and plugins.",
+    diagnostics: "Worker health, tasks and recent events.",
+    seen: "Postings that disappeared or were linked as duplicates and reposts.",
+  },
   status: {
     idle: "Not connected",
-    connecting: "Connecting to worker…",
-    ready: "Worker connected",
-    error: "Worker unavailable",
+    connecting: "Connecting…",
+    ready: "Connected",
+    error: "Connection failed",
+    preview: "Preview data",
   },
   home: {
     title: "Dashboard",
-    subtitle: "Local-first job intelligence desktop worker",
-    milestone: "Milestone 0 — Architecture and desktop foundation",
+    subtitle: "A local, private view of the job postings this computer has collected",
+    capabilities: "What this build can do",
     welcome:
-      "The desktop shell, worker handshake, settings, diagnostics and plugin registry are available. Job discovery arrives in later milestones.",
-    notImplemented: "Not yet implemented",
+      "The worker finds career sites on its own, crawls the boards that matter most, links reposts and duplicates, matches jobs against your resume and shows which source each posting came from. Everything stays on this computer.",
+    notImplemented: "Not available in this build",
     notImplementedList: [
-      "Job crawling and discovery providers",
-      "ATS connectors",
-      "Resume parsing and candidate profiles",
-      "Job matching and ranking",
-      "Ghost-job / posting-quality signals",
+      "Application tracking and company-aware suppression",
+      "Posting-quality / ghost-job risk signals",
       "Browser automation and autofill",
     ],
     health: "Worker health",
-    version: "Version",
+    version: "App version",
   },
   settings: {
     title: "Settings",
-    description:
-      "Data location, feature flags and plugin registry. Feature flags are read-only in Milestone 0.",
+    description: "Where data is stored, which optional features are enabled and which plugins are registered.",
     general: "General",
     featureFlags: "Feature flags",
     plugins: "Plugins",
     data: "Data",
     dataDir: "Data directory",
-    database: "Database",
+    database: "Database file",
     appVersion: "App version",
     protocolVersion: "Protocol version",
-    schemaVersion: "Schema version",
+    schemaVersion: "Database schema version",
+    settingsFormatVersion: "Settings format version",
     pluginId: "Plugin",
     pluginKind: "Kind",
     pluginVersion: "Version",
     pluginHealth: "Health",
     pluginEnabled: "Enabled",
-    pluginHosts: "Network hosts",
-    pluginNone: "No plugins registered.",
+    pluginHosts: "Allowed network hosts",
+    pluginNone: "No plugins are registered.",
     none: "Not reported",
     enable: "Enable",
     disable: "Disable",
     loadError: "Could not load settings.",
-    overrides: "Stored overrides",
-    noOverrides: "No user overrides stored yet.",
+    overrides: "Stored configuration overrides",
+    noOverrides: "No overrides stored; built-in defaults are in use.",
   },
   diagnostics: {
     title: "Diagnostics",
-    description: "Worker health, recent tasks, and log export placeholder.",
+    description: "Worker health, running tasks and recent events, for troubleshooting.",
     health: "Health",
     status: "Status",
-    queueDepth: "Queue depth",
+    queueDepth: "Tasks waiting",
     diskUsage: "Disk used",
     pluginHealth: "Plugin health",
     recentTasks: "Recent tasks",
-    noTasks: "No tasks yet. Start a diagnostics sleep task to exercise progress and cancellation.",
-    startTask: "Start diagnostics sleep",
+    noTasks: "No tasks have run yet. Use “Run test task” to check progress and cancellation.",
+    startTask: "Run test task",
     cancel: "Cancel",
     exportLogs: "Export logs",
     exportLogsPlaceholder:
-      "Log export is a placeholder in Milestone 0. Worker logs are written under <data-dir>/logs.",
+      "Log export is not available yet. Log files are written to the logs folder inside the data directory.",
     taskId: "Task",
     taskType: "Type",
     taskStatus: "Status",
@@ -92,54 +104,126 @@ export const Copy = {
     taskActions: "Actions",
     loadError: "Could not load diagnostics.",
     healthError: "Could not load worker health.",
-    events: "Recent events",
+    events: "Recent worker events",
     noEvents: "No events received yet.",
   },
   placeholders: {
     discover: {
       title: "Discover Jobs",
-      body: "Automatic discovery and daily scheduling arrive in Milestone 3.5. The app finds companies and career pages on its own, crawls them daily, and surfaces matching jobs without manual setup.",
+      body: "Add a career page or job board URL, crawl it, and review the postings found.",
     },
     searchProfiles: {
       title: "Search Profiles",
-      body: "Search profiles and hard filters land with matching in Milestone 4.",
+      body: "Search your job database and save reusable hard filters.",
     },
     saved: {
       title: "Saved Jobs",
-      body: "Saved jobs arrive with the job database in Milestone 3.",
+      body: "This screen will list jobs you save. Saving jobs is not available in this build.",
     },
     applications: {
       title: "Applications",
-      body: "Application tracking and suppression arrive in Milestone 5.",
+      body: "This screen will track applications and hide roles you have already applied to. Application tracking is not available in this build.",
     },
     companies: {
       title: "Companies",
-      body: "Company history and hiring activity arrive with posting intelligence in Milestone 6.",
+      body: "This screen will show company history and hiring activity. It is not available in this build.",
     },
     postingIntelligence: {
       title: "Posting Intelligence",
-      body: "Posting-quality signals and risk classifications arrive in Milestone 6.",
+      body: "This screen will show posting-quality signals such as repost frequency and ghost-job risk. It is not available in this build.",
     },
     keywords: {
       title: "Keyword Insights",
-      body: "Keyword prevalence and resume coverage arrive in Milestone 7.",
+      body: "This screen will show which skills are in demand and how well your resume covers them. It is not available in this build.",
     },
     resume: {
       title: "Resume Manager",
-      body: "Resume import, parsing and profile editing arrive in Milestone 4.",
+      body: "Import a resume, edit your profile and run job matching.",
     },
     seen: {
       title: "Previously Seen",
-      body: "Duplicate, seen and suppressed jobs arrive with job history in Milestone 3.",
+      body: "Postings that disappeared and jobs linked as duplicates or reposts, with a way to separate them again.",
     },
     job: {
       title: "Job detail",
-      body: "Job details are unavailable until the job database lands in Milestone 3.",
+      body: "Open a job from Discover Jobs or Previously Seen to read its history.",
     },
   },
   emptyState: {
-    heading: "No data yet",
-    body: "This milestone ships the desktop foundation. Long-running product screens are intentionally empty.",
+    heading: "Not available yet",
+    body: "This screen is planned but is not included in this build. The Dashboard lists what is available.",
+  },
+  tooltips: {
+    status:
+      "The worker is the background program on this computer that crawls job boards and stores the results. It never uploads your data.",
+    health: "Overall state reported by the local worker.",
+    schema:
+      "Version of the local database layout. It is upgraded automatically when the app updates.",
+    settingsSchema:
+      "Version of the stored settings format. This is separate from the database schema version.",
+    sources:
+      "A source is a career page or job board the worker crawls. Paste the URL of a company's job list, not an individual posting.",
+    runSource:
+      "Crawl this source now. New postings are added, changed postings get a new snapshot, and postings that disappeared are marked as removed.",
+    tier:
+      "Discovery ranking. Hot sources recently produced relevant jobs, warm sources are promising, and cold sources are low priority.",
+    viaIndex:
+      "Found through the local index of known career sites, rather than by crawling a source you added.",
+    extractedBy: "The extraction strategies that read this posting, in the order they ran.",
+    autoDiscovery:
+      "Lets the worker find new career sites by itself and re-crawl the ones that are due. It runs in the background in bounded passes.",
+    profile:
+      "A named set of hard filters. A profile does not change your resume; it narrows and ranks the jobs shown here.",
+    hardFilters:
+      "Jobs that fail these filters are hidden from results. The same filters rank discovery sources into hot, warm and cold tiers.",
+    saveFilters:
+      "Saves these filters to the selected profile. Searches use the saved filters, so save before running a search.",
+    results: "Jobs from your local database, with the selected profile's filters applied.",
+    seen:
+      "Jobs that disappeared from their source, plus jobs linked as duplicates or reposts.",
+    relatedJob: "The job this posting was automatically linked to as a duplicate or repost.",
+    unmerge:
+      "Undo the duplicate link so both jobs stay separate. This decision is remembered; automation will not link them again.",
+    importResume:
+      "Imports a PDF or text resume as a new version. The file is read locally and never modified or uploaded.",
+    versionLabel: "A name for this import, so you can tell versions apart.",
+    activeVersion:
+      "Matching uses only the active version's parsed text, skills and profile overrides.",
+    overrides:
+      "Your edits are stored separately from the imported file, so importing again does not lose them.",
+    skillStatus:
+      "Tell the matcher what you actually know. “Not relevant” removes a skill from scoring; “Have experience” counts it even when the parser missed it.",
+    preferences:
+      "Used by the location and compensation parts of the fit score. Lists are comma-separated.",
+    weights:
+      "How much each dimension contributes to the fit score. Saving normalizes the weights to 100% and recomputes matches.",
+    fitScore:
+      "A weighted average of the dimensions that have data. It is a ranking heuristic, not a probability of getting an interview.",
+    coverage:
+      "Share of the fit-score dimensions that had enough data. Below 60% the score is less reliable.",
+    limitedData: "Too many scoring dimensions are missing for this score to be reliable.",
+    matchResults: "Latest matching run for the active resume version.",
+    snapshots:
+      "Each materially different version of a posting is stored as a snapshot, so you can see what changed over time.",
+    reposts:
+      "Links to the same job at another URL or ATS id. “Posted date reset” means the posting date moved later while the text stayed identical.",
+    observations:
+      "How many times the worker has seen this posting, including its first discovery.",
+    relations: "Other jobs linked to this one, including manual merges and separates.",
+    featureFlags:
+      "Optional capabilities compiled into this build. They are read-only here and are changed in the app configuration.",
+    crawlInterval:
+      "How often the worker revisits this source. Set 0 to stop scheduled crawls.",
+    plugins:
+      "Extraction and discovery plugins the worker may use, including the network hosts each is allowed to contact.",
+    queueDepth: "Number of tasks waiting to run in the local worker.",
+    diskUsage: "Space used by the local job database and logs.",
+    testTask:
+      "Starts a short no-op task so you can check progress reporting and cancellation.",
+    exportLogs:
+      "Log export is not available yet. Find the log files in the logs folder inside the data directory.",
+    events: "Live progress events from the worker, newest first. The ten most recent are kept.",
+    taskProgress: "Current step and total steps, as reported by the worker.",
   },
 } as const;
 

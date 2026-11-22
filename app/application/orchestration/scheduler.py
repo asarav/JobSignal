@@ -1,8 +1,10 @@
-"""In-process crawl scheduler (M1).
+"""In-process crawl scheduler (M1, extended in M6).
 
-A deliberately simple scheduler: each source runs on its own interval in a
-background task. Production-grade scheduling (cron, jitter, persistence) lands
-in M8; this keeps M1 testable without a daemon.
+Each source runs on its own interval in a background task, narrowed by its
+relevance tier.  The schedule itself lives on the stored ``SourceConfig`` (and
+the tier on its ``schedule`` mapping), so a restart rebuilds the same plan from
+the database: nothing is only in memory.  Cron expressions are deliberately out
+of scope; see ADR 0007.
 """
 
 from __future__ import annotations
@@ -40,13 +42,17 @@ class CrawlScheduler:
         runner_for: Callable[[SourceConfig], Awaitable[Any]],
         *,
         run_immediately: bool = True,
+        interval_for: Callable[[SourceConfig], float] | None = None,
     ) -> None:
         """(Re)schedule every source that declares a positive interval.
 
         ``run_immediately=False`` waits one interval first, which avoids
-        re-crawling sources that a discovery pass just crawled.
+        re-crawling sources that a discovery pass just crawled.  ``interval_for``
+        lets the caller narrow the interval by relevance tier; without it the
+        source's own schedule applies.
         """
-        wanted = {source.id: _interval_of(source) for source in sources}
+        resolver = interval_for or _interval_of
+        wanted = {source.id: resolver(source) for source in sources}
         for source_id in list(self._tasks):
             if source_id not in wanted:
                 self.cancel(source_id)

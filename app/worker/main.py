@@ -20,6 +20,7 @@ from app.application.auto_discover import (
     AUTO_DISCOVER_POLL_S,
     AUTO_DISCOVER_STARTUP_DELAY_S,
     AutoDiscoverUseCase,
+    effective_crawl_interval_s,
 )
 from app.application.commands.diagnostics import FetchUrlUseCase
 from app.application.commands.discovery import DiscoveryUseCase
@@ -30,13 +31,15 @@ from app.application.commands.search_profiles import SearchProfilesUseCase
 from app.application.commands.settings import SettingsUseCase
 from app.application.commands.sources import SourcesUseCase
 from app.application.commands.tasks import TasksUseCase
-from app.application.config import SETTINGS_KEY, AppConfig
+from app.application.config import SETTINGS_KEY, AppConfig, discovery_settings
 from app.application.dto import DiscoveryRunParams
 from app.application.orchestration.scheduler import CrawlScheduler
 from app.application.sources import SourceRegistry
 from app.domain.models.common import PortError
+from app.domain.models.source import SourceConfig
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.http import PolicyHttpClient
+from app.infrastructure.http.policy_client import RateLimiter
 from app.infrastructure.ids import UlidGenerator
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
 from app.plugins.registry import PluginRegistry
@@ -57,24 +60,58 @@ from app.worker.ipc.transport import NdjsonTransport
 
 MAX_CONCURRENT_REQUESTS = 8
 
+#: IPC methods that can change which sources exist or when they run.  Listing
+#: sources must not reschedule the world, and neither must an extraction-order
+#: change; every pass over the scheduler cancels and recreates tasks.
+SCHEDULER_RESYNC_METHODS = frozenset(
+    {"sources.add", "sources.set_enabled", "sources.set_schedule", "sources.delete"}
+)
+
+#: Methods that change the candidate signals a tier is computed from.  Tiering
+#: is otherwise recomputed inside an auto-discovery pass; a resume or search
+#: profile edit must not wait for the next pass to narrow (or widen) cadence.
+TIER_AFFECTING_METHODS = frozenset(
+    {
+        "resume.import",
+        "resume.set_active",
+        "resume.update_overrides",
+        "resume.set_skill_status",
+        "search_profiles.save",
+        "search_profiles.delete",
+    }
+)
+
 
 def _auto_discover_interval_s(config: Any) -> float:
-    """Cadence of the automatic pass, from ``discovery.auto_discover_interval_hours``."""
-    settings = getattr(config, "discovery", None)
-    if isinstance(settings, dict):
-        hours = settings.get("auto_discover_interval_hours")
-        if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
-            return float(hours) * 3600.0
+    """Pause between automatic passes (minutes preferred, hours for compat)."""
+    settings = discovery_settings(config)
+    minutes = settings.get("auto_discover_interval_minutes")
+    if (
+        isinstance(minutes, (int, float))
+        and not isinstance(minutes, bool)
+        and minutes > 0
+    ):
+        return float(minutes) * 60.0
+    hours = settings.get("auto_discover_interval_hours")
+    if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
+        return float(hours) * 3600.0
     return AUTO_DISCOVER_INTERVAL_S
 
 
-def _registered_sources(response: dict[str, Any]) -> int:
-    """How many sources an ``auto_discover`` response registered."""
+def _response_succeeded(response: dict[str, Any]) -> bool:
+    """Whether an IPC response carries a result rather than an error."""
+    return "error" not in response
+
+
+def _scheduler_affected(response: dict[str, Any]) -> bool:
+    """Whether a pass changed sources or tiers and the scheduler must resync."""
     result = response.get("result")
     if not isinstance(result, dict):
-        return 0
-    registered = result.get("registered")
-    return registered if isinstance(registered, int) else 0
+        return False
+    return any(
+        isinstance(result.get(key), int) and result[key] > 0
+        for key in ("registered", "tiers_changed")
+    )
 
 
 async def _load_config(uow_factory: SqliteUnitOfWorkFactory, data_dir: Path) -> AppConfig:
@@ -97,8 +134,10 @@ def _build_dispatcher(
         FetchUrlParams,
         HelloParams,
         JobFilter,
+        JobIdParams,
         JobMergeParams,
         JobSearchParams,
+        KeywordsExtractParams,
         MatchingRunParams,
         MatchingWeightsParams,
         PluginConfigureParams,
@@ -106,8 +145,10 @@ def _build_dispatcher(
         PluginOptionalIdParams,
         ResumeImportParams,
         ResumeOverridesParams,
+        ResumeParseParams,
         ResumeProfileParams,
         ResumeSetActiveParams,
+        ResumeSkillStatusParams,
         SearchProfileParams,
         SearchProfileSaveParams,
         SettingsPatch,
@@ -178,6 +219,8 @@ def _build_dispatcher(
     dispatcher.register("jobs.merge", discovery.jobs.merge, params_model=JobMergeParams)
     dispatcher.register("jobs.unmerge", discovery.jobs.unmerge, params_model=JobMergeParams)
     dispatcher.register("jobs.list_duplicates", discovery.jobs.list_duplicates, params_model=EmptyParams)
+    dispatcher.register("jobs.list_seen", discovery.jobs.list_seen, params_model=EmptyParams)
+    dispatcher.register("jobs.get_detail", discovery.jobs.get_detail, params_model=JobIdParams)
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)
@@ -185,6 +228,7 @@ def _build_dispatcher(
 
     from app.application.commands.matching import MatchingUseCase
     from app.application.commands.resume import ResumeUseCase
+    from app.worker.ipc.handlers.keywords import KeywordsHandlers
     from app.worker.ipc.handlers.matching import MatchingHandlers
     from app.worker.ipc.handlers.resume import ResumeHandlers
 
@@ -192,16 +236,20 @@ def _build_dispatcher(
     matching_uc = MatchingUseCase(container)
     resume = ResumeHandlers(resume_uc)
     matching = MatchingHandlers(matching_uc)
+    keywords = KeywordsHandlers()
 
     dispatcher.register("resume.import", resume.import_resume, params_model=ResumeImportParams)
     dispatcher.register("resume.list_versions", resume.list_versions, params_model=ResumeProfileParams)
     dispatcher.register("resume.get_profile", resume.get_profile, params_model=ResumeProfileParams)
     dispatcher.register("resume.set_active", resume.set_active, params_model=ResumeSetActiveParams)
     dispatcher.register("resume.update_overrides", resume.update_overrides, params_model=ResumeOverridesParams)
+    dispatcher.register("resume.parse", resume.parse, params_model=ResumeParseParams)
+    dispatcher.register("resume.set_skill_status", resume.set_skill_status, params_model=ResumeSkillStatusParams)
 
     dispatcher.register("matching.run", matching.run, params_model=MatchingRunParams)
     dispatcher.register("matching.get_results", matching.get_results, params_model=ResumeProfileParams)
     dispatcher.register("matching.update_weights", matching.update_weights, params_model=MatchingWeightsParams)
+    dispatcher.register("keywords.extract", keywords.extract, params_model=KeywordsExtractParams)
 
     profiles = SearchProfilesHandlers(SearchProfilesUseCase(container))
     dispatcher.register("search_profiles.list", profiles.list, params_model=EmptyParams)
@@ -222,17 +270,43 @@ class DiscoveryWiring:
     auto_discover_use_case: AutoDiscoverUseCase
     scheduler: CrawlScheduler
     crawl_gate: asyncio.Semaphore
+    config: Any
+    container: Any = None
+
+    async def retier(self) -> int:
+        """Recompute source tiers now (profile edits, §6.8 / M6)."""
+        from app.application.tiers import TierService
+
+        sources = await self.registry.list_sources(enabled_only=True)
+        changed = await TierService(self.container).assign(sources)
+        return len(changed)
 
     async def sync_scheduler(self, *, run_immediately: bool = True) -> None:
-        """(Re)schedule every enabled source that declares an interval."""
+        """(Re)schedule every enabled source on its effective (tier) cadence."""
         enabled = await self.registry.list_sources(enabled_only=True)
         self.scheduler.schedule_sources(
             list(enabled),
             lambda source: self.run_source(source.id),
             run_immediately=run_immediately,
+            interval_for=self.interval_for,
         )
 
+    def interval_for(self, source: SourceConfig) -> float:
+        """The source's scheduled interval, narrowed by its relevance tier."""
+        return effective_crawl_interval_s(
+            source, getattr(self.config, "discovery", None)
+        )
+
+    def refresh_config(self, config: Any) -> None:
+        """Adopt a freshly stored config for the pass and the scheduler."""
+        self.config = config
+        self.auto_discover_use_case.refresh_config(config)
+
     async def run_source(self, source_id: str) -> dict[str, object]:
+        # The auto-discovery pass and this scheduler share one registry; skip a
+        # source the pass refreshed moments ago instead of double-crawling it.
+        if not await self.auto_discover_use_case.is_due(source_id):
+            return {"source_id": source_id, "skipped": True, "reason": "not_due"}
         # One global gate bounds concurrent crawls across every schedule.
         async with self.crawl_gate:
             return await self.discovery_use_case.run(
@@ -245,7 +319,22 @@ def _build_discovery(container: Any) -> DiscoveryWiring:
     # the isolation shim used to call them.
     plugin_registry = cast(PluginRegistry, container.registry)
     connectors = [entry.instance for entry in plugin_registry.list_by_kind("connector")]
-    policy_http = PolicyHttpClient(transport=container.http)
+    cfg = container.config
+    policy_http = PolicyHttpClient(
+        transport=container.http,
+        rate_limiter=RateLimiter(
+            min_interval_s=1.0 / max(float(cfg.crawl.per_origin_rps), 1e-6),
+            burst=max(1, int(cfg.crawl.burst)),
+        ),
+        user_agent=cfg.http.user_agent,
+        max_retries=int(cfg.crawl.retry.max_attempts),
+        base_backoff_s=float(cfg.crawl.retry.base_s),
+        cap_backoff_s=float(cfg.crawl.retry.cap_s),
+        timeout_s_default=float(cfg.http.timeout_s),
+        max_timeout_s=float(cfg.http.max_timeout_s),
+        max_bytes=int(cfg.http.max_bytes),
+        max_redirects=int(cfg.http.max_redirects),
+    )
     registry = SourceRegistry(container.uow_factory, connectors, invoker=plugin_registry)
     discovery_use_case = DiscoveryUseCase(container, registry, policy_http)
     crawl_gate = asyncio.Semaphore(max(1, int(container.config.crawl.global_concurrency)))
@@ -261,6 +350,8 @@ def _build_discovery(container: Any) -> DiscoveryWiring:
         auto_discover_use_case=auto_discover_use_case,
         scheduler=CrawlScheduler(),
         crawl_gate=crawl_gate,
+        config=container.config,
+        container=container,
     )
 
 
@@ -316,25 +407,31 @@ async def main() -> int:
     # the first automatic pass (below) crawls what is actually due, bounded.
     await wiring.sync_scheduler(run_immediately=False)
 
-    # M4: daily auto-discovery + crawl trigger.  The last completed pass is
+    # Continuous auto-discovery + crawl trigger.  The last completed pass is
     # persisted, so a worker restart resumes the cadence instead of starting a
     # fresh one.  The first check waits out the startup delay, which keeps app
     # launch off the network and out of integration test runs.
     async def _auto_discover_loop() -> None:
-        interval_s = _auto_discover_interval_s(container.config)
         await asyncio.sleep(AUTO_DISCOVER_STARTUP_DELAY_S)
         while True:
+            # Re-read each turn: a settings update changes the pause without a
+            # worker restart.
+            interval_s = _auto_discover_interval_s(wiring.config)
             try:
                 result = await wiring.auto_discover_use_case.run_if_due(interval_s)
             except Exception as exc:  # noqa: BLE001 - the loop must keep running
                 logger.warning("discovery.auto_discover.failed", error=str(exc))
             else:
-                if result is not None and result.registered:
-                    # The pass already crawled everything it registered.
+                if result is not None and (
+                    result.registered or result.tiers_changed
+                ):
+                    # New sources and tier changes both alter the cadence the
+                    # scheduler must use; the pass itself already crawled what
+                    # was due, so the next run waits a full interval.
                     await wiring.sync_scheduler(run_immediately=False)
             await asyncio.sleep(AUTO_DISCOVER_POLL_S)
 
-    daily_task = asyncio.create_task(_auto_discover_loop())
+    discovery_task = asyncio.create_task(_auto_discover_loop())
     transport = NdjsonTransport(sys.stdin, sys.stdout)
     writer_task = asyncio.create_task(event_writer(publisher.queue, transport.write))
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -377,10 +474,25 @@ async def main() -> int:
             # Auto-discovery just crawled every source, so those loops must
             # wait a full interval rather than crawl again immediately.
             method = envelope.get("method")
-            if isinstance(method, str):
-                if method.startswith("sources."):
+            if isinstance(method, str) and _response_succeeded(response):
+                if method in SCHEDULER_RESYNC_METHODS:
                     await wiring.sync_scheduler()
-                elif method == "discovery.auto_discover" and _registered_sources(
+                elif method == "settings.update":
+                    # The pass loop, its budgets and the tier intervals all read
+                    # the config they were built with; reload the stored one.
+                    wiring.refresh_config(await _load_config(uow_factory, data_dir))
+                    await wiring.sync_scheduler(run_immediately=False)
+                elif method in TIER_AFFECTING_METHODS:
+                    # A profile/skill edit changes which boards are hot: retier
+                    # now and adopt the new cadence without a worker restart.
+                    try:
+                        changed = await wiring.retier()
+                    except Exception as exc:  # noqa: BLE001 - must not fail the edit
+                        logger.warning("discovery.tiering_failed", error=str(exc))
+                    else:
+                        if changed:
+                            await wiring.sync_scheduler(run_immediately=False)
+                elif method == "discovery.auto_discover" and _scheduler_affected(
                     response
                 ):
                     await wiring.sync_scheduler(run_immediately=False)
@@ -417,9 +529,9 @@ async def main() -> int:
         if inflight:
             await asyncio.gather(*inflight, return_exceptions=True)
         wiring.scheduler.cancel_all()
-        daily_task.cancel()
+        discovery_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await daily_task
+            await discovery_task
         if runner is not None:
             await runner.stop()
         await registry.persist_state()

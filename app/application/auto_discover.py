@@ -1,6 +1,9 @@
-"""Automatic discovery and the daily crawl trigger (M4).
+"""Automatic discovery and the continuous crawl trigger (M4/M6).
 
-One run does four things:
+Discovery is not a once-a-day event: the worker runs bounded passes back to
+back with a short pause, so coverage keeps growing and every board already in
+the registry is re-checked as its tier interval comes due.  One pass does four
+things:
 
 1. asks every *enabled* discovery provider for candidate career sites,
    advancing the providers' rotation cursor by ``discovery.cursor_step``
@@ -15,7 +18,7 @@ One run does four things:
    crawl gate, so a pass stays bounded even after hundreds of sources have
    been discovered,
 4. records the completion time and the cursor in ``app_settings`` so both the
-   daily cadence and the covered ground survive a worker restart.
+   pass cadence and the covered ground survive a worker restart.
 
 Failures are isolated per provider and per source: one broken provider or a
 dead board never aborts the pass.
@@ -25,27 +28,46 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.application.config import discovery_settings
 from app.application.container import Container
 from app.application.dto import AutoDiscoverResult
-from app.application.sources import DEFAULT_CRAWL_INTERVAL_S, SourceRegistry, run_crawl
+from app.application.sources import (
+    DEFAULT_CRAWL_INTERVAL_S,
+    SourceRegistry,
+    run_crawl,
+    verify_posting,
+)
+from app.application.tiers import TierService
 from app.domain.models.context import CancellationToken, ExecutionContext
-from app.domain.models.discovery import DiscoveredSource, DiscoveryQuery
+from app.domain.models.discovery import (
+    DiscoveredPosting,
+    DiscoveredSource,
+    DiscoveryQuery,
+)
 from app.domain.models.source import SourceConfig
 from app.domain.ports.http import HttpClient
+from app.domain.services.tiers import (
+    DEFAULT_TIER_INTERVALS_S,
+    TIERS,
+    interval_for_tier,
+)
 
 #: Settings key holding the run state (``last_run_at``, ``rotation_cursor``).
 AUTO_DISCOVER_STATE_KEY = "auto_discover_state"
 
-#: How often the worker checks whether a daily run is due (seconds).
-AUTO_DISCOVER_POLL_S = 300.0
+#: How often the worker checks whether a pass is due (seconds).
+AUTO_DISCOVER_POLL_S = 60.0
 
-#: Cadence of the automatic discovery + crawl pass (seconds).
-AUTO_DISCOVER_INTERVAL_S = 24 * 3600.0
+#: Default pause between automatic discovery + crawl passes (seconds).  Each
+#: pass stays bounded by the existing source/crawl/funnel caps and the global
+#: crawl gate; the pause is what keeps a continuous loop polite to the public
+#: indexes.  Override with ``discovery.auto_discover_interval_minutes``.
+AUTO_DISCOVER_INTERVAL_S = 3600.0
 
 #: Grace period after worker start before the first pass (seconds). Keeps app
 #: launch snappy and off the network while the UI is still coming up.
@@ -55,8 +77,18 @@ AUTO_DISCOVER_STARTUP_DELAY_S = 60.0
 DEFAULT_MAX_NEW_SOURCES_PER_RUN = 200
 DEFAULT_MAX_CRAWL_SOURCES_PER_RUN = 60
 
-#: How many rotation slices every pass walks (coverage per day).
+#: How many rotation slices every pass walks.
 DEFAULT_CURSOR_STEP = 12
+
+#: Posting URLs the funnel may verify in one pass (one fetch each).  This is a
+#: new budget, never a raise of the existing crawl/source caps.
+DEFAULT_FUNNEL_POSTINGS_PER_PASS = 50
+
+#: Index slices one UTC day may walk across every pass.  A pass spends
+#: ``cursor_step`` slices, so this covers the shipped hourly cadence; it only
+#: limits how much a much shorter pause can multiply the load on the public
+#: indexes.  ``0`` pauses index discovery entirely (crawling continues).
+DEFAULT_MAX_INDEX_SLICES_PER_DAY = 288
 
 #: Passes run back-to-back on a cold start. One pass registers at most
 #: ``max_new_sources_per_run`` sources, so a fresh install needs several to
@@ -93,18 +125,82 @@ class AutoDiscoverUseCase:
         self._registry = registry
         self._http = http
         self._crawl_gate = crawl_gate
+        #: Config can be refreshed by the worker after a settings update; the
+        #: container itself is immutable and fixed at startup.
+        self._config: Any = container.config
+        self._pass_cache: dict[object, object] = {}
+        # Continuous passes can overlap with a manual ``discovery.auto_discover``
+        # request; serialize them so one pass never double-spends its budgets.
+        self._run_lock = asyncio.Lock()
+
+    def refresh_config(self, config: Any) -> None:
+        """Adopt freshly stored settings without rebuilding the worker."""
+        self._config = config
 
     async def run(self) -> AutoDiscoverResult:
-        """Discover new career sites, register them, then crawl what is due."""
+        """Run one bounded pass; concurrent callers wait for the current one."""
+        async with self._run_lock:
+            return await self._run_once()
+
+    async def _run_once(self) -> AutoDiscoverResult:
+        """Discover career sites, harvest/verify postings, then crawl what is due."""
         state = await self._state()
         cursor = _as_int(state.get("rotation_cursor"), 0)
-        discovered, providers_ok = await self._discover(cursor)
+        # Board discovery and the funnel walk the same index slices; one cache
+        # per pass keeps the funnel from paying for the same queries twice.
+        self._pass_cache = {}
+        today = _as_utc(self._container.clock.now()).date().isoformat()
+        slices = (
+            _as_int(state.get("index_slices"), 0)
+            if state.get("index_day") == today
+            else 0
+        )
+        slice_budget = self._setting_non_negative(
+            "max_index_slices_per_day", DEFAULT_MAX_INDEX_SLICES_PER_DAY
+        )
+        discovery_ran = False
+        if slices < slice_budget:
+            discovered, postings, providers_ok = await self._discover(cursor)
+            discovery_ran = True
+            if self._discovery_provider_count():
+                slices += self._cursor_step()
+        else:
+            # The day's index budget is spent: keep crawling what is due, but
+            # do not query the public indexes again until tomorrow.
+            discovered, postings, providers_ok = [], [], True
+            self._container.logger.info(
+                "discovery.index_budget_exhausted",
+                budget=slice_budget,
+                spent=slices,
+            )
         registered = await self._register(discovered)
+        postings_verified = 0
+        tiers_changed = 0
+        if self._funnel_enabled():
+            postings_verified = await self._verify_postings(postings)
+            try:
+                tiers_changed = len(
+                    await TierService(self._container).assign(
+                        await self._registry.list_sources(enabled_only=True)
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - tiering must not abort a pass
+                self._container.logger.warning(
+                    "discovery.tiering_failed", error=str(exc)
+                )
         crawled, failed = await self._crawl_due()
 
         # A provider that failed to answer holds the cursor, so the same
         # slice range is retried next pass instead of being skipped forever.
-        state["rotation_cursor"] = cursor + self._cursor_step() if providers_ok else cursor
+        # A pass that never queried the index (budget spent) must not advance
+        # it either: no slices were covered.
+        state["rotation_cursor"] = (
+            cursor + self._cursor_step()
+            if discovery_ran and providers_ok
+            else cursor
+        )
+        state["index_day"] = today
+        state["index_slices"] = slices
         state["last_run_at"] = self._container.clock.now().isoformat()
         await self._save_state(state)
 
@@ -113,6 +209,9 @@ class AutoDiscoverUseCase:
             registered=registered,
             crawled=crawled,
             failed=failed,
+            postings_harvested=len(postings),
+            postings_verified=postings_verified,
+            tiers_changed=tiers_changed,
         )
         self._container.logger.info(
             "discovery.auto_discover.completed",
@@ -120,6 +219,9 @@ class AutoDiscoverUseCase:
             registered=result.registered,
             crawled=result.crawled,
             failed=result.failed,
+            postings_harvested=result.postings_harvested,
+            postings_verified=result.postings_verified,
+            tiers_changed=result.tiers_changed,
             rotation_cursor=cursor,
         )
         return result
@@ -131,7 +233,7 @@ class AutoDiscoverUseCase:
 
         On a cold start (no state at all) several passes run back-to-back so
         a fresh install registers the bundled seed list immediately instead
-        of over the first ``warmup_passes`` days.
+        of over the first ``warmup_passes`` passes.
         """
         now = _as_utc(self._container.clock.now())
         last = await self._last_run_at()
@@ -148,7 +250,7 @@ class AutoDiscoverUseCase:
 
         Each pass still obeys its own budgets and the shared crawl gate; the
         loop stops early once a pass registers nothing new (the seed list is
-        exhausted and only slow index discovery remains, which the daily
+        exhausted and only slow index discovery remains, which the continuous
         cadence covers).
         """
         passes = self._warmup_passes()
@@ -168,6 +270,13 @@ class AutoDiscoverUseCase:
                 registered=total.registered + result.registered,
                 crawled=total.crawled + result.crawled,
                 failed=total.failed + result.failed,
+                postings_harvested=(
+                    total.postings_harvested + result.postings_harvested
+                ),
+                postings_verified=(
+                    total.postings_verified + result.postings_verified
+                ),
+                tiers_changed=total.tiers_changed + result.tiers_changed,
             )
             self._container.logger.info(
                 "discovery.auto_discover.warmup_pass",
@@ -182,21 +291,44 @@ class AutoDiscoverUseCase:
 
     # ------------------------------------------------------------------ discovery
 
-    async def _discover(self, cursor: int) -> tuple[list[DiscoveredSource], bool]:
-        """Collect candidates from every enabled provider, deduped by URL.
+    async def _discover(
+        self, cursor: int
+    ) -> tuple[list[DiscoveredSource], list[DiscoveredPosting], bool]:
+        """Collect board and posting candidates from every enabled provider.
 
         Returns the candidates and whether every provider answered; a failed
-        provider must not advance the rotation cursor (see ``run``).
+        provider must not advance the rotation cursor (see ``run``).  A
+        provider that can harvest posting URLs is asked for those instead of
+        boards (the bundled ``discovery.funnel`` provider is exactly that).
         """
         plugin_registry = self._container.registry
         discovered: list[DiscoveredSource] = []
+        postings: list[DiscoveredPosting] = []
         seen: set[str] = set()
+        seen_postings: set[str] = set()
         all_answered = True
         for entry in plugin_registry.list_by_kind("discovery"):
             plugin_id = str(entry.manifest.id)
             if not plugin_registry.is_enabled(plugin_id):
                 continue
+            harvesting = hasattr(entry.instance, "discover_postings")
+            if harvesting and not self._funnel_enabled():
+                continue
             try:
+                if harvesting:
+                    harvested = await plugin_registry.invoke(
+                        plugin_id,
+                        self._collect_postings,
+                        entry.instance,
+                        cursor,
+                        self._cursor_step(),
+                        timeout_s=self._provider_timeout_s(),
+                    )
+                    for posting in harvested:
+                        if posting.url and posting.url not in seen_postings:
+                            seen_postings.add(posting.url)
+                            postings.append(posting)
+                    continue
                 candidates = await plugin_registry.invoke(
                     plugin_id,
                     self._collect_provider,
@@ -217,7 +349,7 @@ class AutoDiscoverUseCase:
                     continue
                 seen.add(key)
                 discovered.append(source)
-        return discovered, all_answered
+        return discovered, postings, all_answered
 
     async def _collect_provider(
         self, provider: Any, cursor: int, slices: int
@@ -228,6 +360,17 @@ class AutoDiscoverUseCase:
         ctx = self._make_ctx()
         async for source in provider.discover(query, ctx):
             items.append(source)
+        return items
+
+    async def _collect_postings(
+        self, provider: Any, cursor: int, slices: int
+    ) -> list[DiscoveredPosting]:
+        """Materialize a provider's posting-URL stream for the shim."""
+        items: list[DiscoveredPosting] = []
+        query = DiscoveryQuery(extra={"cursor": cursor, "slices": slices})
+        ctx = self._make_ctx()
+        async for posting in provider.discover_postings(query, ctx):
+            items.append(posting)
         return items
 
     async def _register(self, discovered: Sequence[DiscoveredSource]) -> int:
@@ -264,6 +407,118 @@ class AutoDiscoverUseCase:
             known.add(key)
             registered += 1
         return registered
+
+    # -------------------------------------------------------------------- funnel
+
+    async def _verify_postings(self, postings: Sequence[DiscoveredPosting]) -> int:
+        """Verify harvested posting URLs, capped by the funnel budget.
+
+        Each verification is one connector detail fetch through the shared
+        crawl gate; it can never raise the crawl/source caps because it runs
+        in its own bounded batch before the due-source crawl.  Only postings
+        that resolve to a registered source are considered (the others cannot
+        be fetched), and the budget is spread across boards instead of being
+        consumed by the first tenant in the index answer.
+        """
+        if not postings:
+            return 0
+        budget = self._funnel_postings_per_pass()
+        sources = await self._registry.list_sources(enabled_only=True)
+        by_key = {_source_key(source.url): source for source in sources}
+        by_tenant: dict[str, list[SourceConfig]] = {}
+        for source in sources:
+            tenant = _tenant_of_source(source)
+            if tenant:
+                by_tenant.setdefault(tenant, []).append(source)
+
+        def resolve(posting: DiscoveredPosting) -> SourceConfig | None:
+            """The registered source a harvested posting belongs to.
+
+            Posting URLs and board URLs can sit on sibling hosts (Greenhouse
+            serves ``boards.`` and ``job-boards.``), and board discovery
+            registers only the host it saw, so the connector and tenant are
+            the fallback identity.
+            """
+            exact = by_key.get(_source_key(posting.board_url))
+            if exact is not None:
+                return exact
+            tenant = posting.tenant_key or _tenant_of_url(posting.board_url)
+            candidates = by_tenant.get(tenant, []) if tenant else []
+            if posting.connector_id:
+                for candidate in candidates:
+                    if candidate.connector_id == posting.connector_id:
+                        return candidate
+            return candidates[0] if candidates else None
+
+        selected, unregistered = _select_postings(postings, resolve, budget)
+        if unregistered:
+            self._container.logger.info(
+                "discovery.funnel.unregistered_postings",
+                count=unregistered,
+                candidates=len(postings),
+            )
+        if not selected:
+            return 0
+
+        async def verify(source: SourceConfig, posting: DiscoveredPosting) -> bool:
+            connector = self._registry.connector_for(source.connector_id)
+            if connector is None:
+                return False
+            try:
+                async with self._crawl_gate or _NO_GATE:
+                    outcome = await verify_posting(
+                        source=source,
+                        connector=connector,
+                        url=posting.url,
+                        source_posting_id=posting.source_posting_id,
+                        uow_factory=self._container.uow_factory,
+                        http=self._http,
+                        clock_now=self._container.clock.now,
+                        events=self._container.events,
+                        pipeline=self._container.extraction_pipeline,
+                        invoker=self._registry.invoker,
+                        config=self._container.config,
+                    )
+            except Exception as exc:  # noqa: BLE001 - isolate one bad posting
+                self._container.logger.warning(
+                    "discovery.funnel.verify_failed", url=posting.url, error=str(exc)
+                )
+                return False
+            return outcome != "failed"
+
+        outcomes = await asyncio.gather(
+            *(verify(source, posting) for source, posting in selected)
+        )
+        verified = sum(1 for ok in outcomes if ok)
+        eligible = len(postings) - unregistered
+        if eligible > budget:
+            self._container.logger.info(
+                "discovery.funnel.capped", cap=budget, candidates=eligible
+            )
+        return verified
+
+    def _discovery_provider_count(self) -> int:
+        """How many discovery providers a pass will actually ask.
+
+        Mirrors ``_discover``: a disabled provider is skipped, and a harvesting
+        provider is skipped when the funnel is off.
+        """
+        count = 0
+        for entry in self._container.registry.list_by_kind("discovery"):
+            if not self._container.registry.is_enabled(str(entry.manifest.id)):
+                continue
+            if hasattr(entry.instance, "discover_postings") and not self._funnel_enabled():
+                continue
+            count += 1
+        return count
+
+    def _funnel_enabled(self) -> bool:
+        return funnel_enabled(self._settings())
+
+    def _funnel_postings_per_pass(self) -> int:
+        return self._setting_int(
+            "funnel_postings_per_pass", DEFAULT_FUNNEL_POSTINGS_PER_PASS
+        )
 
     def _default_interval_s(self) -> float:
         """Per-source cadence for a new source: the configured default, jittered."""
@@ -311,6 +566,7 @@ class AutoDiscoverUseCase:
                     events=self._container.events,
                     pipeline=self._container.extraction_pipeline,
                     invoker=self._registry.invoker,
+                    config=self._container.config,
                 )
         except Exception as exc:  # noqa: BLE001 - isolate the failing source
             self._container.logger.warning(
@@ -329,12 +585,34 @@ class AutoDiscoverUseCase:
         pending: list[tuple[datetime, SourceConfig]] = []
         for source in await self._registry.list_sources(enabled_only=True):
             started = _parse_ts(last_started.get(source.id))
-            interval = _source_interval_s(source)
+            interval = self._effective_interval_s(source)
             if started is not None and (now - started).total_seconds() < interval:
                 continue
             pending.append((started or _EPOCH, source))
         pending.sort(key=lambda item: item[0])
         return [source for _started, source in pending[:limit]]
+
+    def _effective_interval_s(self, source: SourceConfig) -> float:
+        """The source's crawl interval, narrowed by its relevance tier."""
+        return effective_crawl_interval_s(source, self._settings())
+
+    async def is_due(self, source_id: str, *, now: datetime | None = None) -> bool:
+        """Whether a source's effective interval has elapsed.
+
+        The per-source scheduler asks this before crawling so a source that an
+        auto-discovery pass just refreshed is not fetched again seconds later.
+        """
+        source = await self._registry.get(source_id)
+        if source is None:
+            return False
+        moment = _as_utc(now or self._container.clock.now())
+        async with self._container.uow_factory() as uow:
+            last_started = await uow.crawl_runs.last_started_by_source()
+        started = _parse_ts(last_started.get(source.id))
+        if started is None:
+            return True
+        interval = self._effective_interval_s(source)
+        return (moment - started).total_seconds() >= interval
 
     # --------------------------------------------------------------------- state
 
@@ -351,12 +629,20 @@ class AutoDiscoverUseCase:
             await uow.settings.put(AUTO_DISCOVER_STATE_KEY, dict(state))
             await uow.commit()
 
+    def _settings(self) -> dict[str, Any]:
+        return discovery_settings(self._config)
+
     def _setting_int(self, key: str, default: int) -> int:
-        settings = getattr(self._container.config, "discovery", None)
-        if isinstance(settings, dict):
-            value = settings.get(key)
-            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                return value
+        value = self._settings().get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return default
+
+    def _setting_non_negative(self, key: str, default: int) -> int:
+        """Like ``_setting_int`` but ``0`` is meaningful ("pause this")."""
+        value = self._settings().get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
         return default
 
     def _cursor_step(self) -> int:
@@ -364,11 +650,9 @@ class AutoDiscoverUseCase:
 
     def _warmup_passes(self) -> int:
         """Warm-up passes; ``0`` disables the cold-start loop (unlike budgets)."""
-        settings = getattr(self._container.config, "discovery", None)
-        if isinstance(settings, dict):
-            value = settings.get("warmup_passes")
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                return value
+        value = self._settings().get("warmup_passes")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
         return DEFAULT_WARMUP_PASSES
 
     def _provider_timeout_s(self) -> float:
@@ -377,18 +661,17 @@ class AutoDiscoverUseCase:
         Index queries legitimately take tens of seconds, so discovery gets a
         longer leash than the default plugin timeout.
         """
-        settings = getattr(self._container.config, "discovery", None)
-        if isinstance(settings, dict):
-            value = settings.get("provider_timeout_s")
-            if (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and value > 0
-            ):
-                return float(value)
+        value = self._settings().get("provider_timeout_s")
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            return float(value)
         return DEFAULT_PROVIDER_TIMEOUT_S
 
     def _make_ctx(self) -> ExecutionContext:
+        cache = getattr(self, "_pass_cache", None)
         return ExecutionContext(
             task_id="auto_discover",
             clock=self._container.clock,
@@ -396,11 +679,116 @@ class AutoDiscoverUseCase:
             logger=self._container.logger,
             cancel=CancellationToken(),
             deadline=None,
-            config={},
+            config={"discovery_cache": cache} if isinstance(cache, dict) else {},
         )
 
 
 _EPOCH = datetime.min.replace(tzinfo=UTC)
+
+
+def funnel_enabled(settings: object) -> bool:
+    """Whether the relevance funnel (tiering + harvesting) is enabled."""
+    value = _settings_mapping(settings).get("funnel_enabled")
+    if isinstance(value, bool):
+        return value
+    return True
+
+
+def effective_crawl_interval_s(source: SourceConfig, settings: object) -> float:
+    """The interval a source must wait between crawls.
+
+    Relevance tiers narrow the cadence only while the funnel is enabled; with
+    the funnel off (or before a tier has been assigned) the source keeps its
+    plain due-based interval.  Shared by the auto-discovery pass and the
+    per-source scheduler so both honour the same rule.
+    """
+    if funnel_enabled(settings):
+        tier = source.schedule.get("tier")
+        if isinstance(tier, str) and tier in TIERS:
+            raw = _settings_mapping(settings).get("tier_intervals_s")
+            intervals = DEFAULT_TIER_INTERVALS_S
+            if isinstance(raw, (list, tuple)) and len(raw) == 3:
+                cast_values = [value for value in raw if not isinstance(value, bool)]
+                if len(cast_values) == 3 and all(
+                    isinstance(value, (int, float)) and value >= 0
+                    for value in cast_values
+                ):
+                    intervals = (
+                        float(cast_values[0]),
+                        float(cast_values[1]),
+                        float(cast_values[2]),
+                    )
+            return interval_for_tier(tier, intervals)
+    return _source_interval_s(source)
+
+
+def _settings_mapping(settings: object) -> Mapping[str, Any]:
+    """Read a discovery settings value whether it is a model or a mapping."""
+    if isinstance(settings, Mapping):
+        return settings
+    dump = getattr(settings, "model_dump", None)
+    if callable(dump):
+        data = dump()
+        if isinstance(data, Mapping):
+            return data
+    return {}
+
+
+def _select_postings(
+    postings: Sequence[DiscoveredPosting],
+    resolve: Any,
+    budget: int,
+) -> tuple[list[tuple[SourceConfig, DiscoveredPosting]], int]:
+    """Pick the postings to verify within the budget.
+
+    Index rows are ordered by URL, so truncating the harvested list spends the
+    whole budget on one tenant and on boards that were never registered.  The
+    selection keeps only resolvable postings and takes them round-robin across
+    boards, so one productive tenant cannot starve the rest of the pass.
+    """
+    groups: dict[str, list[DiscoveredPosting]] = {}
+    resolved: dict[str, SourceConfig] = {}
+    order: list[str] = []
+    unregistered = 0
+    for posting in postings:
+        source = resolve(posting)
+        if source is None:
+            unregistered += 1
+            continue
+        if source.id not in groups:
+            groups[source.id] = []
+            resolved[source.id] = source
+            order.append(source.id)
+        groups[source.id].append(posting)
+
+    selected: list[tuple[SourceConfig, DiscoveredPosting]] = []
+    round_index = 0
+    while len(selected) < budget:
+        progressed = False
+        for source_id in order:
+            group = groups[source_id]
+            if round_index < len(group):
+                selected.append((resolved[source_id], group[round_index]))
+                progressed = True
+                if len(selected) >= budget:
+                    break
+        if not progressed:
+            break
+        round_index += 1
+    return selected, unregistered
+
+
+def _tenant_of_source(source: SourceConfig) -> str:
+    """The ATS tenant a source belongs to, for sibling-host matching."""
+    if source.ats_tenant_key:
+        return source.ats_tenant_key.strip().lower()
+    return _tenant_of_url(source.url)
+
+
+def _tenant_of_url(url: str) -> str:
+    """First meaningful path segment of a board URL (the tenant)."""
+    parts = [part for part in urlsplit(url.strip()).path.split("/") if part]
+    return parts[0].lower() if parts else ""
 
 
 def _source_key(url: str) -> str:

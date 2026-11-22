@@ -22,6 +22,9 @@ class JobFingerprintSet:
     source_posting_id: str | None = None
     source_id: str | None = None
     req_ids: Sequence[str] = ()
+    #: Requirement/preferred skills from the posting's requirement sections.
+    #: A change in this set is material even when the description hash matches.
+    req_skills: Sequence[str] = ()
 
 
 @dataclass(frozen=True, slots=True)

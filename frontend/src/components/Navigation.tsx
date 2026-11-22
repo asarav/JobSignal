@@ -6,6 +6,7 @@ import { useWorkerStore } from "../stores/workerStore";
 
 export function Navigation() {
   const status = useWorkerStore((state) => state.status);
+  const isPreview = useWorkerStore((state) => state.isPreview);
 
   return (
     <header className="border-b border-slate-200 bg-white">
@@ -17,13 +18,14 @@ export function Navigation() {
           <span className="hidden text-xs text-slate-500 sm:inline">
             {Copy.productNameSubtitle}
           </span>
-          <StatusPill status={status} />
+          <StatusPill status={status} preview={isPreview} />
         </div>
         <nav aria-label="Primary" className="flex flex-wrap gap-1">
           {navigationItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
+              title={item.description}
               end={item.to === "/"}
               className={({ isActive }) =>
                 `rounded-md px-2.5 py-1.5 text-xs font-medium transition ${

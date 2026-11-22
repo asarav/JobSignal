@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from app.domain.models.common import Provenance
@@ -28,6 +29,9 @@ from app.domain.models.enums import (
 )
 from app.domain.models.job import LocationRef, NormalizedJob, RawJob, SalaryRange
 from app.domain.models.source import SourceConfig
+
+if TYPE_CHECKING:
+    from app.domain.services.keywords import KeywordExtractor
 
 STRATEGY_ID = "normalize.v1"
 
@@ -63,7 +67,13 @@ _EMPLOYMENT_PATTERNS: tuple[tuple[str, EmploymentType], ...] = (
     ("part-time", EmploymentType.PART_TIME),
 )
 
-_WORD_RE = re.compile(r"[^a-z0-9]+")
+_WORD_RE = re.compile(r"[\W_]+")
+
+# Letters that Unicode decomposition leaves untouched but that readers (and
+# searches) expect under their base letter, e.g. Norwegian "Søker" -> "soker".
+_LATIN_FOLDS = str.maketrans(
+    {"ø": "o", "æ": "ae", "œ": "oe", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i"}
+)
 
 # Words that describe level rather than role; they are dropped when deriving a
 # job family so "senior backend engineer" and "backend engineer" group together.
@@ -91,8 +101,15 @@ _SENIORITY_TOKENS = frozenset(
 
 
 def normalize_title(title: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace."""
-    return _WORD_RE.sub(" ", title.lower()).strip()
+    """Lowercase, fold accents, strip punctuation, collapse whitespace.
+
+    Accents fold to their base letters, so ``systèmes`` becomes ``systemes``
+    instead of losing the accented letter and splitting the word. Scripts with
+    no ASCII base (Cyrillic, CJK, ...) keep their letters rather than vanish.
+    """
+    decomposed = unicodedata.normalize("NFKD", title.casefold()).translate(_LATIN_FOLDS)
+    folded = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return _WORD_RE.sub(" ", folded).strip()
 
 
 def title_family(normalized_title: str) -> str:
@@ -134,7 +151,15 @@ def infer_workplace_type(
         for candidate in WorkplaceType:
             if candidate.value == raw:
                 return candidate
-    lowered = f"{title} {str((payload or {}).get('location', ''))}".lower()
+    # Extraction merges fields into a fresh payload, where locations live under
+    # ``locations``; connectors normally use ``location``. Both shapes must
+    # inform the workplace guess or every extracted location is ignored.
+    raw_location = None
+    if payload:
+        raw_location = payload.get("location")
+        if raw_location is None:
+            raw_location = payload.get("locations")
+    lowered = f"{title} {_location_text(raw_location)}".lower()
     if "hybrid" in lowered:
         return WorkplaceType.HYBRID
     if "remote" in lowered or "anywhere" in lowered or "work from home" in lowered:
@@ -142,6 +167,15 @@ def infer_workplace_type(
     if "on-site" in lowered or "onsite" in lowered:
         return WorkplaceType.ONSITE
     return WorkplaceType.UNKNOWN
+
+
+def _location_text(value: object) -> str:
+    """Flatten a location value of any shape into searchable text."""
+    if isinstance(value, Mapping):
+        return " ".join(str(item) for item in value.values() if item is not None)
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_location_text(item) for item in value)
+    return "" if value is None else str(value)
 
 
 def parse_locations(payload: Mapping[str, Any] | None) -> list[LocationRef]:
@@ -240,6 +274,27 @@ def company_id_for(normalized_name: str) -> str:
     return f"co_{digest[:16]}"
 
 
+_SKILL_EXTRACTOR: KeywordExtractor | None = None
+
+
+def requirement_skills(description: str) -> list[str]:
+    """Skill ids written in a posting's description (taxonomy v1).
+
+    Job descriptions are not resume sections, so the whole text is scanned.
+    The extractor is lazy and shared: loading the taxonomy on every posting
+    would dominate a crawl.
+    """
+    global _SKILL_EXTRACTOR
+    if not description:
+        return []
+    if _SKILL_EXTRACTOR is None:
+        from app.domain.services.keywords import KeywordExtractor
+
+        _SKILL_EXTRACTOR = KeywordExtractor()
+    extractor = _SKILL_EXTRACTOR
+    return list(extractor.mentions(description))[:40]
+
+
 def normalize_job(
     raw: RawJob,
     source: SourceConfig,
@@ -318,7 +373,7 @@ def normalize_job(
         original_urls=[raw.ref.url],
         department=None,
         seniority=seniority,
-        required_skills=[],
+        required_skills=requirement_skills(description_text),
         preferred_skills=[],
         extraction_status=status,
         extraction_confidence=round(completeness, 2),

@@ -54,6 +54,8 @@ def _to_info(source: SourceConfig) -> SourceInfo:
     """Map a stored source to the DTO the UI consumes."""
     raw_interval = source.schedule.get("interval_s", 0)
     interval = float(raw_interval) if isinstance(raw_interval, (int, float)) else 0.0
+    raw_tier = source.schedule.get("tier")
+    raw_reason = source.schedule.get("tier_reason")
     return SourceInfo(
         source_id=source.id,
         url=source.url,
@@ -63,4 +65,6 @@ def _to_info(source: SourceConfig) -> SourceInfo:
         enabled=source.enabled,
         interval_s=interval,
         extraction_order=list(source.extraction_order),
+        tier=raw_tier if isinstance(raw_tier, str) else None,
+        tier_reason=raw_reason if isinstance(raw_reason, str) else None,
     )

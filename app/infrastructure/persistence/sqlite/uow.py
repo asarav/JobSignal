@@ -20,8 +20,10 @@ from app.domain.ports.repositories import (
 )
 from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrate
 from app.infrastructure.persistence.sqlite.repositories import (
+    SqliteAliasRepository,
     SqliteCompanyRepository,
     SqliteCrawlRunRepository,
+    SqliteDedupRepository,
     SqliteJobRepository,
     SqliteObservationRepository,
     SqlitePluginStateRepository,
@@ -50,6 +52,7 @@ class SqliteUnitOfWork:
         self.search_profiles: SearchProfileRepository = _Unimplemented()  # type: ignore[assignment]
         self.snapshots: SnapshotRepository = _Unimplemented()  # type: ignore[assignment]
         self.aliases: AliasRepository = _Unimplemented()  # type: ignore[assignment]
+        self.dedup = _Unimplemented()
         self.sources: SourceRepository = _Unimplemented()  # type: ignore[assignment]
         self.crawl_runs: CrawlRunRepository = _Unimplemented()  # type: ignore[assignment]
         self.jobs: JobRepository = _Unimplemented()  # type: ignore[assignment]
@@ -76,6 +79,8 @@ class SqliteUnitOfWork:
         self.observations = SqliteObservationRepository(self._conn, self._clock_now)
         self.crawl_runs = SqliteCrawlRunRepository(self._conn, self._clock_now)
         self.snapshots = SqliteSnapshotRepository(self._conn, self._clock_now)
+        self.aliases = SqliteAliasRepository(self._conn, self._clock_now)
+        self.dedup = SqliteDedupRepository(self._conn, self._clock_now)
         self.search_profiles = SqliteSearchProfileRepository(self._conn, self._clock_now)
         self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
         self.matches = SqliteMatchRepository(self._conn, self._clock_now)

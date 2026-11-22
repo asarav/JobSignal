@@ -18,6 +18,23 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "contact": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "years_experience": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

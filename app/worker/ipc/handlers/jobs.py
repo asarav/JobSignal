@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from app.application.commands.jobs import JobsUseCase
-from app.application.dto import EmptyParams, JobFilter, JobMergeParams, JobSearchParams
+from app.application.dto import (
+    EmptyParams,
+    JobFilter,
+    JobIdParams,
+    JobMergeParams,
+    JobSearchParams,
+)
 
 
 class JobsHandlers:
@@ -26,3 +32,9 @@ class JobsHandlers:
 
     async def list_duplicates(self, params: EmptyParams) -> dict:
         return (await self._jobs.list_duplicates()).model_dump()
+
+    async def list_seen(self, params: EmptyParams) -> dict:
+        return (await self._jobs.list_seen()).model_dump()
+
+    async def get_detail(self, params: JobIdParams) -> dict:
+        return (await self._jobs.get_detail(params.job_id)).model_dump()

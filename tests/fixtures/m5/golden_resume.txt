@@ -1,0 +1,32 @@
+Alex Rivera
+alex.rivera@example.com
++1 (555) 010-2030
+linkedin.com/in/alexrivera
+
+Summary
+Senior backend engineer focused on Python services, AWS and data platforms.
+
+Skills
+Python, SQL, AWS, Docker, PostgreSQL
+
+Experience
+Northwind Data
+Senior Backend Engineer Jan 2019 - Present
+- Built Python services on AWS backed by PostgreSQL and Docker.
+- Led a team of four engineers and owned the data platform roadmap.
+
+Southbridge Systems
+Backend Engineer Jun 2016 - Dec 2018
+- Developed Python and SQL reporting services for internal customers.
+- Automated deployments with Docker.
+
+Education
+BSc Computer Science
+University of Edinburgh 2012 - 2016
+
+Certifications
+AWS Certified Solutions Architect
+
+Projects
+Job Signal Aggregator
+- Python service that normalizes job postings and computes fit scores.

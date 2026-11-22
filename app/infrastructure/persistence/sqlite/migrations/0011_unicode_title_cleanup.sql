@@ -1,0 +1,5 @@
+-- The normalizer used to strip accented letters, so "systèmes" was stored as
+-- "syst mes" in normalized_title/title_family and search, dedup and matching
+-- missed it. Recomputing those columns needs Unicode-aware case folding, which
+-- SQLite cannot do, so the repair runs in Python right after this migration
+-- (MIGRATION_REPAIRS in migrator.py). This file records the schema version.

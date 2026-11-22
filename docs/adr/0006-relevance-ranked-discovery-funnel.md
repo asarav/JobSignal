@@ -1,6 +1,6 @@
 # ADR 0006: Relevance-ranked discovery funnel (tiered crawling over breadth-first crawling)
 
-- **Status:** Accepted (design; implementation is Milestone 6)
+- **Status:** Accepted (implemented in Milestone 6)
 - **Date:** 2026-11-17
 - **Related:** [ADR 0005](0005-m4-automatic-discovery.md) (board-level discovery), spec §6.8, §19.10
 
@@ -61,6 +61,13 @@ crawl at all.
 
 - Coverage decouples from crawl load: thousands of indexed long-tail
   companies contribute postings without proportional crawling.
+- Index cost is bounded by the pass, not only by the pause: a day's slices
+  are capped (`discovery.max_index_slices_per_day`, default 288), so a user
+  who shortens the interval gets more frequent *crawling* without multiplying
+  queries against the public indexes.
+- The index path stays a candidate source: a full listing that finds the
+  posting unchanged clears the "via index" marker, and a changed one replaces
+  the record, so the badge never outlives its evidence.
 - The hot tier delivers the "apply the moment it appears" SLA for the most
   relevant boards; the index path covers the tail at days-of-freshness.
 - Tier assignment depends on M5/M3, which is why this is Milestone 6, not an

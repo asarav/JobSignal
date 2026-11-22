@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "keywords": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "KeywordsExtractResponse",
+  "type": "object"
+}

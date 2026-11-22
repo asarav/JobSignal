@@ -42,18 +42,47 @@ class KeywordNormalizer:
         return out
 
 
+def normalize_skill_ids(values: object) -> list[str]:
+    """Normalize user-entered skill names to canonical taxonomy IDs."""
+    if not isinstance(values, list):
+        return []
+    normalizer = KeywordNormalizer()
+    out: list[str] = []
+    for value in values:
+        key = normalizer.normalize(str(value)) or str(value).strip().lower()
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
 class KeywordExtractor:
     def __init__(self, normalizer: KeywordNormalizer | None = None) -> None:
         self.normalizer = normalizer or KeywordNormalizer()
 
-    def extract(self, text: str) -> list[str]:
+    def mentions(self, text: str) -> list[str]:
+        """Skill IDs written in the text itself, without taxonomy implications."""
+        return sorted({sid for sid, _start, _end in self.mentions_with_spans(text)})
+
+    def mentions_with_spans(self, text: str) -> list[tuple[str, int, int]]:
+        """Skill mentions with character offsets, for evidence refs (spec sec 10.3)."""
         text_lower = (text or "").lower()
-        found: set[str] = set()
+        found: list[tuple[str, int, int]] = []
         for alias, sid in self.normalizer._alias_map.items():
             # word-boundary-ish match
             pattern = r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])"
-            if re.search(pattern, text_lower):
-                found.add(sid)
+            for match in re.finditer(pattern, text_lower):
+                found.append((sid, match.start(), match.end()))
+        found.sort(key=lambda item: (item[1], -(item[2] - item[1])))
+        # One ref per span: the longest alias wins where aliases overlap.
+        deduped: list[tuple[str, int, int]] = []
+        for item in found:
+            if deduped and item[1] < deduped[-1][2]:
+                continue
+            deduped.append(item)
+        return deduped
+
+    def extract(self, text: str) -> list[str]:
+        found = set(self.mentions(text))
         # implications
         for frm, to, strength in self.normalizer.implications():
             if frm in found and strength >= 0.5:

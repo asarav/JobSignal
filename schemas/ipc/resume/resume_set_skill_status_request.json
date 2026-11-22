@@ -1,0 +1,27 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "have_experience",
+        "learning",
+        "no_experience",
+        "not_relevant"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "keyword_id",
+    "status"
+  ],
+  "title": "ResumeSetSkillStatusRequest",
+  "type": "object"
+}

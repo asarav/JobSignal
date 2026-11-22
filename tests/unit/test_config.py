@@ -14,7 +14,7 @@ def test_defaults():
     assert cfg.features.autofill is True
     assert cfg.http.max_bytes == 5_000_000
     assert cfg.crawl.global_concurrency == 8
-    assert cfg.extraction.order[0] == "extract.public_api"
+    assert cfg.extraction.order[0] == "extract.public_endpoint"
     assert cfg.matching.model == "fit.weighted_v1"
     assert cfg.posting_intelligence.model == "risk.heuristic_v1"
 
@@ -60,3 +60,32 @@ def test_validate_patch_returns_copy():
     returned = validate_patch(patch)
     assert returned == patch
     assert returned is not patch
+
+
+def test_discovery_section_has_typed_defaults():
+    discovery = AppConfig().discovery
+    assert discovery.max_new_sources_per_run == 200
+    assert discovery.max_crawl_sources_per_run == 60
+    assert discovery.cursor_step == 12
+    assert discovery.max_index_slices_per_day == 288
+    assert discovery.funnel_enabled is True
+    assert discovery.funnel_postings_per_pass == 50
+    assert discovery.tier_intervals_s == [3600.0, 86400.0, 604800.0]
+    assert discovery.auto_discover_interval_minutes is None
+
+
+def test_discovery_patch_is_validated_instead_of_silently_ignored():
+    with pytest.raises(ValidationError):
+        AppConfig().apply_patch({"discovery": {"max_new_source_per_run": 5}})
+    with pytest.raises(ValidationError):
+        AppConfig().apply_patch({"discovery": {"funnel_postings_per_pass": 0}})
+    with pytest.raises(ValidationError):
+        AppConfig().apply_patch({"discovery": {"max_index_slices_per_day": -1}})
+
+
+def test_discovery_patch_round_trips_through_the_effective_dict():
+    cfg = AppConfig(discovery={"auto_discover_interval_minutes": 5, "warmup_passes": 0})
+    effective = cfg.effective_dict()["discovery"]
+    assert effective["auto_discover_interval_minutes"] == 5
+    assert effective["warmup_passes"] == 0
+    assert AppConfig().apply_patch({"discovery": effective}).discovery.cursor_step == 12

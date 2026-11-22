@@ -5,8 +5,10 @@ from app.application.commands.resume import ResumeUseCase
 from app.application.dto import (
     ResumeImportParams,
     ResumeOverridesParams,
+    ResumeParseParams,
     ResumeProfileParams,
     ResumeSetActiveParams,
+    ResumeSkillStatusParams,
 )
 
 
@@ -31,4 +33,13 @@ class ResumeHandlers:
 
     async def update_overrides(self, params: ResumeOverridesParams) -> dict:
         await self._resume.update_overrides(params.profile_id, params.overrides)
+        return {"ok": True}
+
+    async def parse(self, params: ResumeParseParams) -> dict:
+        return await self._resume.parse_version(params.resume_version_id)
+
+    async def set_skill_status(self, params: ResumeSkillStatusParams) -> dict:
+        await self._resume.set_skill_status(
+            params.profile_id, params.keyword_id, params.status
+        )
         return {"ok": True}

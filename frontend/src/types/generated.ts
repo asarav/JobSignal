@@ -55,6 +55,9 @@ export interface DiscoveryAutoDiscoverResponse {
   registered?: number;
   crawled?: number;
   failed?: number;
+  postings_harvested?: number;
+  postings_verified?: number;
+  tiers_changed?: number;
 }
 
 // schemas/ipc/discovery/discovery_run_request.json
@@ -115,6 +118,30 @@ export interface WorkerReadyEventWorkerReadyData {
   schema_version: number;
 }
 
+// schemas/ipc/jobs/jobs_get_detail_request.json
+export interface JobsGetDetailRequest {
+  job_id: string;
+}
+
+// schemas/ipc/jobs/jobs_get_detail_response.json
+export interface JobsGetDetailResponse {
+  job: {
+    [k: string]: unknown;
+  };
+  snapshots?: {
+    [k: string]: unknown;
+  }[];
+  observations?: {
+    [k: string]: unknown;
+  }[];
+  relations?: {
+    [k: string]: unknown;
+  }[];
+  reposts?: {
+    [k: string]: unknown;
+  }[];
+}
+
 // schemas/ipc/jobs/jobs_list_duplicates_request.json
 export interface JobsListDuplicatesRequest {}
 
@@ -131,6 +158,9 @@ export interface JobsListDuplicatesResponseJobSummary {
   posting_status?: string;
   source_id?: string | null;
   provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
 }
 
 // schemas/ipc/jobs/jobs_list_request.json
@@ -158,6 +188,30 @@ export interface JobsListResponseJobSummary {
   posting_status?: string;
   source_id?: string | null;
   provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
+}
+
+// schemas/ipc/jobs/jobs_list_seen_request.json
+export interface JobsListSeenRequest {}
+
+// schemas/ipc/jobs/jobs_list_seen_response.json
+export interface JobsListSeenResponse {
+  jobs: JobsListSeenResponseJobSummary[];
+  total?: number;
+}
+export interface JobsListSeenResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
+  provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
 }
 
 // schemas/ipc/jobs/jobs_merge_request.json
@@ -190,6 +244,9 @@ export interface JobsSearchResponseJobSummary {
   posting_status?: string;
   source_id?: string | null;
   provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
 }
 
 // schemas/ipc/jobs/jobs_unmerge_request.json
@@ -203,6 +260,16 @@ export interface JobsUnmergeResponse {
   ok?: boolean;
 }
 
+// schemas/ipc/keywords/keywords_extract_request.json
+export interface KeywordsExtractRequest {
+  text: string;
+}
+
+// schemas/ipc/keywords/keywords_extract_response.json
+export interface KeywordsExtractResponse {
+  keywords?: string[];
+}
+
 // schemas/ipc/matching/matching_get_results_request.json
 export interface MatchingGetResultsRequest {
   profile_id?: string;
@@ -213,6 +280,9 @@ export interface MatchingGetResultsResponse {
   results?: {
     [k: string]: unknown;
   }[];
+  weights?: {
+    [k: string]: number;
+  };
 }
 
 // schemas/ipc/matching/matching_run_request.json
@@ -239,6 +309,9 @@ export interface MatchingUpdateWeightsRequest {
 // schemas/ipc/matching/matching_update_weights_response.json
 export interface MatchingUpdateWeightsResponse {
   ok?: boolean;
+  weights?: {
+    [k: string]: number;
+  };
 }
 
 // schemas/ipc/plugins/plugins_configure_request.json
@@ -343,6 +416,10 @@ export interface ResumeImportResponse {
   version_id: string;
   skills?: string[];
   sections?: string[];
+  contact?: {
+    [k: string]: string;
+  };
+  years_experience?: number | null;
 }
 
 // schemas/ipc/resume/resume_list_versions_request.json
@@ -357,6 +434,22 @@ export interface ResumeListVersionsResponse {
   }[];
 }
 
+// schemas/ipc/resume/resume_parse_request.json
+export interface ResumeParseRequest {
+  resume_version_id: string;
+}
+
+// schemas/ipc/resume/resume_parse_response.json
+export interface ResumeParseResponse {
+  version_id: string;
+  text: string;
+  sections?: {
+    [k: string]: string;
+  };
+  skills?: string[];
+  years_experience?: number | null;
+}
+
 // schemas/ipc/resume/resume_set_active_request.json
 export interface ResumeSetActiveRequest {
   profile_id?: string;
@@ -365,6 +458,18 @@ export interface ResumeSetActiveRequest {
 
 // schemas/ipc/resume/resume_set_active_response.json
 export interface ResumeSetActiveResponse {
+  ok?: boolean;
+}
+
+// schemas/ipc/resume/resume_set_skill_status_request.json
+export interface ResumeSetSkillStatusRequest {
+  profile_id?: string;
+  keyword_id: string;
+  status: "have_experience" | "learning" | "no_experience" | "not_relevant";
+}
+
+// schemas/ipc/resume/resume_set_skill_status_response.json
+export interface ResumeSetSkillStatusResponse {
   ok?: boolean;
 }
 
@@ -492,6 +597,8 @@ export interface SourcesAddResponse {
   enabled?: boolean;
   interval_s?: number;
   extraction_order?: string[];
+  tier?: string | null;
+  tier_reason?: string | null;
 }
 
 // schemas/ipc/sources/sources_delete_request.json
@@ -520,6 +627,8 @@ export interface SourcesListResponseSourceInfo {
   enabled?: boolean;
   interval_s?: number;
   extraction_order?: string[];
+  tier?: string | null;
+  tier_reason?: string | null;
 }
 
 // schemas/ipc/sources/sources_set_enabled_request.json

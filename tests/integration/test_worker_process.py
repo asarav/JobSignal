@@ -165,14 +165,12 @@ async def test_invalid_params_are_mapped(tmp_path):
 @pytest.mark.parametrize(
     "method",
     [
-        "browser.open",
-        "resume.parse",
-        "matching.score",
-        "applications.create",
-        "companies.list",
-        "posting_intelligence.evaluate",
-        "keywords.extract",
-        "totally.unknown",
+                    "browser.open",
+            "matching.score",
+            "applications.create",
+            "companies.list",
+            "posting_intelligence.evaluate",
+            "totally.unknown",
     ],
 )
 async def test_forbidden_and_unknown_methods_are_rejected(tmp_path, method):
@@ -397,8 +395,14 @@ async def test_search_profiles_lifecycle(tmp_path):
 async def test_auto_discover_round_trip(tmp_path):
     worker = await spawn_worker(tmp_path / "data")
     try:
-        # Disable both builtin providers so this test never touches a network.
-        for plugin_id in ("discovery.ats_directory", "discovery.web_index"):
+        # Disable every builtin provider so this test never touches a network.
+        for plugin_id in (
+            "discovery.ats_directory",
+            "discovery.web_index",
+            "discovery.domain_index",
+            "discovery.oracle_recruiting",
+            "discovery.funnel",
+        ):
             disabled = await worker.request("plugins.disable", {"plugin_id": plugin_id})
             assert disabled["ok"] is True
 
@@ -409,5 +413,44 @@ async def test_auto_discover_round_trip(tmp_path):
         assert result["registered"] == 0
         assert result["crawled"] == 0
         assert result["failed"] == 0
+    finally:
+        await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_parse_skill_status_and_keywords(tmp_path):
+    worker = await spawn_worker(tmp_path / "data")
+    try:
+        resume_path = tmp_path / "resume.txt"
+        resume_path.write_text(
+            "Jane Doe\n\nSkills\nPython, SQL\n\nExperience\nAcme\nEngineer 2020 - 2023\n"
+            "- Built Python services.\n",
+            encoding="utf-8",
+        )
+        imported = await worker.request(
+            "resume.import", {"file_path": str(resume_path), "label": "v1"}
+        )
+        assert imported["ok"] is True
+        version_id = imported["result"]["version_id"]
+
+        parsed = await worker.request("resume.parse", {"resume_version_id": version_id})
+        assert parsed["ok"] is True
+        assert "python" in parsed["result"]["skills"]
+
+        updated = await worker.request(
+            "resume.set_skill_status",
+            {"profile_id": "default", "keyword_id": "python", "status": "learning"},
+        )
+        assert updated["ok"] is True
+        profile = await worker.request("resume.get_profile", {"profile_id": "default"})
+        skills = {row["keyword_id"]: row for row in profile["result"]["profile"]["skills"]}
+        assert skills["python"]["status"] == "learning"
+
+        keywords = await worker.request(
+            "keywords.extract", {"text": "We use Python and AWS."}
+        )
+        assert keywords["ok"] is True
+        assert "python" in keywords["result"]["keywords"]
+        assert "aws" in keywords["result"]["keywords"]
     finally:
         await worker.close()

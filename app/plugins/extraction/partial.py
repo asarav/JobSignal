@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from app.domain.models.extraction import ExtractionTarget
 from app.plugins.extraction.base import StrategyBase
 
-SLUG_RE = re.compile(r"[-_]+")
+SLUG_RE = re.compile(r"[-_\s]+")
 
 FIELD_CONFIDENCE = {"title": 0.15}
 
@@ -41,8 +41,13 @@ def _title_from_url(url: str) -> str | None:
     path = urlparse(url).path.rstrip("/")
     if not path:
         return None
-    segment = path.split("/")[-1]
+    # Slugs with non-ASCII letters are percent-encoded in the URL.
+    segment = unquote(path.split("/")[-1])
     if not segment or "." in segment and segment.count(".") > 1:
+        return None
+    # A numeric path segment is a posting id, not a readable job title. Calling
+    # it a title hid the fact that the posting could not actually be read.
+    if segment.isdigit():
         return None
     words = [word for word in SLUG_RE.split(segment) if word]
     if not words:

@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "resume_version_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "resume_version_id"
+  ],
+  "title": "ResumeParseRequest",
+  "type": "object"
+}

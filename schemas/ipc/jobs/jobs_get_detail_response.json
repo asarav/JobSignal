@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "snapshots": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "observations": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "relations": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "reposts": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "job"
+  ],
+  "title": "JobsGetDetailResponse",
+  "type": "object"
+}

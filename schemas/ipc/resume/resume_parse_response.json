@@ -1,0 +1,40 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version_id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "sections": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "skills": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "years_experience": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "version_id",
+    "text"
+  ],
+  "title": "ResumeParseResponse",
+  "type": "object"
+}

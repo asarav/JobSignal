@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Copy } from "../../copy/copy";
+import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import { useWorkerStore } from "../../stores/workerStore";
@@ -104,7 +105,10 @@ export function DiagnosticsRoute() {
         <h2 className="text-lg font-semibold text-slate-900">{Copy.diagnostics.health}</h2>
         <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <dt className="text-slate-500">{Copy.diagnostics.status}</dt>
+            <dt className="text-slate-500">
+              {Copy.diagnostics.status}
+              <InfoTip label={Copy.diagnostics.status}>{Copy.tooltips.health}</InfoTip>
+            </dt>
             <dd className="font-medium text-slate-900">{health?.status ?? Copy.settings.none}</dd>
           </div>
           <div>
@@ -114,11 +118,19 @@ export function DiagnosticsRoute() {
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">{Copy.diagnostics.queueDepth}</dt>
+            <dt className="text-slate-500">
+              {Copy.diagnostics.queueDepth}
+              <InfoTip label={Copy.diagnostics.queueDepth}>
+                {Copy.tooltips.queueDepth}
+              </InfoTip>
+            </dt>
             <dd className="font-medium text-slate-900">{health?.queue_depth ?? 0}</dd>
           </div>
           <div>
-            <dt className="text-slate-500">{Copy.diagnostics.diskUsage}</dt>
+            <dt className="text-slate-500">
+              {Copy.diagnostics.diskUsage}
+              <InfoTip label={Copy.diagnostics.diskUsage}>{Copy.tooltips.diskUsage}</InfoTip>
+            </dt>
             <dd className="font-medium text-slate-900">
               {formatBytes(health?.disk_usage_bytes ?? 0)}
             </dd>
@@ -130,7 +142,13 @@ export function DiagnosticsRoute() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.diagnostics.recentTasks}</h2>
+        <h2
+          className="text-lg font-semibold text-slate-900"
+          aria-label={Copy.diagnostics.recentTasks}
+        >
+          {Copy.diagnostics.recentTasks}
+          <InfoTip label={Copy.diagnostics.recentTasks}>{Copy.tooltips.testTask}</InfoTip>
+        </h2>
         {tasks.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">{Copy.diagnostics.noTasks}</p>
         ) : (
@@ -141,7 +159,9 @@ export function DiagnosticsRoute() {
                   <th className="px-2 py-2">{Copy.diagnostics.taskId}</th>
                   <th className="px-2 py-2">{Copy.diagnostics.taskType}</th>
                   <th className="px-2 py-2">{Copy.diagnostics.taskStatus}</th>
-                  <th className="px-2 py-2">{Copy.diagnostics.taskProgress}</th>
+                  <th className="px-2 py-2" title={Copy.tooltips.taskProgress}>
+                    {Copy.diagnostics.taskProgress}
+                  </th>
                   <th className="px-2 py-2">{Copy.diagnostics.taskActions}</th>
                 </tr>
               </thead>
@@ -174,7 +194,13 @@ export function DiagnosticsRoute() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.diagnostics.exportLogs}</h2>
+        <h2
+          className="text-lg font-semibold text-slate-900"
+          aria-label={Copy.diagnostics.exportLogs}
+        >
+          {Copy.diagnostics.exportLogs}
+          <InfoTip label={Copy.diagnostics.exportLogs}>{Copy.tooltips.exportLogs}</InfoTip>
+        </h2>
         <p className="mt-2 text-sm text-slate-500">{Copy.diagnostics.exportLogsPlaceholder}</p>
         <button
           type="button"
@@ -187,7 +213,10 @@ export function DiagnosticsRoute() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.diagnostics.events}</h2>
+        <h2 className="text-lg font-semibold text-slate-900" aria-label={Copy.diagnostics.events}>
+          {Copy.diagnostics.events}
+          <InfoTip label={Copy.diagnostics.events}>{Copy.tooltips.events}</InfoTip>
+        </h2>
         {events.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">{Copy.diagnostics.noEvents}</p>
         ) : (

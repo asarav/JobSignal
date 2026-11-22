@@ -5,7 +5,7 @@ Two kinds of provider feed the daily pass:
 * ``discovery.web_index`` — enumerates ATS tenants from a public web URL
   index, so discovery does not depend on a bundled list or on the user adding
   sources.  Each run walks a slice of the tenant space.
-* ``discovery.ats_directory`` — a bundled seed list (1,000+ boards, each
+* ``discovery.ats_directory`` — a bundled seed list (25,651 boards, each
   confirmed live through its public ATS API and ordered largest-first) used as
   a warm start for cold installs and as a test fixture.  Regenerate via
   ``scripts/build_seed.py``.  It is not the discovery engine.
@@ -16,10 +16,14 @@ registered by their own module when enabled.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.plugins.discovery.ats_directory import AtsDirectoryProvider
+from app.plugins.discovery.domain_index import DomainIndexProvider
+from app.plugins.discovery.funnel import FunnelProvider
+from app.plugins.discovery.oracle_recruiting import OracleRecruitingProvider
 from app.plugins.discovery.web_index import CDX_LIMIT, WebIndexProvider
 
 if TYPE_CHECKING:
@@ -30,9 +34,20 @@ SEEDS_PATH = Path(__file__).resolve().parent / "seeds" / "ats_tenants.json"
 
 
 def _discovery_settings(deps: PluginDeps) -> dict[str, Any]:
-    config = getattr(deps, "config", None)
-    settings = getattr(config, "discovery", None)
-    return dict(settings) if isinstance(settings, dict) else {}
+    """Discovery settings as a mapping (validated model or legacy dict).
+
+    Plugins may not import ``app.application``, so this reads the config
+    duck-typed instead of calling the application helper.
+    """
+    settings = getattr(getattr(deps, "config", None), "discovery", None)
+    if isinstance(settings, Mapping):
+        return dict(settings)
+    dump = getattr(settings, "model_dump", None)
+    if callable(dump):
+        data = dump()
+        if isinstance(data, Mapping):
+            return dict(data)
+    return {}
 
 
 def _positive_int(value: object, default: int) -> int:
@@ -63,6 +78,57 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
             limit=_positive_int(settings.get("web_index_limit"), 200),
             cdx_limit=_positive_int(settings.get("web_index_cdx_limit"), CDX_LIMIT),
         ),
+    )
+
+    registry.add(
+        PluginManifest(
+            id="discovery.funnel",
+            kind="discovery",
+            version="1.1.0",
+            api_version="1",
+            capabilities=frozenset({"discover", "harvest_postings"}),
+            network_hosts=("index.commoncrawl.org", "web.archive.org"),
+            description=(
+                "Harvests posting URLs from the same public web-index slices "
+                "used for board discovery (M6)."
+            ),
+        ),
+        FunnelProvider(
+            limit=_positive_int(settings.get("web_index_limit"), 200),
+            cdx_limit=_positive_int(settings.get("web_index_cdx_limit"), CDX_LIMIT),
+        ),
+    )
+
+    registry.add(
+        PluginManifest(
+            id="discovery.domain_index",
+            kind="discovery",
+            version="1.0.0",
+            api_version="1",
+            capabilities=frozenset({"discover"}),
+            network_hosts=("web.archive.org",),
+            description=(
+                "Enumerates subdomain and path-addressed ATS tenants (Workday, "
+                "iCIMS, BambooHR, Eightfold, UKG, Workable) from a public web index."
+            ),
+        ),
+        DomainIndexProvider(),
+    )
+
+    registry.add(
+        PluginManifest(
+            id="discovery.oracle_recruiting",
+            kind="discovery",
+            version="1.0.0",
+            api_version="1",
+            capabilities=frozenset({"discover"}),
+            network_hosts=("web.archive.org",),
+            description=(
+                "Enumerates Oracle Recruiting Cloud career sites by rotating "
+                "Oracle HCM pods in a public URL index."
+            ),
+        ),
+        OracleRecruitingProvider(),
     )
 
     registry.add(

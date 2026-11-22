@@ -158,6 +158,18 @@
       "response_schema": "schemas/ipc/jobs/jobs_list_duplicates_response.json"
     },
     {
+      "method": "jobs.list_seen",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_list_seen_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_list_seen_response.json"
+    },
+    {
+      "method": "jobs.get_detail",
+      "long_running": false,
+      "request_schema": "schemas/ipc/jobs/jobs_get_detail_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_get_detail_response.json"
+    },
+    {
       "method": "resume.import",
       "long_running": false,
       "request_schema": "schemas/ipc/resume/resume_import_request.json",
@@ -188,6 +200,18 @@
       "response_schema": "schemas/ipc/resume/resume_update_overrides_response.json"
     },
     {
+      "method": "resume.parse",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_parse_request.json",
+      "response_schema": "schemas/ipc/resume/resume_parse_response.json"
+    },
+    {
+      "method": "resume.set_skill_status",
+      "long_running": false,
+      "request_schema": "schemas/ipc/resume/resume_set_skill_status_request.json",
+      "response_schema": "schemas/ipc/resume/resume_set_skill_status_response.json"
+    },
+    {
       "method": "matching.run",
       "long_running": false,
       "request_schema": "schemas/ipc/matching/matching_run_request.json",
@@ -204,6 +228,12 @@
       "long_running": false,
       "request_schema": "schemas/ipc/matching/matching_update_weights_request.json",
       "response_schema": "schemas/ipc/matching/matching_update_weights_response.json"
+    },
+    {
+      "method": "keywords.extract",
+      "long_running": false,
+      "request_schema": "schemas/ipc/keywords/keywords_extract_request.json",
+      "response_schema": "schemas/ipc/keywords/keywords_extract_response.json"
     },
     {
       "method": "crawl_runs.list",

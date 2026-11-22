@@ -88,6 +88,9 @@ def _wire(
     # The bundled providers would use the real index/seed data; tests inject fakes.
     container.registry.set_enabled("discovery.ats_directory", False)
     container.registry.set_enabled("discovery.web_index", False)
+    container.registry.set_enabled("discovery.domain_index", False)
+    container.registry.set_enabled("discovery.oracle_recruiting", False)
+    container.registry.set_enabled("discovery.funnel", False)
     for plugin_id, provider in providers.items():
         container.registry.add(
             PluginManifest(id=plugin_id, kind="discovery", version="1.0.0", api_version="1"),
@@ -365,7 +368,12 @@ async def test_bundled_ats_directory_is_registered_and_yields_seeds():
     container = build_test_container(http=FakeHttpClient())
     entries = container.registry.list_by_kind("discovery")
     ids = {entry.manifest.id for entry in entries}
-    assert {"discovery.ats_directory", "discovery.web_index"} <= ids
+    assert {
+        "discovery.ats_directory",
+        "discovery.web_index",
+        "discovery.domain_index",
+        "discovery.oracle_recruiting",
+    } <= ids
     assert SEEDS_PATH.is_file()
 
     provider = AtsDirectoryProvider.from_file(SEEDS_PATH)
@@ -414,6 +422,10 @@ async def test_a_pass_discovers_without_seeds_from_fixture_index_data():
     # Seeds contribute nothing: the bootstrap is empty for this pass.
     container.registry.set_enabled("discovery.ats_directory", False)
     container.registry.set_enabled("discovery.web_index", False)
+    container.registry.set_enabled("discovery.domain_index", False)
+    container.registry.set_enabled("discovery.oracle_recruiting", False)
+    container.registry.set_enabled("discovery.funnel", False)
+    container.registry.set_enabled("discovery.funnel", False)
     container.registry.add(
         PluginManifest(
             id="discovery.web_index_fixture",

@@ -30,6 +30,33 @@ def list_migration_files() -> list[Path]:
     return sorted(MIGRATIONS_DIR.glob("*.sql"))
 
 
+async def repair_job_titles(conn: aiosqlite.Connection) -> None:
+    """Recompute the derived title columns with the current normalizer.
+
+    SQLite has no Unicode case folding, so a migration cannot fix stored
+    ``normalized_title``/``title_family`` values itself.
+    """
+    from app.domain.services.normalizer import normalize_title, title_family
+
+    cur = await conn.execute("SELECT id, title, normalized_title, title_family FROM jobs")
+    updates = []
+    for job_id, title, stored_normalized, stored_family in await cur.fetchall():
+        normalized = normalize_title(title or "")
+        family = title_family(normalized)
+        if (normalized, family) != (stored_normalized, stored_family):
+            updates.append((normalized, family, job_id))
+    if updates:
+        await conn.executemany(
+            "UPDATE jobs SET normalized_title = ?, title_family = ? WHERE id = ?",
+            updates,
+        )
+
+
+#: One-off repairs SQLite cannot express, keyed by the migration version they
+#: complete. Each runs once, right after that migration, and commits with it.
+MIGRATION_REPAIRS = {11: repair_job_titles}
+
+
 async def apply_pragmas(conn: aiosqlite.Connection) -> None:
     for pragma in PRAGMAS:
         await conn.execute(pragma)
@@ -77,6 +104,9 @@ async def migrate(db_path: Path) -> int:
         latest = max(applied) if applied else 0
         for version, name, sql, checksum in pending:
             await conn.executescript(sql)
+            repair = MIGRATION_REPAIRS.get(version)
+            if repair is not None:
+                await repair(conn)
             await conn.execute(
                 "INSERT INTO schema_migrations(version, name, applied_at, checksum) "
                 "VALUES (?, ?, ?, ?)",

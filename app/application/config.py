@@ -79,7 +79,6 @@ class ExtractionCompletenessConfig(StrictModel):
 class ExtractionConfig(StrictModel):
     order: list[str] = Field(
         default_factory=lambda: [
-            "extract.public_api",
             "extract.public_endpoint",
             "extract.jsonld",
             "extract.embedded_json",
@@ -113,6 +112,38 @@ class DedupConfig(StrictModel):
     )
     thresholds: DedupThresholdsConfig = Field(default_factory=DedupThresholdsConfig)
     material_change_jaccard_delta: float = 0.10
+
+
+class DiscoveryConfig(StrictModel):
+    """Continuous discovery, funnel and budget settings (M4/M6).
+
+    These keys used to be an untyped dict, so a typo (``max_new_source_per_run``)
+    was silently ignored and the documented defaults applied instead.  They are
+    validated now: a bad patch fails at save time with the offending key.
+    """
+
+    #: Pause between automatic passes.  Unset means the shipped hourly default
+    #: (``AUTO_DISCOVER_INTERVAL_S``); the legacy hours key applies only when
+    #: minutes is unset, so older settings keep working.
+    auto_discover_interval_minutes: int | None = Field(default=None, gt=0)
+    auto_discover_interval_hours: float | None = Field(default=None, gt=0)
+    max_new_sources_per_run: int = Field(default=200, gt=0)
+    max_crawl_sources_per_run: int = Field(default=60, gt=0)
+    cursor_step: int = Field(default=12, gt=0)
+    #: Ceiling on index slices walked per UTC day, shared by every pass.  A
+    #: pass costs ``cursor_step`` slices, so the default (288) covers the
+    #: hourly cadence (24 x 12).  It only bites when the cadence is shortened
+    #: so far that continuous passes would hammer the public indexes.
+    max_index_slices_per_day: int = Field(default=288, ge=0)
+    web_index_limit: int = Field(default=200, gt=0)
+    web_index_cdx_limit: int = Field(default=10_000, gt=0)
+    provider_timeout_s: float = Field(default=300.0, gt=0)
+    warmup_passes: int = Field(default=5, ge=0)
+    funnel_enabled: bool = True
+    funnel_postings_per_pass: int = Field(default=50, gt=0)
+    tier_intervals_s: list[float] = Field(
+        default_factory=lambda: [3600.0, 86400.0, 604800.0]
+    )
 
 
 class MatchingConfig(StrictModel):
@@ -241,7 +272,7 @@ class AppConfig(BaseSettings):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     http: HttpConfig = Field(default_factory=HttpConfig)
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
-    discovery: dict[str, Any] = Field(default_factory=dict)
+    discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     dedup: DedupConfig = Field(default_factory=DedupConfig)
     matching: MatchingConfig = Field(default_factory=MatchingConfig)
@@ -271,6 +302,21 @@ class AppConfig(BaseSettings):
             return AppConfig.model_validate(merged)
         except ValidationError:
             raise
+
+
+def discovery_settings(config: object) -> dict[str, Any]:
+    """Discovery settings as a plain mapping, whether typed or legacy.
+
+    Callers (the pass, the worker loop, the provider factory) all want
+    ``Mapping.get`` semantics; the config now holds a validated model, but a
+    dict is still accepted so tests and older call sites keep working.
+    """
+    settings = getattr(config, "discovery", None)
+    if isinstance(settings, DiscoveryConfig):
+        return settings.model_dump()
+    if isinstance(settings, Mapping):
+        return {str(key): value for key, value in settings.items()}
+    return {}
 
 
 def deep_merge(base: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:

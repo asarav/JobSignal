@@ -253,6 +253,7 @@ class WebIndexProvider:
         not at all once the pass deadline has passed.
         """
         host, _connector_id, bucket = self.slice_for(cursor)
+        started = time.monotonic()
         # Common Crawl answers in seconds; the Internet Archive CDX API needs
         # a minute but serves the hosts whose CC partitions are unavailable.
         cc_rows = await self._common_crawl_rows(ctx, host, bucket, shared)
@@ -278,6 +279,15 @@ class WebIndexProvider:
                     rows = cc_rows  # empty, but an index answered
         else:
             rows = cc_rows
+        ctx.logger.info(
+            "discovery.web_index.slice",
+            host=host,
+            bucket=bucket,
+            backend=backend,
+            rows=0 if rows is None else len(rows),
+            answered=rows is not None,
+            elapsed_s=round(time.monotonic() - started, 1),
+        )
         return [(tenant, url, ts, backend) for tenant, url, ts in rows]
 
     async def _common_crawl_rows(
@@ -319,6 +329,24 @@ class WebIndexProvider:
         bucket: str,
         shared: dict[str, object],
     ) -> list[tuple[str, str, str]] | None:
+        """Rows from the CDX API, shared with the funnel provider in one pass."""
+        cache = _cache(ctx)
+        key = ("cdx", host, bucket)
+        if cache is not None and key in cache:
+            cached = cache[key]
+            return cached if isinstance(cached, list) else None
+        rows = await self._cdx_rows_uncached(ctx, host, bucket, shared)
+        if cache is not None:
+            cache[key] = rows
+        return rows
+
+    async def _cdx_rows_uncached(
+        self,
+        ctx: ExecutionContext,
+        host: str,
+        bucket: str,
+        shared: dict[str, object],
+    ) -> list[tuple[str, str, str]] | None:
         """Rows from the Internet Archive CDX API; ``None`` if unreachable.
 
         The query deliberately carries no ``filter``/``from`` clauses: they
@@ -334,6 +362,7 @@ class WebIndexProvider:
             ("output", "json"),
         ]
         url = f"{CDX_ENDPOINT}?{urlencode(params)}"
+        started = time.monotonic()
         # The gateway answers 503/504 under bursts.  One retry covers that,
         # but only while the pass still has budget: a late fallback must not
         # sleep past the pass deadline.
@@ -343,6 +372,16 @@ class WebIndexProvider:
             )
             if isinstance(response, Ok):
                 rows = self._cdx_parse(response.value.body, host)
+                ctx.logger.info(
+                    "discovery.web_index.cdx",
+                    host=host,
+                    bucket=bucket,
+                    attempt=attempt + 1,
+                    bytes=len(response.value.body),
+                    rows=0 if rows is None else len(rows),
+                    unparseable=rows is None,
+                    elapsed_s=round(time.monotonic() - started, 1),
+                )
                 if rows is None:
                     ctx.logger.warning(
                         "discovery.web_index.cdx_unparseable", host=host, bucket=bucket
@@ -374,7 +413,6 @@ class WebIndexProvider:
         if not isinstance(table, list):
             return None
         rows: list[tuple[str, str, str]] = []
-        seen: set[str] = set()
         for record in table[1:]:
             if not isinstance(record, list) or not record:
                 continue
@@ -382,16 +420,20 @@ class WebIndexProvider:
             if not isinstance(original, str):
                 continue
             tenant = _tenant_of(original, host)
-            if tenant is None or tenant in seen:
+            if tenant is None:
                 continue
-            seen.add(tenant)
             rows.append((tenant, original, ""))
         return rows
 
     async def _crawl_ids_of(self, ctx: ExecutionContext) -> list[str] | None:
-        """The crawl indexes to query, newest first (cached per instance)."""
+        """The crawl indexes to query, newest first (shared within a pass)."""
         if self._crawl_ids is not None:
             return self._crawl_ids
+        cache = _cache(ctx)
+        key = ("collinfo",)
+        if cache is not None and key in cache:
+            cached = cache[key]
+            return cached if isinstance(cached, list) else None
         response = await ctx.http.send(
             HttpRequest(
                 method="GET",
@@ -422,12 +464,19 @@ class WebIndexProvider:
             ctx.logger.warning("discovery.web_index.no_crawl_indexes")
             return None
         self._crawl_ids = ids
+        if cache is not None:
+            cache[key] = ids
         return ids
 
     async def _query(
         self, ctx: ExecutionContext, crawl_id: str, host: str, bucket: str
     ) -> list[tuple[str, str, str]] | None:
         """Ask one index for the slice; ``None`` means it failed to answer."""
+        cache = _cache(ctx)
+        key = ("cc", crawl_id, host, bucket)
+        if cache is not None and key in cache:
+            cached = cache[key]
+            return cached if isinstance(cached, list) else None
         url = self._query_url(crawl_id, host, bucket)
         response = await ctx.http.send(
             HttpRequest(method="GET", url=url, timeout_s=self._timeout_s)
@@ -449,6 +498,8 @@ class WebIndexProvider:
                 bucket=bucket,
                 index_id=crawl_id,
             )
+        if cache is not None:
+            cache[key] = rows
         return rows
 
     def _query_url(self, crawl_id: str, host: str, bucket: str) -> str:
@@ -464,7 +515,6 @@ class WebIndexProvider:
         caller can fall back to an older index.
         """
         rows: list[tuple[str, str, str]] = []
-        seen: set[str] = set()
         for line in body.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
@@ -479,14 +529,20 @@ class WebIndexProvider:
             if row.get("status") != "200" or not isinstance(url, str):
                 continue
             tenant = _tenant_of(url, host)
-            if tenant is None or tenant in seen:
+            if tenant is None:
                 continue
-            seen.add(tenant)
             timestamp = row.get("timestamp")
             rows.append(
                 (tenant, url, timestamp if isinstance(timestamp, str) else "")
             )
         return rows
+
+
+def _cache(ctx: ExecutionContext) -> dict[object, object] | None:
+    """The pass-scoped index cache shared by board discovery and the funnel."""
+    config = getattr(ctx, "config", None)
+    cache = config.get("discovery_cache") if isinstance(config, dict) else None
+    return cache if isinstance(cache, dict) else None
 
 
 def _tenant_of(url: str, host: str) -> str | None:

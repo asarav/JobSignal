@@ -763,7 +763,7 @@ Discovery finds **sources**; connectors/extraction obtain **jobs**. They share o
 | `discovery.sitemap` | Reads `robots.txt` sitemap entries and job-related sitemaps for registered career sites | public GETs | on |
 | `discovery.search_engine` | Queries a configured search endpoint for career pages (e.g. `site:boards.greenhouse.io "software engineer"`); enabled by default but respects `external_plugins` feature flag | sends query text to the engine | on |
 | `discovery.web_index` | Enumerates ATS tenants from a **public web URL index** (Common Crawl's index server, with the Internet Archive CDX API as fallback). Each pass walks a bounded set of `(ATS host, leading-character bucket)` slices of the tenant space in parallel, so discovery depends neither on a bundled list nor on user input; the cursor is persisted, so coverage grows every run and the whole space is revisited after it wraps | public GETs to the index | on |
-| `discovery.ats_directory` | Offline **bootstrap** seed list of 1,000+ boards on the supported ATS hosts, each confirmed live through its own public ATS API and ordered largest-first by open postings (refreshed via `scripts/build_seed.py`). Cold start warm-start and test fixture only - never the sole discovery mechanism | none | on |
+| `discovery.ats_directory` | Offline **bootstrap** seed list of 25,651 boards on the supported ATS hosts, each confirmed live through its own public ATS API and ordered largest-first by open postings (refreshed via `scripts/build_seed.py`). Cold start warm-start and test fixture only - never the sole discovery mechanism | none | on |
 | `discovery.auto_discover` | Runs all enabled discovery providers automatically on schedule (daily by default), advances the providers' rotation cursor, registers newly discovered career sites as sources without user input, and crawls the sources that are due | public GETs + search engine queries | on |
 
 Rules:
@@ -792,19 +792,28 @@ Additional providers may add candidates (user URLs, company-name resolution, loc
 
 Coverage limits that MUST be stated in the UI and docs: the index lags reality (a brand-new company can take weeks to appear), some ATS hosts publish no public boards, and the crawl budget means a large source list is visited over several passes rather than at once.
 
-#### 6.2.2 Hosts whose tenant is a subdomain (Workday, iCIMS)
+#### 6.2.2 Hosts whose tenant is a subdomain (Workday, iCIMS) or in the path (UKG Pro)
 
-The M2 connectors read Workday (`{tenant}.wd{N}.myworkdayjobs.com/{locale}/{site}`) and iCIMS (`{tenant}.icims.com`) boards. The live index provider still enumerates only fixed-host ATSs: the variable part of these URLs comes *before* the fixed host, so the `host/bucket` prefix query cannot reach it. The **seed bootstrap** covers the gap, and the plumbing it needed is now in place.
+The M2 connectors read Workday (`{tenant}.wd{N}.myworkdayjobs.com/{locale}/{site}`) and iCIMS (`{tenant}.icims.com`) boards. UKG Pro/UltiPro (`{host}/{tenant}/JobBoard/{boardId}`, §6.4) puts both the employer code and the board id in the path. The variable part of these URLs comes *before* the fixed host or needs two path segments, so a `host/{bucket}` prefix query cannot construct the board URL.
 
-How `scripts/build_seed.py` reaches those tenants:
+`discovery.domain_index` now covers this space in the live rotation:
+
+1. **Query by domain.** For subdomain ATSs (Workday, iCIMS, BambooHR, Eightfold) it asks the CDX API for `matchType=domain` with `filter=original:^https?://{bucket}`, so a slice is the tenants starting with one letter. UKG Pro (`recruiting.ultipro.com`) and Workable (`apply.workable.com`) use a prefix query instead, because the fixed host is the domain.
+2. **Rebuild the board from the full URL.** iCIMS and BambooHR need only the subdomain (board root, or `/careers`). UKG Pro takes `{tenant}/JobBoard/{uuid}`. Workable takes the first path segment. Workday is the hard case: the hostname gives the tenant and `wd{N}` shard, but CxS also needs the `{locale}/{site}` path, so the board URL comes from the indexed path. A bare Workday root answers HTTP 406, which is why hostname-only discovery would not work. Indexed asset and API paths (`/favicon.ico`, `/wday/cxs/...`) are discarded, and `/{site}` plus `/{locale}/{site}` collapse to one board so a tenant is not crawled twice.
+3. **Rotate, because domain scans are expensive.** Measured: a Workday domain slice answers in ~42 s, BambooHR in ~50 s, and an iCIMS slice returned a gateway 504 after 60 s. A pass therefore walks three slices, concurrently, with an 85 s per-slice timeout and a single attempt; a failed slice is logged as `discovery.domain_index.cdx_failed` and re-walked when the rotation wraps. The pass cursor still advances, so one throttled ATS does not stall the others. The full sweep is ~156 slices, so this path is slower than the fixed-host rotation by design — but it is seed-free and self-advancing.
+4. **Carry the tenant key through discovery.** `DiscoveredSource.tenant_key` → `SourceRegistry.add(tenant_key=…)` → `SourceConfig.ats_tenant_key`, which `ats.workday` already prefers over parsing the URL.
+
+Oracle Recruiting Cloud is enumerated by a separate provider, `discovery.oracle_recruiting`. ORC career sites live on tenant subdomains of an Oracle HCM pod (`{tenant}.fa.{region}.oraclecloud.com/hcmUI/CandidateExperience/{lang}/sites/{site}`). Certificate transparency is useless here because the pods use wildcard certificates, and a whole-`oraclecloud.com` query returns 504. A domain query scoped to one pod, filtered to `/hcmUI/CandidateExperience/`, answers in **17–38 s** and returns full URLs, so the provider rotates a list of HCM pods, two per pass, parses the host and site code, and registers the board. A throttled or retired pod is logged and revisited when the rotation wraps.
+
+`scripts/build_seed.py` still reaches Workday/iCIMS/UKG tenants for the warm start:
 
 1. Query by domain. `matchType=domain` sorts the whole domain; CDX ignores `offset` but supports `showResumeKey=true`, and the resumption key walks the domain in 10,000-row chunks (measured: Workday chunks answer in 30–50 s). A negative `filter=original` drops what would otherwise fill the first chunks: one Workday tenant can own tens of thousands of `/assets/…` URLs, and iCIMS' own `www` marketing site dominates the alphabetical head. Positive `filter=urlkey:…` / `filter=original:^https?://…` narrowing is not used; it returned 503/504 under load.
 2. Derive the board URL and tenant key per host. iCIMS: the subdomain is the tenant and the board root is enough. Workday: the subdomain is the tenant, the host carries the `wd{N}` shard, and CxS needs both the tenant and the `{locale}/{site}` path, so the board URL is stored together with its `tenant_key`.
 3. Carry the tenant key through discovery. `DiscoveredSource.tenant_key` → `SourceRegistry.add(tenant_key=…)` → `SourceConfig.ats_tenant_key`, which `ats.workday` already prefers over parsing the URL. The seed rows carry `tenant_key` where the URL alone is ambiguous.
 
-Verification is per connector and uses the same public surface the connector crawls: Workday's CxS `POST …/jobs` (its `total`), and iCIMS' `jobs/search?ss=1&in_iframe=1` page, counting posting links and rejecting tenant portals that redirect to `login.icims.com`. A live board with zero postings stays; a tenant whose portal is behind a login does not.
+Verification is per connector and uses the same public surface the connector crawls: Workday's CxS `POST …/jobs` (its `total`), and iCIMS' `jobs/search?ss=1&in_iframe=1` page, counting posting links and rejecting tenant portals that redirect to `login.icims.com`. UKG Pro boards are harvested with a `matchType=domain` CDX query filtered to `/JobBoard/` paths, then verified with the board's own `POST …/LoadSearchResults` (its `totalCount`); an unknown board id answers 404. A live board with zero postings stays; a tenant whose portal is behind a login does not.
 
-This is bootstrap coverage, not live discovery: the seed file is a snapshot, and §6.2's rule that discovery must not depend on it still holds. Enumerating these hosts in the daily rotation (Common Crawl's domain paging, which this network cannot currently reach, or CDX resumption inside `discovery.web_index`) remains open (§21).
+The seed file remains a snapshot — a warm start, not the engine. §6.2's rule that discovery must not depend on it holds: a new Workday, iCIMS, BambooHR, Eightfold, UKG Pro or Workable tenant is picked up by `discovery.domain_index` without regenerating the seed.
 
 ### 6.3 Source classification
 
@@ -824,6 +833,15 @@ Endpoint details below reflect publicly documented or widely observed public end
 | `ats.smartrecruiters` | `GET https://api.smartrecruiters.com/v1/companies/{companyId}/postings` (paginate `offset`/`limit`) | `GET .../postings/{postingId}` | Public Posting API; some fields only in detail. |
 | `ats.workday` | `POST https://{tenant}.wd{N}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs` body `{"appliedFacets":{},"limit":20,"offset":0,"searchText":""}` | `GET https://{tenant}.wd{N}.myworkdayjobs.com/wday/cxs/{tenant}/{site}{externalPath}` | Public career-site JSON used by the site's own frontend; no auth for public sites. Must paginate (offset), small page limits, polite rate. On schema drift → rendered DOM / JSON-LD fallback. |
 | `ats.icims` | Career portal search pages (`https://{portal}.icims.com/jobs/search?ss=1&in_iframe=1` pagination `pr=`) | Job pages usually expose JSON-LD `JobPosting` | HTML-first; strategy order: JSON-LD → static HTML → rendered DOM. No private API use. |
+| `ats.ultipro` | `POST https://{host}/{tenant}/JobBoard/{boardId}/JobBoardView/LoadSearchResults` body `{"opportunitySearch":{"Top":50,"Skip":0,"QueryString":"","OrderBy":[...],"Filters":[]}}` | `GET .../OpportunityDetail?opportunityId={id}`; the record is embedded as `new US.Opportunity.CandidateOpportunityDetail({...})` | UKG Pro (formerly UltiPro). Hosts: `recruiting.ultipro.com` plus the `recruiting2`/`recruiting3` shards and `recruiting.ultipro.ca`. Tenant and board id come from the URL. No auth. Paginate with `Top`/`Skip` (50 per page, bounded), stop on the response's `totalCount`. Parse the embedded detail JSON with a string-aware brace-balancing parser, not a regex. |
+| `ats.workable` | `GET https://apply.workable.com/api/v1/widget/accounts/{account}?details=true` | included in the feed (`description` HTML) | Workable. One public feed per account, also used by the embeddable widget; no auth. Tenant from `apply.workable.com/{account}` (or a legacy `{account}.workable.com`). The feed has no paging: one response carries every published job. |
+| `ats.bamboohr` | `GET https://{company}.bamboohr.com/careers/list` | `GET https://{company}.bamboohr.com/careers/{id}/detail` → `result.jobOpening` | BambooHR. Company from the subdomain. The listing is sparse (`id`, `jobOpeningName`, department, location); the detail carries `description` HTML, `datePosted`, `compensation` and `jobOpeningShareUrl`. No auth. |
+| `ats.oracle_recruiting` | `GET https://{pod}.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.secondaryLocations&finder=findReqs;siteNumber={site},limit=100,offset={offset},sortBy=POSTING_DATES_DESC` | `GET .../recruitingCEJobRequisitionDetails?finder=ById;Id="{id}",siteNumber={site}` | Oracle Recruiting Cloud (Fusion HCM) Candidate Experience sites. Paging, site number and sort live inside the `finder` parameter; the envelope is `items[0]` with `TotalJobsCount` and `requisitionList`. Detail exposes `ExternalDescriptionStr`, `ExternalResponsibilitiesStr` and `ExternalQualificationsStr`. No auth, but some tenants put a WAF in front of the REST API and answer 403. Discovered by `discovery.oracle_recruiting`, which rotates Oracle HCM pods and parses the career-site URL into host, locale and site code. |
+| `ats.eightfold` | `GET {host}/api/apply/v2/jobs?domain={domain}&start={n}&num=100` | `GET {host}/api/apply/v2/jobs/{id}?domain={domain}` | Eightfold AI career sites, either `{tenant}.eightfold.ai` or an employer host (Netflix). The public endpoint caps a response at ten positions, so the connector pages up to 200; `domain` comes from `SourceConfig.ats_tenant_key`, the board page's `_EF_GROUP_ID`/`domain` value, or the `{tenant}.com` fallback. Discovered as a subdomain target in `discovery.domain_index`. |
+| `ats.phenom` | `POST {host}/widgets` body `{ddoKey:"refineSearch", jobs:true, from:N, size:100, sort:[...]}` | `POST {host}/widgets` body `{ddoKey:"jobDetail", jobId:"..."}` | Phenom career front ends. Tenant-specific by design: `PhenomConfig` carries the endpoint template and field map, overridable in `SourceConfig.limits.phenom`. Validated live against Southwest, RTX, UPS and CVS Health. Custom hosts are recognised by `ddoKey`/`refineSearch`/`phenompeople` markers in the wrapper page. |
+| `ats.amazon` | `GET https://www.amazon.jobs/en/search.json?base_query=&loc_query=&result_limit=100&offset={n}` | `GET https://www.amazon.jobs{job_path}` (HTML) | Amazon Jobs public search document (`jobs`, `hits`); the connector caps at 500 postings per crawl. Detail pages are server-rendered and go through extraction. |
+| `ats.taleo` | `GET {tenant}.taleo.net/careersection/{section}/jobsearch.ftl?lang=en` | `GET .../jobdetail.ftl?job={id}` (HTML) | Thin server-rendered Taleo career-section connector, used when a wrapper page embeds a Taleo URL. No Taleo REST endpoint. |
+| `ats.career_site` | the source page, plus its `/sitemap.xml`/`/sitemap_index.xml` when needed | each harvested detail page (HTML) | Generic wrapper/funnel connector. Detects an embedded ATS host (Workday, iCIMS, ORC, Taleo, Eightfold, Phenom, Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR) and delegates listing/detail to that connector; otherwise harvests job-like links and sends detail HTML through the extraction pipeline (JSON-LD included). Does not use private APIs; a page with no public postings remains a single-URL source. |
 
 Connector contract (every connector MUST):
 
@@ -2312,10 +2330,11 @@ crawl:
   min_refetch_hours: 6
   block_backoff_hours: [6, 24, 72, 168]
 discovery:
-  auto_discover_interval_hours: 24 # cadence of the automatic pass
+  auto_discover_interval_minutes: 60 # pause between automatic passes (legacy auto_discover_interval_hours still read)
   max_new_sources_per_run: 200     # registration budget per pass
   max_crawl_sources_per_run: 60    # crawl budget per pass (stalest first, parallel)
   cursor_step: 12                  # index slices walked per pass
+  max_index_slices_per_day: 288    # daily ceiling shared by every pass (24 x 12)
   web_index_limit: 200             # tenant URLs requested per Common Crawl query
   web_index_cdx_limit: 10000       # tenant URLs requested per CDX query (one whole bucket)
   provider_timeout_s: 300          # call budget for one discovery provider
@@ -2324,7 +2343,7 @@ discovery:
   funnel_postings_per_pass: 50     # harvested posting-URL verifications per pass
   tier_intervals_s: [3600, 86400, 604800] # hot / warm / cold crawl cadence
 extraction:
-  order: [extract.public_api, extract.public_endpoint, extract.jsonld, extract.embedded_json,
+  order: [extract.public_endpoint, extract.jsonld, extract.embedded_json,
           extract.static_html, extract.rendered_dom, extract.generic, extract.partial]
   completeness: {require: [title, description, company], one_of: [location, workplace_type]}
 dedup:
@@ -2386,7 +2405,7 @@ Discovery interfaces, `SourceRegistry`, classifier, `PolicyHttpClient` (robots, 
 **Exit:** connector contract suites green; incremental crawl skips unchanged jobs; failing source isolated; not-seen/removal logic tested.
 
 ### Milestone 2 — Universal extraction
-SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. The connectors landed in M2; the tenant-key path now carries discovered Workday/iCIMS boards into `SourceConfig.ats_tenant_key`, and the seed bootstrap covers those subdomain-hosted boards (§6.2.2). Live discovery of the subdomain space (where most S&P 500 employers live) remains open.
+SmartRecruiters, Workday, iCIMS connectors; `jsonld`, `embedded_json`, `static_html`, `rendered_dom` (Playwright via `BrowserProvider`), `generic`, `public_endpoint`, `partial` strategies; ordered pipeline with per-source override; field-level merge and confidence; provenance in UI. The connectors landed in M2; the tenant-key path now carries discovered Workday/iCIMS boards into `SourceConfig.ats_tenant_key`, `discovery.domain_index` (§6.2.2) enumerates the subdomain space (where most S&P 500 employers live) in the daily rotation, and `discovery.oracle_recruiting` rotates Oracle HCM pods to find ORC career sites.
 **Exit:** unknown-ATS fixture sites yield complete or partial records; every strategy contract-tested; rendered DOM obeys robots/challenge rules.
 
 ### Milestone 3 — Search and job history

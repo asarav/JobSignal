@@ -169,11 +169,28 @@ class InMemoryCompanyRepository:
 
 
 class InMemoryJobRepository:
-    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+    def __init__(
+        self,
+        store: dict[str, dict[str, object]],
+        relations: list[dict[str, object]] | None = None,
+    ) -> None:
         self._store = store
-        self._relations: list[dict[str, object]] = []
+        # Shared across unit-of-work instances so relations survive a commit.
+        self._relations = relations if relations is not None else []
 
     async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None, updated_at_hint=None) -> None:
+        provenance = []
+        for entry in getattr(job, "provenance", ()) or ():
+            if hasattr(entry, "__dict__"):
+                provenance.append(dict(entry.__dict__))
+            elif hasattr(entry, "__slots__"):
+                provenance.append(
+                    {slot: getattr(entry, slot) for slot in entry.__slots__}
+                )
+        def scalar(name: str):
+            value = getattr(job, name, None)
+            return value.value if hasattr(value, "value") else value
+
         self._store[job_id] = {
             "id": job_id,
             "company_id": company_id,
@@ -185,7 +202,14 @@ class InMemoryJobRepository:
             "canonical_url": getattr(job, "canonical_url", None),
             "source_posting_id": getattr(job, "source_posting_id", None),
             "description_text": getattr(job, "description_text", ""),
+            "locations": getattr(job, "locations", []),
+            "workplace_type": scalar("workplace_type"),
+            "employment_type": scalar("employment_type"),
+            "seniority": scalar("seniority"),
+            "salary": getattr(job, "salary", None),
+            "posted_at": getattr(job, "posted_at", None),
             "posting_status": "active",
+            "provenance": provenance,
         }
 
     async def get(self, job_id: str) -> Mapping[str, object] | None:
@@ -223,6 +247,39 @@ class InMemoryJobRepository:
     async def list_relations(self, job_id):
         return [r for r in self._relations if r.get("job_id") == job_id or r.get("related_job_id") == job_id]
 
+    async def remove_relation(self, job_id, related_job_id, relation):
+        before = len(self._relations)
+
+        def matches(row: dict[str, object]) -> bool:
+            if row.get("relation") != relation:
+                return False
+            pair = (row.get("job_id"), row.get("related_job_id"))
+            return pair == (job_id, related_job_id) or pair == (
+                related_job_id,
+                job_id,
+            )
+
+        # Mutate in place: the list is shared with every unit of work.
+        self._relations[:] = [row for row in self._relations if not matches(row)]
+        return before - len(self._relations)
+
+    async def relation_job_ids(self):
+        ids: list[str] = []
+        for r in self._relations:
+            for key in (r.get("job_id"), r.get("related_job_id")):
+                if isinstance(key, str) and key not in ids:
+                    ids.append(key)
+        return ids
+
+    async def list_by_ids(self, job_ids):
+        wanted = {str(job_id) for job_id in job_ids if job_id}
+        return [j for jid, j in self._store.items() if jid in wanted]
+
+    async def touch(self, job_id, seen_at):
+        job = self._store.get(job_id)
+        if job is not None:
+            job["last_seen_at"] = seen_at
+
     async def list(self, *, company_id=None, source_id=None, limit=50, offset=0):
         items = list(self._store.values())
         if company_id:
@@ -231,9 +288,61 @@ class InMemoryJobRepository:
             items = [j for j in items if j.get("source_id") == source_id]
         return items[offset : offset + limit]
 
-    async def search(self, query, *, limit=50):
+    async def list_for_sources(self, source_ids, *, limit=50):
+        wanted = {str(source_id) for source_id in source_ids}
+        grouped: dict[str, list[dict[str, object]]] = {
+            source_id: [] for source_id in wanted
+        }
+        for job in self._store.values():
+            source_id = job.get("source_id")
+            if source_id in wanted and len(grouped[source_id]) < limit:
+                grouped[source_id].append(job)
+        return grouped
+
+    async def clear_provenance_note(self, job_id, note):
+        job = self._store.get(job_id)
+        if job is None:
+            return False
+        entries = job.get("provenance") or []
+        changed = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            notes = entry.get("notes")
+            if isinstance(notes, (list, tuple)) and note in notes:
+                entry["notes"] = [value for value in notes if value != note]
+                changed = True
+        return changed
+
+    async def search(self, query, *, limit=50, offset=0):
         q = query.lower()
-        return [j for j in self._store.values() if q in str(j.get("title", "")).lower()][:limit]
+        matches = [
+            j for j in self._store.values() if q in str(j.get("title", "")).lower()
+        ]
+        return matches[offset : offset + limit]
+
+    async def filtered_page(
+        self,
+        filters,
+        *,
+        query=None,
+        source_id=None,
+        company_id=None,
+        limit=50,
+        offset=0,
+    ):
+        from app.domain.services.hard_filters import apply_hard_filters
+
+        items = list(self._store.values())
+        if company_id:
+            items = [j for j in items if j.get("company_id") == company_id]
+        if source_id:
+            items = [j for j in items if j.get("source_id") == source_id]
+        if query:
+            q = query.lower()
+            items = [j for j in items if q in str(j.get("title", "")).lower()]
+        matches = apply_hard_filters(items, filters)
+        return matches[offset : offset + limit], len(matches)
 
     async def count(self) -> int:
         return len(self._store)
@@ -274,6 +383,98 @@ class InMemoryJobRepository:
                 j["last_seen_at"] = ts
                 changed += 1
         return changed
+
+
+class InMemoryDedupRepository:
+    """Fingerprint history and repost events kept in memory for tests."""
+
+    def __init__(
+        self,
+        fingerprints: list[dict[str, object]],
+        reposts: list[dict[str, object]],
+    ) -> None:
+        self._fingerprints = fingerprints
+        self._reposts = reposts
+
+    async def add_fingerprint(
+        self, job_id, fingerprint, *, snapshot_id=None, created_at=None
+    ) -> None:
+        self._fingerprints.append(
+            {
+                "job_id": job_id,
+                "snapshot_id": snapshot_id,
+                "company_id": fingerprint.company_id,
+                "url_key": fingerprint.url_key,
+                "ats_key": fingerprint.ats_key,
+                "title_key": fingerprint.title_key,
+                "title_family": fingerprint.title_family,
+                "location_key": fingerprint.location_key,
+                "desc_exact_hash": fingerprint.desc_exact_hash,
+                "desc_simhash64": fingerprint.desc_simhash64,
+                "desc_minhash": list(fingerprint.desc_minhash),
+                "department": fingerprint.department,
+                "salary_min": fingerprint.salary_min,
+                "posted_at": fingerprint.posted_at,
+                "source_posting_id": fingerprint.source_posting_id,
+                "source_id": fingerprint.source_id,
+                "required_skills_json": list(fingerprint.req_skills),
+                "preferred_skills_json": [],
+                "canonical_url": "",
+                "salary_json": None,
+                "created_at": created_at,
+            }
+        )
+
+    async def candidate_fingerprints(self, company_id, *, limit=200):
+        latest: dict[str, dict[str, object]] = {}
+        for row in self._fingerprints:
+            if row.get("company_id") != company_id:
+                continue
+            job_id = str(row.get("job_id"))
+            current = latest.get(job_id)
+            if current is None or str(row.get("created_at")) >= str(
+                current.get("created_at")
+            ):
+                latest[job_id] = row
+        rows = sorted(
+            latest.values(), key=lambda row: str(row.get("created_at")), reverse=True
+        )
+        return rows[:limit]
+
+    async def add_repost_event(
+        self,
+        *,
+        job_id,
+        previous_alias_id,
+        new_alias_id,
+        detected_at,
+        repost_class,
+        confidence,
+        url_changed=False,
+        ats_id_changed=False,
+        posted_date_reset=False,
+        material=False,
+        evidence=(),
+    ) -> None:
+        self._reposts.append(
+            {
+                "id": f"repost_{len(self._reposts) + 1}",
+                "job_id": job_id,
+                "previous_alias_id": previous_alias_id,
+                "new_alias_id": new_alias_id,
+                "detected_at": detected_at,
+                "class": repost_class,
+                "confidence": float(confidence),
+                "url_changed": 1 if url_changed else 0,
+                "ats_id_changed": 1 if ats_id_changed else 0,
+                "posted_date_reset": 1 if posted_date_reset else 0,
+                "material": 1 if material else 0,
+                "evidence_json": list(evidence),
+            }
+        )
+
+    async def list_repost_events(self, job_id):
+        return [row for row in self._reposts if row.get("job_id") == job_id]
 
 
 class InMemoryObservationRepository:
@@ -366,6 +567,13 @@ class InMemoryAliasRepository:
         entry = self._store.get(alias_url)
         return str(entry["job_id"]) if entry else None
 
+    async def remove(self, job_id: str, alias_url: str) -> bool:
+        entry = self._store.get(alias_url)
+        if entry is None or str(entry.get("job_id")) != job_id:
+            return False
+        del self._store[alias_url]
+        return True
+
     async def list_for_job(self, job_id: str):
         return [a for a in self._store.values() if a["job_id"] == job_id]
 
@@ -385,6 +593,11 @@ class InMemoryUnitOfWork:
         snapshots=None,
         aliases=None,
         search_profiles=None,
+        resumes=None,
+        matches=None,
+        fingerprints=None,
+        reposts=None,
+        relations=None,
     ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
@@ -397,13 +610,16 @@ class InMemoryUnitOfWork:
         self._crawl_runs_store = crawl_runs if crawl_runs is not None else {}
         self._snapshots_store = snapshots if snapshots is not None else []
         self._aliases_store = aliases if aliases is not None else {}
+        self._fingerprints_store = fingerprints if fingerprints is not None else []
+        self._reposts_store = reposts if reposts is not None else []
+        self._relations_store = relations if relations is not None else []
         self._search_profiles_store = search_profiles if search_profiles is not None else {}
-        self.jobs = InMemoryJobRepository(self._jobs_store)
+        self.jobs = InMemoryJobRepository(self._jobs_store, self._relations_store)
         self.companies = InMemoryCompanyRepository(self._companies_store)
         self.applications = _Unimplemented()
         self.observations = InMemoryObservationRepository(self._observations_store)
-        self.resumes = InMemoryResumeRepository()
-        self.matches = InMemoryMatchRepository()
+        self.resumes = resumes if resumes is not None else InMemoryResumeRepository()
+        self.matches = matches if matches is not None else InMemoryMatchRepository()
         self.keywords = _Unimplemented()
         self.settings = InMemorySettingsRepository(self._settings_store)
         self.tasks = InMemoryTaskRepository(self._tasks_store)
@@ -412,6 +628,9 @@ class InMemoryUnitOfWork:
         self.crawl_runs = InMemoryCrawlRunRepository(self._crawl_runs_store)
         self.snapshots = InMemorySnapshotRepository(self._snapshots_store)
         self.aliases = InMemoryAliasRepository(self._aliases_store)
+        self.dedup = InMemoryDedupRepository(
+            self._fingerprints_store, self._reposts_store
+        )
         self.search_profiles = InMemorySearchProfileRepository(self._search_profiles_store)
         self.committed = False
 
@@ -439,7 +658,12 @@ class InMemoryUnitOfWorkFactory:
         self.crawl_runs: dict[str, dict[str, object]] = {}
         self.snapshots: list[dict[str, object]] = []
         self.aliases: dict[str, dict[str, object]] = {}
+        self.fingerprints: list[dict[str, object]] = []
+        self.reposts: list[dict[str, object]] = []
+        self.relations: list[dict[str, object]] = []
         self.search_profiles: dict[str, SearchProfile] = {}
+        self.resumes = InMemoryResumeRepository()
+        self.matches = InMemoryMatchRepository()
 
     def __call__(self) -> InMemoryUnitOfWork:
         return InMemoryUnitOfWork(
@@ -455,6 +679,11 @@ class InMemoryUnitOfWorkFactory:
             self.snapshots,
             self.aliases,
             self.search_profiles,
+            self.resumes,
+            self.matches,
+            self.fingerprints,
+            self.reposts,
+            self.relations,
         )
 
 
@@ -486,21 +715,50 @@ class InMemoryResumeRepository:
         self._files = {}
         self._versions = {}
         self._skills = {}
+        self._experience = {}
+        self._education = {}
+        self._items = {}
+        self._statuses = {}
 
     async def add_profile(self, profile_id, display_name):
-        self._profiles[profile_id] = {"id": profile_id, "display_name": display_name, "active_resume_version_id": None, "overrides_json": "{}"}
+        self._profiles[profile_id] = {"id": profile_id, "display_name": display_name, "active_resume_version_id": None, "contact_json": "{}", "overrides_json": "{}"}
 
     async def get_profile(self, profile_id):
         return self._profiles.get(profile_id)
 
     async def add_resume_file(self, file_id, sha256, original_name, mime_type, size_bytes, stored_path):
-        self._files[file_id] = {"id": file_id, "sha256": sha256, "original_name": original_name}
+        self._files[file_id] = {"id": file_id, "sha256": sha256, "original_name": original_name, "stored_path": stored_path}
+
+    async def get_resume_file_by_sha256(self, sha256):
+        for row in self._files.values():
+            if row.get("sha256") == sha256:
+                return row
+        return None
 
     async def add_resume_version(self, version_id, profile_id, file_id, label, parser_id, parser_version, text_hash, parsed_json, parent_version_id=None, is_active=False):
-        self._versions[version_id] = {"id": version_id, "candidate_profile_id": profile_id, "resume_file_id": file_id, "label": label, "parser_id": parser_id, "text_hash": text_hash, "parsed_json": parsed_json, "is_active": is_active}
+        self._versions[version_id] = {"id": version_id, "candidate_profile_id": profile_id, "resume_file_id": file_id, "label": label, "parser_id": parser_id, "parser_version": parser_version, "text_hash": text_hash, "parsed_json": parsed_json, "parent_version_id": parent_version_id, "is_active": is_active}
+
+    async def get_resume_file(self, file_id):
+        return self._files.get(file_id)
+
+    async def set_skill_status(self, profile_id, keyword_id, status):
+        self._statuses.setdefault(profile_id, {})[keyword_id] = status
+
+    async def get_skill_status(self, profile_id):
+        return dict(self._statuses.get(profile_id, {}))
 
     async def list_versions(self, profile_id):
-        return [v for v in self._versions.values() if v["candidate_profile_id"] == profile_id]
+        rows = []
+        for v in self._versions.values():
+            if v["candidate_profile_id"] != profile_id:
+                continue
+            row = dict(v)
+            f = self._files.get(v.get("resume_file_id"))
+            if f:
+                row["original_name"] = f.get("original_name")
+                row["stored_path"] = f.get("stored_path")
+            rows.append(row)
+        return rows
 
     async def set_active(self, profile_id, version_id):
         for v in self._versions.values():
@@ -513,15 +771,38 @@ class InMemoryResumeRepository:
         return self._versions.get(version_id)
 
     async def save_skills(self, version_id, skills):
-        self._skills[version_id] = skills
+        self._skills[version_id] = [dict(skill) for skill in skills]
 
     async def get_skills(self, version_id):
-        return [{"keyword_id": s[0], "evidence": s[1], "confidence": s[2]} for s in self._skills.get(version_id, [])]
+        return [dict(row) for row in self._skills.get(version_id, [])]
+
+    async def save_experience(self, version_id, entries):
+        self._experience[version_id] = [dict(entry) for entry in entries]
+
+    async def get_experience(self, version_id):
+        return [dict(row) for row in self._experience.get(version_id, [])]
+
+    async def save_education(self, version_id, entries):
+        self._education[version_id] = [dict(entry) for entry in entries]
+
+    async def get_education(self, version_id):
+        return [dict(row) for row in self._education.get(version_id, [])]
+
+    async def save_profile_items(self, version_id, kind, items):
+        self._items[(version_id, kind)] = [dict(item) for item in items]
+
+    async def get_profile_items(self, version_id, kind):
+        return [dict(row) for row in self._items.get((version_id, kind), [])]
 
     async def update_overrides(self, profile_id, overrides):
         import json
         if profile_id in self._profiles:
             self._profiles[profile_id]["overrides_json"] = json.dumps(overrides)
+
+    async def update_contact(self, profile_id, contact):
+        import json
+        if profile_id in self._profiles:
+            self._profiles[profile_id]["contact_json"] = json.dumps(contact)
 
     async def get_overrides(self, profile_id):
         import json
@@ -537,12 +818,52 @@ class InMemoryResumeRepository:
 class InMemoryMatchRepository:
     def __init__(self):
         self._results = []
+        self._dimensions = {}
+        self._explanations = {}
+        self._weights = {}
 
-    async def save_result(self, result_id, job_id, profile_id, resume_version_id, model_id, model_version, weights, input_hash, fit_score, dimension_coverage, dimensions, evaluated_at):
-        self._results.append({"id": result_id, "job_id": job_id, "candidate_profile_id": profile_id, "fit_score": fit_score, "dimension_coverage": dimension_coverage})
+    async def save_result(self, result_id, job_id, profile_id, resume_version_id, model_id, model_version, weights, input_hash, fit_score, dimension_coverage, dimensions, evaluated_at, explanations=None):
+        self._results.append({
+            "id": result_id, "job_id": job_id, "candidate_profile_id": profile_id,
+            "resume_version_id": resume_version_id, "model_id": model_id,
+            "model_version": model_version, "weights_json": __import__("json").dumps(weights),
+            "input_hash": input_hash, "fit_score": fit_score,
+            "dimension_coverage": dimension_coverage, "evaluated_at": evaluated_at,
+            "job_title": None, "company_name": None,
+        })
+        self._dimensions[result_id] = [dict(dimension) for dimension in dimensions]
+        self._explanations[result_id] = [dict(item) for item in (explanations or [])]
 
     async def list_results(self, profile_id, limit=50):
-        return [r for r in self._results if r["candidate_profile_id"] == profile_id][:limit]
+        rows = [r for r in self._results if r["candidate_profile_id"] == profile_id]
+        rows.sort(key=lambda r: (-float(r.get("fit_score") or 0), str(r.get("evaluated_at") or "")))
+        return rows[:limit]
 
-    async def update_weights(self, profile_id, weights):
+    async def find_result(self, profile_id, job_id, input_hash):
+        for row in self._results:
+            if (row["candidate_profile_id"] == profile_id and row["job_id"] == job_id
+                    and row["input_hash"] == input_hash):
+                return row
         return None
+
+    async def delete_results(self, profile_id, job_id):
+        keep = []
+        for row in self._results:
+            if row["candidate_profile_id"] == profile_id and row["job_id"] == job_id:
+                self._dimensions.pop(row["id"], None)
+                self._explanations.pop(row["id"], None)
+                continue
+            keep.append(row)
+        self._results = keep
+
+    async def list_dimensions(self, result_id):
+        return list(self._dimensions.get(result_id, []))
+
+    async def list_explanations(self, result_id):
+        return list(self._explanations.get(result_id, []))
+
+    async def get_weights(self, profile_id):
+        return self._weights.get(profile_id)
+
+    async def set_weights(self, profile_id, weights):
+        self._weights[profile_id] = dict(weights)

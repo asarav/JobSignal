@@ -47,6 +47,15 @@ def test_normalize_title_strips_punctuation():
     assert normalize_title("Senior Backend Engineer (Remote)") == "senior backend engineer remote"
 
 
+def test_normalize_title_folds_accents_without_splitting_words():
+    assert normalize_title("Analyste de systèmes cliniques") == "analyste de systemes cliniques"
+    assert title_family(normalize_title("Ingénieur systèmes")) == "ingenieur systemes"
+
+
+def test_normalize_title_keeps_non_latin_letters():
+    assert normalize_title("Разработчик Python") == "разработчик python"
+
+
 def test_title_family_ignores_seniority():
     assert title_family(normalize_title("Senior Backend Engineer")) == "backend engineer"
     assert title_family(normalize_title("Backend Engineer")) == "backend engineer"
@@ -100,6 +109,27 @@ def test_normalize_job_extracts_supported_fields():
     assert job.company_ref.name == "acme"
     assert job.provenance[0].strategy_id == "normalize.v1"
     assert job.provenance[0].source_id == "s1"
+
+
+def test_workplace_inferred_from_merged_locations_field():
+    # Extraction merges fields into a new payload, so the normalizer sees the
+    # plural ``locations`` rather than the connector's singular ``location``.
+    payload = {"locations": [{"raw": "Remote India"}]}
+    job = normalize_job(_raw(payload), _source(), company_name="acme", now=NOW)
+    assert job.workplace_type is WorkplaceType.REMOTE
+    assert job.locations[0].raw == "Remote India"
+
+
+def test_workplace_inferred_from_merged_locations_hybrid():
+    payload = {"locations": [{"raw": "Budapest, Hungary (Hybrid)"}]}
+    job = normalize_job(_raw(payload), _source(), company_name="acme", now=NOW)
+    assert job.workplace_type is WorkplaceType.HYBRID
+
+
+def test_explicit_workplace_wins_over_location_text():
+    payload = {"workplaceType": "onsite", "locations": [{"raw": "Remote"}]}
+    job = normalize_job(_raw(payload), _source(), company_name="acme", now=NOW)
+    assert job.workplace_type is WorkplaceType.ONSITE
 
 
 def test_normalize_job_marks_missing_fields_partial():

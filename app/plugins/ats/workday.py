@@ -20,6 +20,7 @@ from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpRequest
 from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
+from app.plugins.ats.schema import listing_items
 
 #: Workday board URLs begin with the locale (``en-US``, ``fr-CA``, ``ja``).
 _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[A-Za-z]{2,4})?$")
@@ -58,7 +59,7 @@ class WorkdayConnector:
             if not isinstance(response, Ok):
                 raise PortError(code="connector.fetch_failed", message="workday list failed")
             data = _json(response.value.body)
-            for posting in data.get("jobPostings", []):
+            for posting in listing_items(data, "jobPostings", ats="workday"):
                 path = posting.get("externalPath") or ""
                 yield RawJobRef(
                     source_id=source.id,
@@ -84,11 +85,21 @@ class WorkdayConnector:
             return response
         data = _json(response.value.body)
         info = data.get("jobPostingInfo") if isinstance(data.get("jobPostingInfo"), dict) else data
+        title = info.get("title")
         description = info.get("jobDescription")
+        if not title or not description:
+            # The CxS detail shape changed. Hand the public posting HTML to the
+            # extraction pipeline (JSON-LD/static HTML) instead of returning an
+            # empty posting that downstream would treat as a vanished job.
+            page = await ctx.http.send(HttpRequest(method="GET", url=ref.url))
+            if isinstance(page, Ok):
+                html = page.value.body.decode("utf-8", errors="replace")
+                return Ok(RawJob(ref=ref, title=None, body_text=None, body_html=html, payload={}))
+            return page
         return Ok(
             RawJob(
                 ref=ref,
-                title=info.get("title"),
+                title=title,
                 body_text=description,
                 body_html=description,
                 payload=info,

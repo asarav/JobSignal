@@ -6,7 +6,8 @@ import json
 from collections.abc import AsyncIterator
 
 import pytest
-from app.application.sources import run_crawl
+from app.application.config import AppConfig
+from app.application.sources import _refetch_allowed, run_crawl
 from app.domain.models.common import Ok
 from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpResponse
@@ -293,6 +294,124 @@ async def test_crawl_extracts_fields_from_html_through_the_pipeline():
         assert len(jobs) == 1
         assert jobs[0]["title"] == "Reliability Engineer"
         assert "Keep the platform healthy." in jobs[0]["description_text"]
+
+
+@pytest.mark.asyncio
+async def test_schema_drift_does_not_mark_jobs_removed():
+    """A renamed upstream field fails the crawl instead of wiping the source."""
+    from app.domain.models.common import PortError
+
+    class _DriftConnector(_StaticConnector):
+        async def list_jobs(self, source, ctx):
+            async def gen():
+                raise PortError(
+                    code="connector.schema_drift",
+                    message="listing response has no expected list",
+                )
+                yield  # pragma: no cover - defines an async generator
+
+            return gen()
+
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://boards.greenhouse.io/acme", kind="ats",
+        connector_id="ats.greenhouse", ats_tenant_key="acme",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    http = PolicyHttpClient(transport=FakeHttpClient())
+    await run_crawl(
+        source=source,
+        connector=_StaticConnector("Backend Engineer", "Body"),
+        uow_factory=factory,
+        http=http,
+        clock_now=clock.now,
+    )
+    clock.advance(25 * 3600)
+    stats = await run_crawl(
+        source=source,
+        connector=_DriftConnector("ignored", "ignored"),
+        uow_factory=factory,
+        http=http,
+        clock_now=clock.now,
+    )
+
+    assert "error" in stats
+    async with factory() as uow:
+        jobs = await uow.jobs.list()
+        assert [j.get("posting_status") for j in jobs] == ["active"]
+
+
+class _EmptyConnector(_StaticConnector):
+    async def list_jobs(self, source, ctx):
+        async def gen():
+            if False:  # pragma: no cover - keeps this an async generator
+                yield RawJobRef(source_id=source.id, url="https://example.com/none")
+
+        return gen()
+
+
+@pytest.mark.asyncio
+async def test_crawl_honours_the_configured_not_seen_threshold():
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://boards.greenhouse.io/acme", kind="ats",
+        connector_id="ats.greenhouse", ats_tenant_key="acme",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    http = PolicyHttpClient(transport=FakeHttpClient())
+    await run_crawl(
+        source=source,
+        connector=_StaticConnector("Backend Engineer", "Body"),
+        uow_factory=factory,
+        http=http,
+        clock_now=clock.now,
+    )
+
+    # Three consecutive successful full listings, spaced 25 h apart, are
+    # required here instead of the default two.
+    config = AppConfig(crawl={"not_seen_threshold": 3})
+    for _ in range(2):
+        clock.advance(25 * 3600)
+        await run_crawl(
+            source=source,
+            connector=_EmptyConnector("ignored", "ignored"),
+            uow_factory=factory,
+            http=http,
+            clock_now=clock.now,
+            config=config,
+        )
+        async with factory() as uow:
+            job = (await uow.jobs.list())[0]
+            assert job.get("posting_status") != "removed"
+
+    clock.advance(25 * 3600)
+    await run_crawl(
+        source=source,
+        connector=_EmptyConnector("ignored", "ignored"),
+        uow_factory=factory,
+        http=http,
+        clock_now=clock.now,
+        config=config,
+    )
+    async with factory() as uow:
+        assert (await uow.jobs.list())[0].get("posting_status") == "removed"
+
+
+def test_refetch_floor_is_read_from_the_crawl_config():
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 11, 21, 12, tzinfo=UTC)
+    config = AppConfig(crawl={"min_refetch_hours": 6})
+    assert _refetch_allowed({"fetched_at": "2026-11-21T10:00:00Z"}, now, config) is False
+    assert _refetch_allowed({"fetched_at": "2026-11-21T05:00:00Z"}, now, config) is True
 
 
 @pytest.mark.asyncio

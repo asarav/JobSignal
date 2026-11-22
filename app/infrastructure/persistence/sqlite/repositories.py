@@ -11,8 +11,12 @@ import aiosqlite
 
 from app.domain.models.candidate import SearchProfile
 from app.domain.models.enums import TaskStatus
+from app.domain.models.identity import JobFingerprintSet
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
+from app.domain.services.hard_filters import apply_hard_filters
+from app.domain.services.normalizer import normalize_title
+from app.infrastructure.persistence.sqlite.job_filters import compile_hard_filters
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -341,7 +345,7 @@ class SqliteJobRepository:
             fetched_at = job.fetched_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
             title = getattr(job, "title", "")
-            normalized_title = str(title).lower()
+            normalized_title = normalize_title(str(title))
             title_family = None
             description_text = getattr(job, "description_text", "")
             description_html = None
@@ -447,8 +451,63 @@ class SqliteJobRepository:
             params.append(source_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.extend([limit, offset])
-        cur = await self._conn.execute(f"SELECT * FROM jobs{where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?", tuple(params))
+        cur = await self._conn.execute(
+            f"SELECT * FROM jobs{where} ORDER BY last_seen_at DESC, id LIMIT ? OFFSET ?",
+            tuple(params),
+        )
         return [self._row(r) for r in await cur.fetchall()]
+
+    async def list_for_sources(self, source_ids, *, limit=50):
+        """Up to ``limit`` postings per source in one query per 500 sources."""
+        self._conn.row_factory = aiosqlite.Row
+        grouped: dict[str, list[dict[str, object]]] = {
+            str(source_id): [] for source_id in source_ids
+        }
+        wanted = [source_id for source_id in dict.fromkeys(source_ids) if source_id]
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            cur = await self._conn.execute(
+                f"SELECT * FROM jobs WHERE source_id IN ({placeholders}) "
+                "ORDER BY source_id, last_seen_at DESC",
+                tuple(chunk),
+            )
+            for row in await cur.fetchall():
+                bucket = grouped.setdefault(str(row["source_id"]), [])
+                if len(bucket) < limit:
+                    bucket.append(self._row(row))
+        return grouped
+
+    async def clear_provenance_note(self, job_id, note):
+        """Remove ``note`` from every provenance entry of a job."""
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT provenance_json FROM jobs WHERE id = ?", (job_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        try:
+            entries = json.loads(row["provenance_json"] or "[]")
+        except ValueError:
+            return False
+        if not isinstance(entries, list):
+            return False
+        changed = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            notes = entry.get("notes")
+            if isinstance(notes, list) and note in notes:
+                entry["notes"] = [value for value in notes if value != note]
+                changed = True
+        if not changed:
+            return False
+        await self._conn.execute(
+            "UPDATE jobs SET provenance_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(entries, default=str), self._ts(), job_id),
+        )
+        return True
 
     @staticmethod
     def _fts5_query(query: str) -> str:
@@ -464,17 +523,108 @@ class SqliteJobRepository:
             return ""
         return " AND ".join('"' + t.replace('"', '""') + '"' for t in terms)
 
-    async def search(self, query, *, limit=50):
+    async def search(self, query, *, limit=50, offset=0):
         self._conn.row_factory = aiosqlite.Row
         fts_query = self._fts5_query(query)
         if not fts_query:
             return []
         cur = await self._conn.execute(
             "SELECT jobs.* FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid "
-            "WHERE jobs_fts MATCH ? ORDER BY rank LIMIT ?",
-            (fts_query, limit),
+            "WHERE jobs_fts MATCH ? ORDER BY rank, jobs.rowid LIMIT ? OFFSET ?",
+            (fts_query, limit, offset),
         )
         return [self._row(r) for r in await cur.fetchall()]
+
+    async def filtered_page(
+        self,
+        filters,
+        *,
+        query=None,
+        source_id=None,
+        company_id=None,
+        limit=50,
+        offset=0,
+    ):
+        """Return ``(page, total)`` for hard filters, counted by SQLite.
+
+        Filters that depend on data not stored on a job row fall back to the
+        exhaustive Python scan, keeping the fast path from changing semantics.
+        """
+        compiled = compile_hard_filters(filters)
+        if compiled is None:
+            return await self._filtered_scan(
+                filters,
+                query=query,
+                source_id=source_id,
+                company_id=company_id,
+                limit=limit,
+                offset=offset,
+            )
+
+        conditions, params = compiled
+        if source_id:
+            conditions.append("jobs.source_id = ?")
+            params.append(source_id)
+        if company_id:
+            conditions.append("jobs.company_id = ?")
+            params.append(company_id)
+
+        if query:
+            fts_query = self._fts5_query(query)
+            if not fts_query:
+                return [], 0
+            from_sql = "FROM jobs_fts JOIN jobs ON jobs.rowid = jobs_fts.rowid"
+            conditions.insert(0, "jobs_fts MATCH ?")
+            params.insert(0, fts_query)
+            order = "ORDER BY rank, jobs.rowid"
+        else:
+            from_sql = "FROM jobs"
+            order = "ORDER BY jobs.last_seen_at DESC, jobs.id"
+
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        self._conn.row_factory = aiosqlite.Row
+        count_cur = await self._conn.execute(
+            f"SELECT COUNT(*) {from_sql}{where}", tuple(params)
+        )
+        count_row = await count_cur.fetchone()
+        total = int(count_row[0]) if count_row else 0
+        page_cur = await self._conn.execute(
+            f"SELECT jobs.* {from_sql}{where} {order} LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+        return [self._row(r) for r in await page_cur.fetchall()], total
+
+    async def _filtered_scan(
+        self, filters, *, query=None, source_id=None, company_id=None, limit=50, offset=0
+    ):
+        """Exhaustive, bounded-memory fallback for Python-only filters."""
+        page = []
+        total = 0
+        scan_offset = 0
+        while True:
+            if query:
+                batch = await self.search(query, limit=500, offset=scan_offset)
+            else:
+                batch = await self.list(
+                    source_id=source_id,
+                    company_id=company_id,
+                    limit=500,
+                    offset=scan_offset,
+                )
+            if not batch:
+                break
+            for row in apply_hard_filters(batch, filters):
+                if source_id and row.get("source_id") != source_id:
+                    continue
+                if company_id and row.get("company_id") != company_id:
+                    continue
+                if total >= offset and len(page) < limit:
+                    page.append(row)
+                total += 1
+            if len(batch) < 500:
+                break
+            scan_offset += len(batch)
+        return page, total
 
     def _row(self, row: aiosqlite.Row) -> dict[str, object]:
         """Return the job with its JSON columns decoded."""
@@ -507,6 +657,7 @@ class SqliteJobRepository:
             "content_hash": row["content_hash"],
             "first_seen_at": row["first_seen_at"],
             "last_seen_at": row["last_seen_at"],
+            "fetched_at": row["fetched_at"],
             "updated_at_hint": row["updated_at_hint"],
         }
 
@@ -585,6 +736,45 @@ class SqliteJobRepository:
             "SELECT * FROM job_relations WHERE job_id=? OR related_job_id=?", (job_id, job_id)
         )
         return [dict(r) for r in await cur.fetchall()]
+
+    async def remove_relation(self, job_id, related_job_id, relation):
+        """Remove a relation in either direction (merge/unmerge pairs)."""
+        cur = await self._conn.execute(
+            "DELETE FROM job_relations WHERE relation=? AND "
+            "((job_id=? AND related_job_id=?) OR (job_id=? AND related_job_id=?))",
+            (relation, job_id, related_job_id, related_job_id, job_id),
+        )
+        return cur.rowcount or 0
+
+    async def relation_job_ids(self):
+        """Every job id that appears on either side of a relation."""
+        cur = await self._conn.execute(
+            "SELECT job_id FROM job_relations UNION "
+            "SELECT related_job_id FROM job_relations"
+        )
+        return [str(row[0]) for row in await cur.fetchall()]
+
+    async def list_by_ids(self, job_ids):
+        self._conn.row_factory = aiosqlite.Row
+        wanted = [str(job_id) for job_id in dict.fromkeys(job_ids) if job_id]
+        if not wanted:
+            return []
+        out: list[dict[str, object]] = []
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            cur = await self._conn.execute(
+                f"SELECT * FROM jobs WHERE id IN ({placeholders})", tuple(chunk)
+            )
+            out.extend(self._row(row) for row in await cur.fetchall())
+        return out
+
+    async def touch(self, job_id, seen_at):
+        """Refresh ``last_seen_at`` for a repost/alias hit."""
+        await self._conn.execute(
+            "UPDATE jobs SET last_seen_at=? WHERE id=?",
+            (seen_at.strftime("%Y-%m-%dT%H:%M:%SZ"), job_id),
+        )
 
 
 class SqliteObservationRepository:
@@ -764,6 +954,122 @@ class SqliteSourceRepository:
         )
 
 
+class SqliteDedupRepository:
+    """Fingerprint history and repost events (spec §7.2 / §7.4)."""
+
+    def __init__(self, conn: aiosqlite.Connection, clock_now: Any) -> None:
+        self._conn = conn
+        self._now = clock_now
+
+    def _ts(self) -> str:
+        return self._now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def add_fingerprint(
+        self,
+        job_id: str,
+        fingerprint: JobFingerprintSet,
+        *,
+        snapshot_id: str | None,
+        created_at: datetime,
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO job_fingerprints(
+              job_id, snapshot_id, desc_exact_hash, desc_simhash64, desc_minhash,
+              title_key, location_key, algo_version, created_at, ats_key, url_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                snapshot_id,
+                fingerprint.desc_exact_hash,
+                fingerprint.desc_simhash64,
+                json.dumps(list(fingerprint.desc_minhash)).encode("utf-8"),
+                fingerprint.title_key,
+                fingerprint.location_key,
+                "fingerprints.v1",
+                created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                fingerprint.ats_key,
+                fingerprint.url_key,
+            ),
+        )
+
+    async def candidate_fingerprints(
+        self, company_id: str, *, limit: int = 200
+    ) -> Sequence[Mapping[str, object]]:
+        """Each recent job of the company with its latest fingerprint."""
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            """
+            SELECT jf.job_id, jf.desc_exact_hash, jf.desc_simhash64,
+                   jf.desc_minhash, jf.title_key, jf.location_key,
+                   jf.ats_key, jf.url_key, j.canonical_url, j.company_id,
+                   j.title_family, j.department, j.salary_json, j.posted_at,
+                   j.source_posting_id, j.source_id, j.required_skills_json,
+                   j.preferred_skills_json
+            FROM job_fingerprints AS jf
+            JOIN jobs AS j ON j.id = jf.job_id
+            WHERE j.company_id = ?
+              AND jf.created_at = (
+                SELECT MAX(created_at) FROM job_fingerprints WHERE job_id = jf.job_id
+              )
+            ORDER BY jf.created_at DESC
+            LIMIT ?
+            """,
+            (company_id, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+    async def add_repost_event(
+        self,
+        *,
+        job_id: str,
+        previous_alias_id: str | None,
+        new_alias_id: str | None,
+        detected_at: datetime,
+        repost_class: str,
+        confidence: float,
+        url_changed: bool = False,
+        ats_id_changed: bool = False,
+        posted_date_reset: bool = False,
+        material: bool = False,
+        evidence: Sequence[str] = (),
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO repost_events(
+              id, job_id, previous_alias_id, new_alias_id, detected_at, class,
+              confidence, url_changed, ats_id_changed, posted_date_reset,
+              material, evidence_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"repost_{uuid.uuid4().hex[:12]}",
+                job_id,
+                previous_alias_id,
+                new_alias_id,
+                detected_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                repost_class,
+                float(confidence),
+                1 if url_changed else 0,
+                1 if ats_id_changed else 0,
+                1 if posted_date_reset else 0,
+                1 if material else 0,
+                json.dumps(list(evidence)),
+            ),
+        )
+
+    async def list_repost_events(
+        self, job_id: str
+    ) -> Sequence[Mapping[str, object]]:
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            "SELECT * FROM repost_events WHERE job_id = ? ORDER BY detected_at DESC",
+            (job_id,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
 class SqliteSnapshotRepository:
     """Append-only snapshots: one row per observed content change."""
 
@@ -820,6 +1126,13 @@ class SqliteAliasRepository:
         )
         row = await cur.fetchone()
         return str(row["job_id"]) if row else None
+
+    async def remove(self, job_id, alias_url):
+        cur = await self._conn.execute(
+            "DELETE FROM job_aliases WHERE job_id = ? AND alias_url = ?",
+            (job_id, alias_url),
+        )
+        return bool(cur.rowcount)
 
     async def list_for_job(self, job_id):
         self._conn.row_factory = aiosqlite.Row

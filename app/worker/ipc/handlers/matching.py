@@ -19,9 +19,8 @@ class MatchingHandlers:
         return {"results": results}
 
     async def get_results(self, params: ResumeProfileParams) -> dict:
-        rows = await self._matching.get_results(params.profile_id)
-        return {"results": rows}
+        return await self._matching.get_results(params.profile_id)
 
     async def update_weights(self, params: MatchingWeightsParams) -> dict:
-        await self._matching.update_weights(params.profile_id, params.weights)
-        return {"ok": True}
+        weights = await self._matching.update_weights(params.profile_id, params.weights)
+        return {"ok": True, "weights": weights}

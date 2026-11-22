@@ -8,15 +8,119 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 5 — Resume and matching (in progress).**
+> **Current milestone: 6 — Relevance-ranked discovery funnel (complete).**
 > The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
 > from Milestone 0; sources, ATS connectors and crawls from Milestone 1;
 > the universal extraction pipeline from Milestone 2; search profiles, hard
-> filters, full-text search and job history from Milestone 3.
+> filters, full-text search, fingerprints, identity resolution, repost events
+> and the Seen/Duplicates view from Milestone 3.
 > Milestone 4 makes the app find jobs on its own: discovery enumerates career
 > sites from a public web index (no seed file, no user-added sources), and every
 > enabled source is crawled on its own persisted schedule within per-pass
 > budgets. See [`docs/how-discovery-works.md`](docs/how-discovery-works.md).
+> Milestone 5 imports resumes, extracts sections, contact details, experience,
+> education, certifications, projects, evidence-labelled skills and years of
+> experience, scores jobs with `fit.weighted_v1`, and exposes the ranking,
+> weights, skill-status and profile-editing UI.
+> Milestone 6 ranks crawl budget by relevance: harvested posting URLs are
+> verified with a single fetch through identity resolution, sources are tiered
+> hot/warm/cold from the candidate profile and hard filters, and a profile
+> change retiers immediately.
+
+## What Milestone 6 adds
+
+- **Index-harvested postings** (`discovery.funnel`): the same public-index
+  queries that find boards also yield posting URLs. Up to
+  `discovery.funnel_postings_per_pass` (50) are verified per pass with one
+  connector fetch and the normal extraction pipeline, then deduped against the
+  board listings by identity resolution. A verified posting is marked "via
+  index" until a full listing confirms it.
+- **Relevance tiers** (`app/application/tiers.py`, `app/domain/services/tiers.py`):
+  the active resume's skills, the user's target titles and search-profile hard
+  filters rank each source hot (every pass), warm (daily) or cold (weekly).
+  The effective interval is the tighter of the source's own schedule and its
+  tier, so a tier never crawls more often than its interval and disabling the
+  funnel restores plain due-based crawling. Only real tier transitions are
+  evented (`discovery.tier_changed`); clearing the profile removes stale tiers.
+- **Immediate retiering**: `resume.import`, `resume.set_active`,
+  `resume.update_overrides`, `resume.set_skill_status`,
+  `search_profiles.save` and `search_profiles.delete` recompute tiers and
+  resync the scheduler instead of waiting for the next discovery pass.
+- **Budget, not lever**: the funnel never raises the registration/crawl caps or
+  the global gate; index walks are also bounded per UTC day
+  (`discovery.max_index_slices_per_day`).
+- **Discover screen**: source rows show their tier and the reason for it; job
+  rows show "via index" provenance.
+
+## What Milestone 3 adds
+
+- **Fingerprints and identity resolution** (`app/domain/services/fingerprints.py`,
+  `app/domain/services/identity.py`, `app/application/dedup.py`): canonical URL
+  and ATS keys, normalized title/location, exact description hash, 64-bit
+  simhash and a 64-permutation MinHash. Ingestion resolves a posting it has
+  never seen against the same company's recent jobs and writes
+  `job_fingerprints` and `repost_events`.
+- **Repost behaviour**: the same job at a new URL/ATS id becomes an alias of
+  the existing job (`exact_duplicate`/`reposted_identical`); identical content
+  with a later `posted_at` also records `posted_date_reset`; a change above the
+  material threshold — including skills in the posting's requirements — becomes
+  a new snapshot of the same job (`materially_updated`); a merely similar
+  posting stays separate and gets a `similar` relation (`similar_distinct`).
+  Evidence and confidence are stored on every event.
+- **Manual merge/unmerge** (`jobs.merge` / `jobs.unmerge`): a merge records a
+  `user_merged` relation and aliases the duplicate URL to the primary; unmerge
+  removes both and records `user_unmerged`, which automation never reverses.
+- **History and Seen views**: `jobs.get_detail` returns the job with snapshots,
+  observations, relations and repost events; `/jobs/:id` renders it. `jobs.list_seen`
+  feeds `/seen` with removed postings and duplicates, including the related ids
+  needed to unmerge.
+
+## What Milestone 5 adds
+
+- **Resume import and versions** (`app/application/commands/resume.py`): PDF,
+  DOCX and TXT resumes are copied into a content-addressed store and parsed
+  into immutable resume versions on a candidate profile.
+- **Sectioner and entity extraction** (`app/domain/services/sectioner.py`):
+  sections (experience, education, skills, projects, certifications, summary,
+  contact), work-experience entries split by date ranges with employer/title and
+  bullets, education records (institution, degree, field, dates),
+  certification/project entries, contact details (stored but never used in
+  matching), and `years_experience_total` computed from merged, non-overlapping
+  date ranges. Records are persisted to `experience_records`,
+  `education_records` and `profile_items`.
+- **Skill evidence** (`app/domain/services/keywords.py`): taxonomy v1 mentions
+  are labelled `explicit_with_experience`, `explicit`, `inferred` or `limited`
+  (spec §10.3), each with the character spans that back it and, where a role
+  mentions it, merged `duration_years` and `recency_years`. Matching weights
+  skills by that evidence strength.
+- **Manual edits win.** Import merges into existing profile overrides instead
+  of replacing them, so a manually corrected value is not overwritten by a
+  later parse (spec §10.4). The Resume screen edits contact details, experience
+  entries and titles, records per-skill statuses, and adds skills the parser
+  missed; all of it is stored as overrides on top of immutable parser output.
+- **Matching** (`app/application/commands/matching.py`, `fit.weighted_v1`):
+  six dimensions (skills/resume, experience/seniority, responsibilities,
+  location/workplace, compensation, freshness). Skills use evidence and user
+  status; experience uses the seniority ladder, stated years and title overlap;
+  responsibilities use resume/job term overlap; location and compensation use
+  the saved job preferences; freshness uses posting-age decay. Unavailable
+  dimensions are excluded from the aggregate rather than scored zero, and
+  dimension coverage is reported with every result.
+- **IPC and UI**: `resume.import`, `resume.parse`, `resume.list_versions`,
+  `resume.get_profile`, `resume.set_active`, `resume.update_overrides`,
+  `resume.set_skill_status`, `keywords.extract`, `matching.run`,
+  `matching.get_results` and `matching.update_weights`, plus a Resume screen
+  for importing, listing versions, editing skill statuses and weights, and
+  reading fit dimensions and explanations.
+- **Weights and explanations**: the active weight set is stored in
+  `scoring_configurations` and used by the next run; per-dimension scores and
+  reason-level explanations are persisted and returned with results. An input
+  hash over the model, weights, resume version, overrides, skill statuses and
+  job snapshot makes unchanged results reusable and stale ones recompute.
+  Location/workplace, compensation, freshness, responsibilities and experience
+  now use real inputs instead of fixed baselines.
+
+See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works.md).
 
 ## What Milestone 4 adds
 
@@ -25,18 +129,61 @@ The repository is named `JobSignal` for historical reasons; the product is named
   indexes — Common Crawl's index server primary, the Internet Archive CDX API
   as fallback — with no API key, no bundled list, no user input. Each pass
   walks `discovery.cursor_step` (default 12) `(ATS host, leading-character
-  bucket)` slices in parallel, so coverage grows quickly every day and wraps
-  around to refresh. Each query asks for a whole block of rows (the CDX
+  bucket)` slices in parallel, so coverage grows with every pass (discovery
+  runs continuously, one bounded pass per interval) and wraps around to
+  refresh. Each query asks for a whole block of rows (the CDX
   fallback requests 10,000 — measured at ~13 s for a complete bucket), not a
   small sample. A pass whose slices are all unreachable is retried next pass
   (the rotation cursor is held). Design and trade-offs:
   [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
+- **Subdomain and path ATS discovery** (`app/plugins/discovery/domain_index.py`):
+  `discovery.domain_index` walks Workday, iCIMS, BambooHR and Eightfold tenants
+  with domain index queries and UKG Pro/Workable boards with prefix queries,
+  rebuilding each board URL from the captured URL — including Workday's
+  `{locale}/{site}`, which the hostname alone does not carry. Domain scans are
+  slow (40–90 s each), so a pass walks three rotating slices; a slice the
+  archive throttles is logged and re-walked when the rotation wraps. A new
+  tenant no longer waits for a seed refresh.
+- **UKG Pro (UltiPro) boards** (`app/plugins/ats/ultipro.py`): a board is
+  addressed as `recruiting.ultipro.com/{employer}/JobBoard/{id}`. The connector
+  reads the board's own unauthenticated `LoadSearchResults` listing (50-row
+  `Top`/`Skip` pages) and the posting JSON embedded in its detail page, and
+  `scripts/build_seed.py` verifies and harvests those boards like the
+  subdomain-based ATSs.
+- **Wrapped career sites and Big Tech** (`app/plugins/ats/`):
+  `ats.eightfold` reads the public Eightfold `apply/v2/jobs` listing and detail
+  APIs, and `ats.phenom` is a configurable `/widgets` adapter (endpoint
+  template plus field mapping) for Phenom tenants; both are validated live.
+  `ats.amazon` uses Amazon Jobs' public `search.json`; a thin `ats.taleo`
+  handles server-rendered Taleo career sections. Marketing wrappers (Beamery,
+  Radancy, Clinch, SmashFly and custom Phenom hosts) are not scraped
+  individually: `ats.career_site` detects the embedded Workday/iCIMS/ORC/
+  Taleo/Eightfold/Phenom URL in an iframe or apply link and delegates to that
+  connector. With no embedded ATS it harvests public job links from the page
+  and sitemap, then sends each detail page through the extraction pipeline.
+  Google and Meta have no connector against internal endpoints; their public
+  pages go through that same link/JSON-LD path, and stay manual-URL sources
+  when no public postings are exposed.
+- **Workable, BambooHR and Oracle Recruiting Cloud** (`app/plugins/ats/`):
+  `ats.workable` reads `apply.workable.com/api/v1/widget/accounts/{account}`
+  (with `details=true`, so one response carries descriptions); `ats.bamboohr`
+  reads `{company}.bamboohr.com/careers/list` plus one detail call per posting;
+  `ats.oracle_recruiting` pages Oracle's Candidate Experience
+  `recruitingCEJobRequisitions` finder and fetches `recruitingCEJobRequisitionDetails`.
+  Workable and BambooHR boards are enumerated by `discovery.domain_index`;
+  Oracle boards by `discovery.oracle_recruiting`, which rotates Oracle HCM
+  pods (a pod-scoped index query answers in 17–38 s) and rebuilds each
+  `{host}/hcmUI/CandidateExperience/{lang}/sites/{site}` board from the URL.
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships 1,460 boards, each confirmed live through its
-  own public ATS API and ordered largest-first by open postings (refreshed via
-  `scripts/build_seed.py`), so a cold install has something to crawl within
-  minutes while the web-index rotation fills in long-tail companies. Deleting
-  it does not stop discovery.
+  `discovery.ats_directory` ships 25,651 boards across nine ATSs (Greenhouse,
+  Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS and UKG
+  Pro/UltiPro), each
+  confirmed live through its own public ATS API and ordered largest-first by
+  open postings (refreshed via `scripts/build_seed.py`), so a cold install has
+  something to crawl within minutes while the web-index rotation fills in
+  long-tail companies. The seed covers those nine ATSs only; Eightfold and
+  Oracle Recruiting Cloud boards are found by live discovery.
+  Deleting the seed does not stop discovery.
 - **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
   every enabled provider for candidates, dedupes by canonical URL, registers
   up to `discovery.max_new_sources_per_run` new sources (connector from the
@@ -54,8 +201,9 @@ The repository is named `JobSignal` for historical reasons; the product is named
 - **Cadence and coverage survive restarts.** The last run time *and* the
   rotation cursor are stored in `app_settings` (`auto_discover_state`). The
   loop waits `AUTO_DISCOVER_STARTUP_DELAY_S` after launch, then checks every
-  five minutes whether a run is due (`discovery.auto_discover_interval_hours`,
-  default 24).
+  minute whether a run is due (`discovery.auto_discover_interval_minutes`,
+  default 60; the legacy `auto_discover_interval_hours` key still works when
+  minutes is unset).
 - **Crawl events.** Every triggered crawl records a `crawl_runs` row and
   publishes `crawl.completed` / `crawl.failed`, so new jobs flow straight into
   search profiles (hard filters apply to searches as in M3).
@@ -84,12 +232,10 @@ The repository is named `JobSignal` for historical reasons; the product is named
 
 ## Still not implemented
 
-These are **intentionally absent** in Milestone 4, and the IPC allowlist
-rejects them (there is a test for it):
+These are **intentionally absent** so far, and the IPC allowlist rejects them
+(there is a test for it):
 
-- Resume parsing, candidate profiles, keyword extraction — Milestone 5
-- Job matching, scoring, ranking, and saved jobs — Milestone 5
-- Relevance-ranked discovery funnel (job-URL harvesting, crawl tiers) — Milestone 6
+- Saved jobs — not part of the Milestone 6 deliverables
 - Application tracking, suppression, company intelligence, outcome analytics — Milestone 7
 - Ghost-job / posting-quality risk models — Milestone 8
 - Outcome feedback and analytics — Milestone 9
@@ -124,7 +270,8 @@ Where the discovery code lives:
 app/domain/services/     # classifier.py, normalizer.py  (pure domain logic)
 app/application/         # sources.py (registry + crawl runner), auto_discover.py,
                          # orchestration/scheduler.py, commands/
-app/plugins/ats/         # greenhouse/, ashby/, lever/, smartrecruiters, workday, icims
+app/plugins/ats/         # greenhouse/, ashby/, lever/, smartrecruiters, workday,
+                         # icims, eightfold, phenom, amazon, taleo, career_site
 app/plugins/discovery/   # web_index.py (seed-free enumeration), ats_directory.py (bootstrap)
 app/infrastructure/      # persistence (sources, jobs, snapshots, crawl runs)
 ```
@@ -345,6 +492,9 @@ retryable, details}`.
 | `sources.delete` | remove a source |
 | `jobs.list` | persisted jobs, optionally filtered by source or company |
 | `jobs.search` | full-text search over jobs (FTS5) |
+| `jobs.list_seen` | removed postings and duplicates, with reasons and related ids |
+| `jobs.get_detail` | job plus snapshots, observations, relations and repost events |
+| `jobs.merge` / `jobs.unmerge` | manual duplicate override (persisted, never auto-reversed) |
 | `crawl_runs.list` | crawl history with per-run stats |
 | `discovery.run` | crawl one source now, returning its stats |
 
@@ -401,9 +551,17 @@ constant scoring model, extraction strategy) live in `tests/support/`.
 - [`docs/adr/0002-m1-discovery.md`](docs/adr/0002-m1-discovery.md) — the M1
   discovery framework: source registry, normalizer v1, incremental crawls,
   append-only snapshots/aliases, stable company identity, and the scheduler.
+- [`docs/adr/0003-pdf-licensing.md`](docs/adr/0003-pdf-licensing.md) — PyMuPDF
+  is AGPL-or-commercial: the distribution gate, the plugin boundary, and the
+  permissive-parser alternative.
 - [`docs/adr/0004-m2-extraction.md`](docs/adr/0004-m2-extraction.md) — the M2
   extraction pipeline, field-level merge, rendered-DOM via an optional
   Playwright dependency, and the isolation shim for connectors.
+- [`docs/adr/0005-m4-automatic-discovery.md`](docs/adr/0005-m4-automatic-discovery.md)
+  and [`docs/adr/0006-relevance-ranked-discovery-funnel.md`](docs/adr/0006-relevance-ranked-discovery-funnel.md)
+  — seed-free discovery and the relevance-ranked funnel.
+- [`docs/adr/0007-interval-scheduling.md`](docs/adr/0007-interval-scheduling.md)
+  — persisted interval schedules (and why cron expressions are out of scope).
 
 ## CI
 

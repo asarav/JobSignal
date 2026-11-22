@@ -76,8 +76,10 @@ def _passes(job: Mapping[str, object], filters: Mapping[str, object]) -> bool:
     location = filters.get("location")
     if location:
         location = str(location).lower()
-        locations = _get_str_or_list(job.get("locations"))
-        locations = locations or _get_str_or_list(job.get("location")) or ""
+        # A job can list several places; match against all of them, not just
+        # the first, so a country/city in a secondary location still counts.
+        locations = _location_text(job.get("locations"))
+        locations = locations or _location_text(job.get("location"))
         if location not in locations.lower():
             return False
 
@@ -200,35 +202,23 @@ def _to_int(value: object) -> int | None:
     return None
 
 
-def _get_str_or_list(value: object) -> str | None:
-    """Return a string if the value is a string, otherwise return the
-    string representation of the first element of a list/set."""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (list, tuple)):
-        if len(value) > 0:
-            first = value[0]
-            if isinstance(first, str):
-                return first
-            if isinstance(first, Mapping):
-                return str(first)
-        return str(value) if len(value) > 0 else None
-    if isinstance(value, set):
-        items = list(value)
-        if items:
-            first = items[0]
-            if isinstance(first, str):
-                return first
-            if isinstance(first, Mapping):
-                return str(first)
-        return str(value) if len(items) > 0 else None
-    return str(value) if value is not None else None
+def _location_text(value: object) -> str:
+    """Flatten a location value of any shape into searchable text."""
+    if isinstance(value, Mapping):
+        return " ".join(str(item) for item in value.values() if item is not None)
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_location_text(item) for item in value)
+    return "" if value is None else str(value)
 
 
 def _salary_min(job: Mapping[str, object]) -> int | None:
     salary = job.get("salary")
     if isinstance(salary, Mapping):
-        value = salary.get("min_amount") or salary.get("minValue") or salary.get("min")
+        value = salary.get("min_amount")
+        if value is None:
+            value = salary.get("minValue")
+        if value is None:
+            value = salary.get("min")
         return _to_int(value)
     return None
 
@@ -236,6 +226,10 @@ def _salary_min(job: Mapping[str, object]) -> int | None:
 def _salary_max(job: Mapping[str, object]) -> int | None:
     salary = job.get("salary")
     if isinstance(salary, Mapping):
-        value = salary.get("max_amount") or salary.get("maxValue") or salary.get("max")
+        value = salary.get("max_amount")
+        if value is None:
+            value = salary.get("maxValue")
+        if value is None:
+            value = salary.get("max")
         return _to_int(value)
     return None

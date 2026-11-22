@@ -18,17 +18,28 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, cast
 
-from app.domain.models.common import Ok
+from app.application.dedup import (
+    build_fingerprint,
+    record_fingerprint,
+    record_repost_event,
+    related_candidate,
+    resolve_incoming,
+)
+from app.domain.models.common import Ok, Provenance
 from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.extraction import ExtractionTarget, MergedExtraction
+from app.domain.models.identity import JobFingerprintSet
+from app.domain.models.job import RawJobRef
 from app.domain.models.source import SourceConfig
 from app.domain.ports.connectors import JobSourceConnector
 from app.domain.ports.http import HttpClient
 from app.domain.ports.repositories import UnitOfWorkFactory
 from app.domain.services.classifier import classify_url
+from app.domain.services.fingerprints import simhash64
 from app.domain.services.normalizer import (
     company_id_for,
     company_name_for_source,
@@ -40,6 +51,9 @@ DEFAULT_CRAWL_INTERVAL_S = 3600.0
 
 #: Connector used when the classifier cannot recognise an ATS.
 FALLBACK_CONNECTOR_ID = "ats.career_site"
+
+#: Provenance strategy recorded on jobs verified from an index-harvested URL.
+FUNNEL_STRATEGY_ID = "discovery.funnel"
 
 
 class SourceRegistry:
@@ -153,6 +167,7 @@ async def run_crawl(
     pipeline: Any = None,
     invoker: Any = None,
     cancel: Any = None,
+    config: Any = None,
 ) -> dict[str, object]:
     """Run one source crawl and return its stats."""
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -211,7 +226,10 @@ async def run_crawl(
                 async with uow_factory() as _uow:
                     existing = await _uow.jobs.get(existing_id)
                 if existing is not None and existing.get("updated_at_hint") == ref.updated_at_hint:
-                    skip_fetch = True
+                    # ``crawl.min_refetch_hours`` is the floor between detail
+                    # fetches of an unchanged posting: a hint that still
+                    # matches is trustworthy only until it is worth re-checking.
+                    skip_fetch = _refetch_allowed(existing, clock_now(), config)
             if skip_fetch and existing_id is not None:
                 async with uow_factory() as _uow:
                     await _uow.observations.add(
@@ -253,6 +271,7 @@ async def run_crawl(
                 content_hash=content_hash,
                 now=clock_now(),
                 updated_at_hint=getattr(ref, "updated_at_hint", None),
+                config=config,
             )
             stats[outcome] = int(str(stats[outcome])) + 1
             seen_ids.append(job_id)
@@ -280,7 +299,14 @@ async def run_crawl(
     # create not_seen observations).
     if int(str(stats.get("errors", 0) or 0)) == 0:
         async with uow_factory() as uow:
-            removed = await uow.jobs.mark_not_seen(source.id, seen_ids, clock_now())
+            threshold, spacing_hours = _not_seen_policy(config)
+            removed = await uow.jobs.mark_not_seen(
+                source.id,
+                seen_ids,
+                clock_now(),
+                threshold=threshold,
+                min_spacing_hours=spacing_hours,
+            )
             stats["removed"] = removed
             await uow.crawl_runs.finish(
                 run_id, status="completed", finished_at=clock_now(), stats=stats
@@ -307,6 +333,121 @@ async def run_crawl(
     return stats
 
 
+async def verify_posting(
+    *,
+    source: SourceConfig,
+    connector: JobSourceConnector,
+    url: str,
+    source_posting_id: str | None = None,
+    uow_factory: UnitOfWorkFactory,
+    http: HttpClient,
+    clock_now: Any,
+    events: Any = None,
+    pipeline: Any = None,
+    invoker: Any = None,
+    cancel: Any = None,
+    config: Any = None,
+) -> str:
+    """Verify one harvested posting URL with a single fetch + extraction pass.
+
+    This is the funnel's cheap path: one connector detail request, the normal
+    extraction pipeline and the same ``_persist_job`` used by a full crawl, so
+    identity/fingerprint resolution dedupes the posting against any listing
+    that already knows it.  It never touches ``mark_not_seen``: a harvested
+    URL is not a listing, so it cannot prove that a job disappeared.
+
+    Returns ``new``, ``updated``, ``skipped`` or ``failed``.
+    """
+    now = clock_now()
+    run_id = f"verify_{uuid.uuid4().hex[:12]}"
+    ctx = ExecutionContext(
+        task_id=run_id,
+        clock=_ClockAdapter(clock_now),
+        http=http,
+        logger=_NullLogger(),
+        cancel=cancel if cancel is not None else CancellationToken(),
+        deadline=None,
+        config={},
+    )
+    ref = RawJobRef(
+        source_id=source.id, url=url, source_posting_id=source_posting_id
+    )
+    try:
+        result = await _call_connector(
+            invoker, source.connector_id, connector.fetch_job, ref, source, ctx
+        )
+        if not isinstance(result, Ok):
+            return "failed"
+        raw = result.value
+        merged = await _extract(raw, source, ctx, pipeline)
+        company_name = str(
+            merged.value("company_name") or company_name_for_source(source)
+        )
+        company_id = company_id_for(company_name)
+        job = normalize_job(
+            merged.raw, source, company_name=company_name, now=now
+        )
+        content_hash = content_hash_for(job.title, job.description_text)
+        provenance = Provenance(
+            source_id=source.id,
+            strategy_id=FUNNEL_STRATEGY_ID,
+            plugin_id=FUNNEL_STRATEGY_ID,
+            plugin_version="1.0.0",
+            url=url,
+            fetched_at=now,
+            content_hash=content_hash,
+            notes=("via_index",),
+        )
+        job = replace(job, provenance=(*job.provenance, provenance))
+        job_id, outcome = await _persist_job(
+            uow_factory=uow_factory,
+            job=job,
+            company_id=company_id,
+            company_name=company_name,
+            source=source,
+            content_hash=content_hash,
+            now=now,
+            # This fetch *is* the index path: it must not clear the marker it
+            # is about to set elsewhere.
+            via_index=True,
+            config=config,
+        )
+    except Exception as exc:  # noqa: BLE001 - one bad posting must not abort the pass
+        if events is not None:
+            events.publish(
+                "discovery.posting_failed",
+                {"source_id": source.id, "url": url, "error": str(exc)},
+                task_id=run_id,
+            )
+        return "failed"
+    if events is not None:
+        events.publish(
+            "discovery.posting_verified",
+            {
+                "source_id": source.id,
+                "url": url,
+                "job_id": job_id,
+                "outcome": outcome,
+                "via_index": True,
+            },
+            task_id=run_id,
+        )
+    return outcome
+
+
+def _has_identity_content(job: Any) -> bool:
+    """Whether a posting has enough content to compare safely.
+
+    An unreadable page is stored as a partial record keyed by its URL.  Its
+    placeholder "Untitled" title and empty description must never be treated as
+    a reason to merge it with a different unreadable posting.
+    """
+    return bool(job.description_text.strip()) or job.title.strip().lower() not in {
+        "",
+        "untitled",
+    }
+
+
 async def _persist_job(
     *,
     uow_factory: UnitOfWorkFactory,
@@ -317,12 +458,32 @@ async def _persist_job(
     content_hash: str,
     now: datetime,
     updated_at_hint: str | None = None,
+    via_index: bool = False,
+    config: Any = None,
 ) -> tuple[str, str]:
     """Store one normalized job.
 
     Returns ``(job_id, outcome)`` where outcome is ``new``, ``updated`` or
     ``skipped`` (the posting did not change since the last crawl).
+
+    A posting that is not already known by canonical URL, alias or
+    ``(source, source_posting_id)`` goes through identity resolution (§7.3):
+    the same job under a new URL/ATS id becomes an alias of the existing job
+    plus a ``repost_events`` row, a material change becomes a new snapshot of
+    it, and a merely similar posting is linked with a ``similar`` relation.
+
+    When a *full listing* finds the posting unchanged, any "via index" note
+    left by the funnel is cleared: the listing is the confirmation that badge
+    waits for.  ``via_index`` marks the funnel's own verification pass, which
+    must not clear it.
     """
+    fingerprint = build_fingerprint(
+        job,
+        company_id=company_id,
+        ats_id=source.connector_id,
+        tenant_key=source.ats_tenant_key,
+    )
+    thresholds, weights, material_delta = _dedup_policy(config)
     async with uow_factory() as uow:
         await uow.companies.upsert(company_id, company_name, normalized_name=company_name.lower())
         job_id = await uow.jobs.find_by_canonical_url(job.canonical_url)
@@ -337,11 +498,73 @@ async def _persist_job(
                     alias_source_id=source.id,
                     created_at=now,
                 )
+        if job_id is None:
+            # An alias recorded by an earlier repost already maps to its job.
+            job_id = await uow.aliases.find_by_url(job.canonical_url)
+
+        decision = None
+        previous: JobFingerprintSet | None = None
+        related_id: str | None = None
+        if job_id is None and _has_identity_content(job):
+            decision, candidates = await resolve_incoming(
+                uow,
+                fingerprint,
+                thresholds=thresholds,
+                weights=weights,
+                material_change_delta=material_delta,
+            )
+            related = related_candidate(decision, candidates)
+            if related is not None:
+                related_id = related.job_id
+                previous = related.fingerprint
+            if related is not None and decision.repost_class in (
+                "exact_duplicate",
+                "reposted_identical",
+            ):
+                # Same job, new URL/ATS id: attach the alias, record the
+                # event, and count the posting as seen without re-storing it.
+                job_id = related.job_id
+                await uow.aliases.add(
+                    job_id=job_id,
+                    alias_url=job.canonical_url,
+                    alias_source_id=source.id,
+                    created_at=now,
+                )
+                await uow.jobs.touch(job_id, now)
+                await uow.observations.add(
+                    job_id=job_id,
+                    source_id=source.id,
+                    observed_at=now,
+                    posting_status="active",
+                )
+                await record_repost_event(
+                    uow,
+                    job_id=job_id,
+                    decision=decision,
+                    incoming=fingerprint,
+                    previous=previous,
+                    now=now,
+                )
+                await uow.commit()
+                return job_id, "skipped"
+            if related is not None and decision.repost_class == "materially_updated":
+                # Same job, meaningfully changed: keep one job id and append
+                # the new snapshot below, with the new URL recorded as alias.
+                job_id = related.job_id
+                await uow.aliases.add(
+                    job_id=job_id,
+                    alias_url=job.canonical_url,
+                    alias_source_id=source.id,
+                    created_at=now,
+                )
+
         is_new = job_id is None
         is_material = True
         if job_id is not None:
             existing = await uow.jobs.get(job_id)
             if existing is not None and existing.get("content_hash") == content_hash:
+                if not via_index:
+                    await uow.jobs.clear_provenance_note(job_id, "via_index")
                 await uow.observations.add(
                     job_id=job_id,
                     source_id=source.id,
@@ -350,15 +573,10 @@ async def _persist_job(
                 )
                 await uow.commit()
                 return job_id, "skipped"
-            # material change assessment
             if existing is not None:
-                is_material = False
-                if existing.get("title") != job.title:
-                    is_material = True
-                elif existing.get("seniority") != job.seniority.value:
-                    is_material = True
-                elif existing.get("workplace_type") != job.workplace_type.value:
-                    is_material = True
+                is_material = _is_material_change(
+                    existing, job, previous, fingerprint, material_delta
+                )
         else:
             job_id = f"job_{uuid.uuid4().hex[:12]}"
 
@@ -390,8 +608,118 @@ async def _persist_job(
             observed_at=now,
             posting_status="active",
         )
+        await record_fingerprint(uow, job_id=job_id, fingerprint=fingerprint, now=now)
+        if decision is not None:
+            await record_repost_event(
+                uow,
+                job_id=job_id,
+                decision=decision,
+                incoming=fingerprint,
+                previous=previous,
+                now=now,
+            )
+            if decision.repost_class == "similar_distinct" and related_id is not None:
+                # Similar but distinct: never merged, only linked for review.
+                await uow.jobs.add_relation(
+                    job_id,
+                    related_id,
+                    "similar",
+                    confidence=float(decision.confidence),
+                    evidence=list(decision.evidence),
+                    created_by="auto",
+                )
         await uow.commit()
         return job_id, ("new" if is_new else "updated")
+
+
+def _dedup_policy(
+    config: Any,
+) -> tuple[dict[str, float] | None, dict[str, float] | None, float]:
+    """Dedup thresholds, weights and material delta from the typed config."""
+    dedup = getattr(config, "dedup", None)
+    if dedup is None:
+        return None, None, 0.10
+    thresholds = getattr(dedup, "thresholds", None)
+    threshold_map = {
+        key: float(getattr(thresholds, key))
+        for key in ("reposted_identical", "materially_updated", "similar_distinct")
+        if thresholds is not None and hasattr(thresholds, key)
+    }
+    weights = getattr(dedup, "weights", None)
+    weight_map = (
+        {str(key): float(value) for key, value in weights.items()}
+        if isinstance(weights, dict)
+        else None
+    )
+    delta = float(getattr(dedup, "material_change_jaccard_delta", 0.10))
+    return threshold_map or None, weight_map, delta
+
+
+#: Minimum spacing between the not-seen observations that count toward removal
+#: (two successful listings must be at least this far apart).
+NOT_SEEN_MIN_SPACING_HOURS = 24
+
+
+def _not_seen_policy(config: Any) -> tuple[int, int]:
+    """``crawl.not_seen_threshold`` and the fixed not-seen spacing."""
+    crawl = getattr(config, "crawl", None)
+    threshold = int(getattr(crawl, "not_seen_threshold", 2) or 2)
+    return max(1, threshold), NOT_SEEN_MIN_SPACING_HOURS
+
+
+def _refetch_allowed(existing: Any, now: datetime, config: Any) -> bool:
+    """Whether an unchanged hint may be trusted without another fetch.
+
+    A matching ``updated_at_hint`` means the ATS says nothing changed; the
+    posting is still re-fetched once the last fetch is older than
+    ``crawl.min_refetch_hours``, because some boards never bump the hint.
+    """
+    if not isinstance(existing, dict):
+        return False
+    fetched_at = existing.get("fetched_at") or existing.get("last_seen_at")
+    if not isinstance(fetched_at, str) or not fetched_at:
+        return True
+    crawl = getattr(config, "crawl", None)
+    min_hours = int(getattr(crawl, "min_refetch_hours", 6) or 6)
+    try:
+        fetched = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=now.tzinfo)
+    elapsed_hours = (now - fetched).total_seconds() / 3600.0
+    return elapsed_hours >= max(1, min_hours)
+
+
+def _is_material_change(
+    existing: Any,
+    job: Any,
+    previous: JobFingerprintSet | None,
+    incoming: JobFingerprintSet,
+    delta: float,
+) -> bool:
+    """Material-change assessment for an update (spec §7.3)."""
+    if previous is not None:
+        from app.domain.services.identity import is_material_change
+
+        return is_material_change(incoming, previous, delta)
+    if existing.get("title") != job.title:
+        return True
+    if existing.get("seniority") != job.seniority.value:
+        return True
+    if existing.get("workplace_type") != job.workplace_type.value:
+        return True
+    if existing.get("department") != job.department:
+        return True
+    old_description = str(existing.get("description_text") or "")
+    if old_description:
+        similarity = 1.0 - (
+            (simhash64(old_description) ^ (incoming.desc_simhash64 or 0)).bit_count()
+            / 64.0
+        )
+        if (1.0 - similarity) >= delta:
+            return True
+    return False
 
 
 async def _collect_refs(

@@ -11,6 +11,7 @@ from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpRequest
 from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
+from app.plugins.ats.schema import listing_items
 
 
 class GreenhouseConnector:
@@ -41,7 +42,7 @@ class GreenhouseConnector:
             if not isinstance(response, Ok):
                 raise PortError(code="connector.fetch_failed", message="greenhouse list failed")
             data = json.loads(response.value.body.decode("utf-8", errors="replace"))
-            for job in data.get("jobs", []):
+            for job in listing_items(data, "jobs", ats="greenhouse"):
                 yield RawJobRef(
                     source_id=source.id,
                     url=job.get("absolute_url") or f"{url}/{job.get('id')}",

@@ -44,6 +44,7 @@ class DiscoveryUseCase:
             events=self._container.events,
             pipeline=self._container.extraction_pipeline,
             invoker=self._registry.invoker,
+            config=self._container.config,
         )
 
     async def _registry_get(self, source_id: str) -> SourceConfig | None:

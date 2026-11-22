@@ -56,14 +56,19 @@ on the user, who would have to add sources whenever the list missed an employer.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine. As shipped, the
-   seed file is a **warm start**: 1,460 boards on the four ATS hosts whose
-   boards live at `host/{tenant}` — each confirmed live by asking the board's
-   own public ATS API (HTTP 200, including live boards that currently list no
-   postings) and written **largest-first by open postings**, because the
+   seed file is a **warm start**: 25,651 boards across nine ATSs — the five
+   fixed-host ATSs whose boards live at `host/{tenant}` (Greenhouse, Lever,
+   Ashby, SmartRecruiters and Workable), the subdomain-addressed Workday, iCIMS
+   and BambooHR boards, and path-addressed UKG Pro/UltiPro boards — each
+   confirmed live by asking the board's own public ATS API (HTTP 200, including
+   live boards that currently list no postings) and written **largest-first by
+   open postings**, because the
    cold-start warm-up registers at most `discovery.max_new_sources_per_run`
    per pass, so ordering decides which employers are reached first. It is
    regenerated via `scripts/build_seed.py` (`--refresh` re-verifies and
-   re-ranks without re-harvesting), so a cold install is useful within minutes
+   re-ranks without re-harvesting), which walks the bulk URL indexes in
+   filtered 10,000-row slices, re-walks a full slice as narrower buckets, and
+   checkpoints progress per slice, so a cold install is useful within minutes
    while the web-index rotation fills in long-tail companies. The file remains
    a bootstrap — discovery is the engine — and deleting it does not stop
    discovery.
@@ -126,3 +131,35 @@ on the user, who would have to add sources whenever the list missed an employer.
   (`DiscoveredSource.tenant_key`) passes it into `SourceConfig.ats_tenant_key`.
 - `crawl_runs.last_started_by_source()` was added so due selection does not
   need a new table or a schema migration.
+
+## Addendum (2026-11-21): live domain rotation
+
+The decision above deferred live enumeration of subdomain ATSs. That gap was
+real: a new Workday, iCIMS or UKG Pro tenant appeared only after regenerating
+the seed file. `discovery.domain_index` now closes it without depending on the
+seed:
+
+- **Domain mode** (`matchType=domain` + a leading-character `filter`) covers
+  Workday (`{tenant}.wd{N}.myworkdayjobs.com/{locale}/{site}`), iCIMS and
+  BambooHR. **Prefix mode** covers the fixed hosts `recruiting.ultipro.com` and
+  `apply.workable.com`. Each captured URL is parsed back into a valid board;
+  Workday's `{locale}/{site}` comes from the URL because the bare host answers
+  406.
+- **The cost is real.** Domain slices measured ~42 s (Workday) and ~50 s
+  (BambooHR); an iCIMS slice returned a 504 at 60 s. A pass therefore walks
+  three slices concurrently, with an 85 s timeout and **one** attempt, and logs
+  a failed slice for the next wrap. Unlike `discovery.web_index`, it never
+  holds the global cursor: a throttled archive must not stall the other
+  providers. The provider yields nothing instead of raising.
+- **Dedupe and noise.** Indexed asset/API paths (`/favicon.ico`,
+  `/wday/cxs/...`) are rejected, and Workday's `/{site}` and `/{locale}/{site}`
+  forms collapse to one board.
+- **Oracle Recruiting Cloud** uses its own pod rotation
+  (`discovery.oracle_recruiting`). Its tenants are subdomains of `fa.*` HCM
+  pods, the pods use wildcard certificates (so CT cannot enumerate tenants),
+  and a whole-domain query returns 504 — but a pod-scoped query answers in
+  17–38 s. Two pods are walked per pass, and the board is reconstructed from
+  the returned career-site URL.
+
+The seed builder's domain-chunk path remains for the warm start; it is no
+longer the only route to these tenants.
