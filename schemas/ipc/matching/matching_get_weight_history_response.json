@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "type": "string"
+    },
+    "weights": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
+    },
+    "versions": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id"
+  ],
+  "title": "MatchingGetWeightHistoryResponse",
+  "type": "object"
+}

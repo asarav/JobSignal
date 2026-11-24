@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "sample_size": {
+      "type": "integer"
+    },
+    "min_sample": {
+      "type": "integer"
+    },
+    "observed_closed": {
+      "type": "integer"
+    },
+    "buckets": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "proposal": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_size",
+    "min_sample",
+    "observed_closed"
+  ],
+  "title": "PostingIntelligenceGetCalibrationResponse",
+  "type": "object"
+}

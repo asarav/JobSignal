@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.application.container import Container
+from app.domain.models.fit_weight import FitWeightVersionRecord
 from app.domain.models.matching import ScoringConfig
 from app.domain.services.keywords import normalize_skill_ids
 from app.domain.services.matching import (
@@ -180,6 +181,20 @@ class MatchingUseCase:
     ) -> dict[str, float]:
         normalized = normalize_weights(weights)
         async with self._container.uow_factory() as uow:
+            stored = await uow.matches.get_weights(profile_id)
+            previous = normalize_weights(dict(stored or DEFAULT_WEIGHTS))
+            await uow.weight_versions.add(
+                FitWeightVersionRecord(
+                    id=f"fwt_{uuid.uuid4().hex[:16]}",
+                    profile_id=profile_id,
+                    weights=normalized,
+                    previous_weights=previous if stored else None,
+                    source="manual",
+                    created_by="user",
+                    created_at=self._container.clock.now(),
+                    evidence={},
+                )
+            )
             await uow.matches.set_weights(profile_id, normalized)
             await uow.commit()
         return normalized

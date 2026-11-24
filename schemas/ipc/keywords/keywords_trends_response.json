@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "type": "string"
+    },
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "bucket": {
+      "default": "month",
+      "type": "string"
+    },
+    "min_sample": {
+      "default": 10,
+      "type": "integer"
+    },
+    "keywords": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "periods": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "n_jobs": {
+      "default": 0,
+      "type": "integer"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "KeywordsTrendsResponse",
+  "type": "object"
+}

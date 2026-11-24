@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "window_days": {
+      "default": 365,
+      "type": "integer"
+    },
+    "applications": {
+      "default": 0,
+      "type": "integer"
+    },
+    "responded": {
+      "default": 0,
+      "type": "integer"
+    },
+    "not_responded": {
+      "default": 0,
+      "type": "integer"
+    },
+    "min_sample": {
+      "default": 20,
+      "type": "integer"
+    },
+    "min_per_side": {
+      "default": 5,
+      "type": "integer"
+    },
+    "min_gap": {
+      "default": 0.05,
+      "type": "number"
+    },
+    "weights": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
+    },
+    "associations": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "insufficient_evidence": {
+      "default": true,
+      "type": "boolean"
+    },
+    "proposal": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "latest_version": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id",
+    "generated_at"
+  ],
+  "title": "MatchingGetWeightProposalsResponse",
+  "type": "object"
+}

@@ -18,6 +18,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.application.dto import (
+    AnalyticsParams,
+    AnalyticsResult,
     ApplicationCreateParams,
     ApplicationEventParams,
     ApplicationInfo,
@@ -25,6 +27,12 @@ from app.application.dto import (
     ApplicationOutcomeParams,
     ApplicationStatusParams,
     AutoDiscoverResult,
+    BackupExportParams,
+    BackupExportResult,
+    BackupHistoryParams,
+    BackupHistoryResult,
+    BackupImportParams,
+    BackupImportResult,
     BrowserAutofillParams,
     BrowserCloseParams,
     BrowserFillReportResult,
@@ -36,12 +44,21 @@ from app.application.dto import (
     BrowserPlanParams,
     BrowserPlanResult,
     BrowserSessionResult,
+    CalibrationResult,
     CancelTaskParams,
+    CompanyDetailParams,
+    CompanyDetailResult,
     CompanyHistoryParams,
     CompanyHistoryResult,
+    CompanyListResult,
+    CompanyMergeHistoryParams,
+    CompanyMergeHistoryResult,
+    CompanyMergeParams,
+    CompanyMergeResult,
     CrawlRunListResult,
     DiscoveryRunParams,
     EmptyParams,
+    EndpointVerifyResult,
     FetchUrlParams,
     FetchUrlResult,
     HealthResult,
@@ -55,11 +72,25 @@ from app.application.dto import (
     JobSearchParams,
     JobUserStateParams,
     JobUserStateResult,
+    KeywordsBackfillParams,
+    KeywordsBackfillResult,
+    KeywordsCoverageParams,
+    KeywordsCoverageResult,
     KeywordsExtractParams,
     KeywordsExtractResult,
+    KeywordsPrevalenceParams,
+    KeywordsPrevalenceResult,
+    KeywordsTrendsParams,
+    KeywordsTrendsResult,
+    MatchingApplyWeightsParams,
+    MatchingApplyWeightsResult,
     MatchingResultsResult,
     MatchingRunParams,
     MatchingRunResult,
+    MatchingWeightHistoryParams,
+    MatchingWeightHistoryResult,
+    MatchingWeightProposalResult,
+    MatchingWeightProposalsParams,
     MatchingWeightsParams,
     MatchingWeightsResult,
     OkResult,
@@ -67,6 +98,16 @@ from app.application.dto import (
     PluginIdParams,
     PluginListResult,
     PluginOptionalIdParams,
+    PostingIntelligenceCompanyParams,
+    PostingIntelligenceCompanyResult,
+    PostingIntelligenceConfigParams,
+    PostingIntelligenceConfigResult,
+    PostingIntelligenceEvaluateParams,
+    PostingIntelligenceEvaluateResult,
+    PostingIntelligenceHistoryResult,
+    PostingIntelligenceSignalsResult,
+    RankedJobListResult,
+    RankedJobParams,
     RestoreSuppressedJobParams,
     ResumeImportParams,
     ResumeImportResult,
@@ -170,6 +211,13 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("system.hello", HelloParams, HelloResult),
     MethodSpec("system.health", EmptyParams, HealthResult),
     MethodSpec("system.shutdown", EmptyParams, OkResult),
+    MethodSpec("system.export_backup", BackupExportParams, BackupExportResult),
+    MethodSpec("system.import_backup", BackupImportParams, BackupImportResult),
+    MethodSpec(
+        "system.get_backup_history",
+        BackupHistoryParams,
+        BackupHistoryResult,
+    ),
     MethodSpec("tasks.list", TaskFilter, TaskListResult),
     MethodSpec("tasks.cancel", CancelTaskParams, OkResult),
     MethodSpec("settings.get", EmptyParams, SettingsResult),
@@ -195,7 +243,16 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("jobs.unmerge", JobMergeParams, OkResult),
     MethodSpec("jobs.list_duplicates", EmptyParams, JobListResult),
     MethodSpec("jobs.list_seen", EmptyParams, JobListResult),
+    MethodSpec("jobs.ranked", RankedJobParams, RankedJobListResult),
+    MethodSpec("jobs.list_saved", EmptyParams, JobListResult),
     MethodSpec("jobs.get_detail", JobIdParams, JobDetailResult),
+    MethodSpec(
+        "jobs.verify_now",
+        JobIdParams,
+        EndpointVerifyResult,
+        long_running=True,
+        timeout_s=MATCHING_TIMEOUT_S,
+    ),
     # M5: resume + matching
     MethodSpec("resume.import", ResumeImportParams, ResumeImportResult),
     MethodSpec("resume.list_versions", ResumeProfileParams, ResumeVersionsResult),
@@ -208,7 +265,26 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
                timeout_s=MATCHING_TIMEOUT_S),
     MethodSpec("matching.get_results", ResumeProfileParams, MatchingResultsResult),
     MethodSpec("matching.update_weights", MatchingWeightsParams, MatchingWeightsResult),
+    MethodSpec(
+        "matching.get_weight_proposals",
+        MatchingWeightProposalsParams,
+        MatchingWeightProposalResult,
+    ),
+    MethodSpec(
+        "matching.apply_weight_proposal",
+        MatchingApplyWeightsParams,
+        MatchingApplyWeightsResult,
+    ),
+    MethodSpec(
+        "matching.get_weight_history",
+        MatchingWeightHistoryParams,
+        MatchingWeightHistoryResult,
+    ),
     MethodSpec("keywords.extract", KeywordsExtractParams, KeywordsExtractResult),
+    MethodSpec("keywords.prevalence", KeywordsPrevalenceParams, KeywordsPrevalenceResult),
+    MethodSpec("keywords.coverage", KeywordsCoverageParams, KeywordsCoverageResult),
+    MethodSpec("keywords.trends", KeywordsTrendsParams, KeywordsTrendsResult),
+    MethodSpec("keywords.backfill", KeywordsBackfillParams, KeywordsBackfillResult),
     MethodSpec("crawl_runs.list", EmptyParams, CrawlRunListResult),
     MethodSpec("discovery.run", DiscoveryRunParams, OkResult,
                timeout_s=DISCOVERY_TIMEOUT_S),
@@ -232,6 +308,7 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec(
         "applications.get_company_history", CompanyHistoryParams, CompanyHistoryResult
     ),
+    MethodSpec("applications.get_analytics", AnalyticsParams, AnalyticsResult),
     MethodSpec("applications.get_suppressions", EmptyParams, SuppressionListResult),
     MethodSpec(
         "applications.get_suppression_policy", EmptyParams, SuppressionPolicyResult
@@ -245,6 +322,16 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
         SuppressionPolicyResult,
     ),
     MethodSpec("jobs.set_user_state", JobUserStateParams, JobUserStateResult),
+    # M9: company breadth is read-only; merging is a separate, audited action.
+    MethodSpec("companies.list", EmptyParams, CompanyListResult),
+    MethodSpec("companies.get_detail", CompanyDetailParams, CompanyDetailResult),
+    MethodSpec("companies.merge", CompanyMergeParams, CompanyMergeResult),
+    MethodSpec("companies.unmerge", CompanyDetailParams, CompanyMergeResult),
+    MethodSpec(
+        "companies.get_merge_history",
+        CompanyMergeHistoryParams,
+        CompanyMergeHistoryResult,
+    ),
     # M7: headed browsing and reviewed autofill (never submits)
     MethodSpec("browser.open_job", BrowserOpenJobParams, BrowserSessionResult),
     MethodSpec("browser.inspect_form", BrowserInspectParams, BrowserFormResult),
@@ -254,13 +341,52 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     # submit themselves (§13.4.5). It cannot submit anything itself.
     MethodSpec("browser.handoff", BrowserHandoffParams, BrowserHandoffResult),
     MethodSpec("browser.close_session", BrowserCloseParams, OkResult),
+    # M8: posting intelligence reads append-only history and never
+    # touches the posting itself. Evaluation is queued: a daily pass can
+    # cover every active job.
+    MethodSpec(
+        "posting_intelligence.evaluate",
+        PostingIntelligenceEvaluateParams,
+        PostingIntelligenceEvaluateResult,
+        timeout_s=DISCOVERY_TIMEOUT_S,
+    ),
+    MethodSpec(
+        "posting_intelligence.get_signals",
+        JobIdParams,
+        PostingIntelligenceSignalsResult,
+    ),
+    MethodSpec(
+        "posting_intelligence.get_risk_history",
+        JobIdParams,
+        PostingIntelligenceHistoryResult,
+    ),
+    MethodSpec(
+        "posting_intelligence.get_company_assessment",
+        PostingIntelligenceCompanyParams,
+        PostingIntelligenceCompanyResult,
+    ),
+    MethodSpec(
+        "posting_intelligence.configure_model",
+        PostingIntelligenceConfigParams,
+        PostingIntelligenceConfigResult,
+    ),
+    MethodSpec(
+        "posting_intelligence.get_calibration",
+        EmptyParams,
+        CalibrationResult,
+    ),
 )
 
 MILESTONE_METHOD_NAMES: tuple[str, ...] = tuple(spec.method for spec in MILESTONE_METHODS)
 
-# Method prefixes that MUST remain absent until their milestone lands. The
-# negative test in CI asserts none appears in MILESTONE_METHOD_NAMES or Rust's
-# generated allowlist.
-#: ``browser.submit`` and ``browser.click`` must never appear: autofill can
-#: fill, and the user submits.
-FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = ("posting_intelligence.",)
+# Methods that must never exist. Autofill can fill; the user submits.
+# The negative test in CI asserts none appears in MILESTONE_METHOD_NAMES or
+# Rust's generated allowlist.
+FORBIDDEN_METHOD_PREFIXES: tuple[str, ...] = (
+    "browser.submit",
+    "browser.click",
+    "browser.press",
+    "browser.evaluate",
+    "browser.type",
+    "applications.submit",
+)

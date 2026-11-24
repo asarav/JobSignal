@@ -31,6 +31,113 @@ class TauriBridge implements WorkerBridge {
  * Lets `npm run dev` render the real screens without the Tauri shell. It is
  * never used inside the desktop app, and it is clearly labelled in the UI.
  */
+const PREVIEW_SAVED_KEY = "jobsignal.preview.saved.v1";
+const PREVIEW_POLICIES = new Set([
+  "show_all",
+  "deprioritize",
+  "hide_high_risk",
+  "require_evidence",
+]);
+
+function loadPreviewSaved(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(PREVIEW_SAVED_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistPreviewSaved(saved: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PREVIEW_SAVED_KEY, JSON.stringify([...saved]));
+  } catch {
+    // A blocked storage area only costs persistence, not the session.
+  }
+}
+
+/** Mirror of `credibility_factor` in app/domain/services/ranking.py. */
+function previewCredibilityFactor(
+  risk: number | null,
+  confidence: number | null,
+): number {
+  if (risk === null) return 1;
+  const conf = confidence ?? 0;
+  return Math.max(0, 1 - 0.5 * risk * Math.min(1, conf / 0.5));
+}
+
+/** Mirror of `rank_score`: only ``deprioritize`` reorders by credibility. */
+function previewRankScore(
+  fit: number | null,
+  risk: number | null,
+  confidence: number | null,
+  policy: string,
+): number | null {
+  if (fit === null) return null;
+  if (policy !== "deprioritize") return fit;
+  return fit * previewCredibilityFactor(risk, confidence);
+}
+
+function previewVisibility(
+  riskClass: string | null,
+  confidence: number | null,
+  policy: string,
+): "shown" | "hidden" {
+  if (!PREVIEW_POLICIES.has(policy) || riskClass === null) return "shown";
+  if (policy === "show_all" || policy === "deprioritize") return "shown";
+  const conf = confidence ?? 0;
+  if (policy === "hide_high_risk") {
+    return riskClass === "likely_inactive" && conf >= 0.5 ? "hidden" : "shown";
+  }
+  return riskClass === "likely_active" ? "shown" : "hidden";
+}
+
+/** Mirror of `explain` in app/domain/services/ranking.py. */
+function previewRankReasons(input: {
+  fit: number | null;
+  risk: number | null;
+  confidence: number | null;
+  riskLabel: string | null;
+  policy: string;
+  visibilityState: "shown" | "hidden";
+}): string[] {
+  const reasons: string[] = [];
+  if (input.fit === null) {
+    reasons.push(
+      "No fit score yet for this profile, so this row is ordered by recency.",
+    );
+  } else {
+    reasons.push(`Fit ${input.fit.toFixed(2)} (heuristic), weighted by your profile.`);
+  }
+  if (input.risk === null) {
+    reasons.push("Not assessed for posting risk yet.");
+  } else {
+    const evidence = `confidence ${(input.confidence ?? 0).toFixed(2)}`;
+    const label = input.riskLabel ?? "posting risk";
+    reasons.push(`${label}: risk ${input.risk.toFixed(2)}, ${evidence}.`);
+    if (input.policy === "deprioritize" && input.visibilityState === "shown") {
+      const factor = previewCredibilityFactor(input.risk, input.confidence);
+      if (factor < 1) {
+        reasons.push(
+          `Moved down by the credibility policy (factor ${factor.toFixed(2)}); it is not hidden.`,
+        );
+      }
+    }
+  }
+  if (input.visibilityState === "hidden") {
+    reasons.push(
+      "Hidden by the active credibility policy; reachable with the toggle.",
+    );
+  }
+  return reasons;
+}
+
 class PreviewBridge implements WorkerBridge {
   readonly isPreview = true;
   private tasks: Array<Record<string, unknown>> = [];
@@ -39,6 +146,7 @@ class PreviewBridge implements WorkerBridge {
     previewVersion("preview-v1", "Sample resume (preview)", true, "sample"),
   ];
   private matchResults: Array<Record<string, unknown>> = [];
+  private savedJobs = new Set<string>(loadPreviewSaved());
   private overrides: Record<string, unknown> = {};
   private weights: Record<string, number> = {
     skills_resume: 0.35,
@@ -105,10 +213,88 @@ class PreviewBridge implements WorkerBridge {
       case "plugins.list":
         return response({ plugins: previewPlugins() });
       case "sources.list":
-        return response({ sources: [] });
+        return response({ sources: previewSources(), total: previewSources().length });
+      case "crawl_runs.list":
+        return response({ runs: previewCrawlRuns() });
       case "jobs.list":
       case "jobs.search":
-        return response({ jobs: previewJobs(), total: previewJobs().length });
+        return response({ jobs: this.jobSummaries(), total: this.jobSummaries().length });
+      case "jobs.ranked": {
+        const policy = String(params.ranking_policy ?? "deprioritize");
+        const all = this.rankedJobSummaries(policy);
+        const hiddenCount = all.filter((job) => job.hidden_by_policy === true).length;
+        const visible = all.filter(
+          (job) => params.include_hidden === true || job.hidden_by_policy !== true,
+        );
+        visible.sort((left, right) => {
+          const leftScore = typeof left.rank_score === "number" ? left.rank_score : null;
+          const rightScore = typeof right.rank_score === "number" ? right.rank_score : null;
+          if (leftScore === null && rightScore !== null) return 1;
+          if (rightScore === null && leftScore !== null) return -1;
+          if (leftScore !== null && rightScore !== null && leftScore !== rightScore) {
+            return rightScore - leftScore;
+          }
+          return String(left.title).localeCompare(String(right.title));
+        });
+        const offset = Number(params.offset ?? 0);
+        const limit = Number(params.limit ?? 50);
+        return response({
+          jobs: visible.slice(offset, offset + limit),
+          total: visible.length,
+          profile_id: "default",
+          policy,
+          window: all.length,
+          window_truncated: false,
+          hidden_by_policy: hiddenCount,
+          needs_attention: all.filter(
+            (job) =>
+              job.risk_class === "needs_verification" || job.risk_class === "likely_inactive",
+          ).length,
+          // Sample rows carry no first-seen timestamps, so every stored sample
+          // counts as new; the number still describes the whole sample corpus.
+          new_since: all.length,
+        });
+      }
+      case "jobs.list_saved": {
+        const jobs = this.savedJobSummaries();
+        return response({ jobs, total: jobs.length });
+      }
+      case "jobs.set_user_state": {
+        const jobId = String(params.job_id ?? "");
+        const state = String(params.state ?? "");
+        if (state === "saved") this.savedJobs.add(jobId);
+        else this.savedJobs.delete(jobId);
+        persistPreviewSaved(this.savedJobs);
+        return response({ job_id: jobId, state, hidden: false });
+      }
+      case "jobs.verify_now":
+        return response({ checked: 0, state: "skipped" });
+      case "posting_intelligence.get_signals": {
+        const jobId = String(params.job_id ?? "");
+        const job = previewJobs().find((row) => row.job_id === jobId && row.risk_class);
+        const assessment = job
+          ? {
+              class: job.risk_class,
+              risk: job.risk,
+              confidence: job.risk_confidence,
+              evidence_sufficiency: "limited",
+              evaluated_at: "2026-11-21T08:00:00Z",
+              model_version: "risk.heuristic_v1",
+            }
+          : null;
+        return response({
+          job_id: jobId,
+          assessment,
+          signals: job
+            ? [
+                { signal_id: "age_freshness", status: "present", risk: 0.02, missing_reason: null },
+                { signal_id: "endpoint_state", status: "missing", risk: null, missing_reason: "no endpoint check yet" },
+              ]
+            : [],
+        });
+      }
+      case "posting_intelligence.get_risk_history":
+        return response({ job_id: String(params.job_id ?? ""), changes: [] });
       case "jobs.list_seen":
         return response({ jobs: previewSeenJobs(), total: previewSeenJobs().length });
       case "jobs.list_duplicates":
@@ -247,6 +433,34 @@ class PreviewBridge implements WorkerBridge {
         });
         return response({ task_id: taskId });
       }
+      case "system.get_backup_history":
+        return response({
+          runs: [],
+          note: "Preview mode keeps no backup history.",
+        });
+      case "system.export_backup":
+        return response({
+          ok: true,
+          path: "backups/preview-backup.json",
+          checksum: "preview",
+          counts: {},
+          schema_version: 18,
+          created_at: "2026-01-01T00:00:00Z",
+        });
+      case "system.import_backup":
+        return {
+          v: 1,
+          type: "response",
+          id: "preview",
+          params: {},
+          ok: false,
+          error: {
+            code: "plugin.unavailable",
+            message: "Preview mode cannot restore a backup.",
+            retryable: false,
+            details: {},
+          },
+        };
       default:
         return {
           v: 1,
@@ -262,6 +476,43 @@ class PreviewBridge implements WorkerBridge {
           },
         };
     }
+  }
+
+  private jobSummaries(): Array<Record<string, unknown>> {
+    return previewJobs().map((job) => ({
+      ...job,
+      saved: this.savedJobs.has(String(job.job_id)),
+    }));
+  }
+
+  private savedJobSummaries(): Array<Record<string, unknown>> {
+    return this.jobSummaries().filter((job) => job.saved === true);
+  }
+
+  /** Fit and risk stay separate; the rank score follows the approved policy. */
+  private rankedJobSummaries(policy: string): Array<Record<string, unknown>> {
+    return this.jobSummaries().map((job) => {
+      const fit = typeof job.fit_score === "number" ? job.fit_score : null;
+      const risk = typeof job.risk === "number" ? job.risk : null;
+      const confidence =
+        typeof job.risk_confidence === "number" ? job.risk_confidence : null;
+      const riskClass = typeof job.risk_class === "string" ? job.risk_class : null;
+      const riskLabel = typeof job.risk_label === "string" ? job.risk_label : null;
+      const visibilityState = previewVisibility(riskClass, confidence, policy);
+      return {
+        ...job,
+        hidden_by_policy: visibilityState === "hidden",
+        rank_score: previewRankScore(fit, risk, confidence, policy),
+        rank_reasons: previewRankReasons({
+          fit,
+          risk,
+          confidence,
+          riskLabel,
+          policy,
+          visibilityState,
+        }),
+      };
+    });
   }
 
   async onEvent(handler: (event: Envelope) => void): Promise<UnlistenFn> {
@@ -372,16 +623,6 @@ function previewMatchResults(): Array<Record<string, unknown>> {
       ],
     },
     {
-      result_id: "preview-r2",
-      job_id: "preview-job-2",
-      job_title: "Platform Engineer",
-      company_name: "Beta",
-      fit_score: 0.61,
-      dimension_coverage: 0.8,
-      dimensions: [dimension("skills_resume", 0.6, 0.35)],
-      explanations: [],
-    },
-    {
       result_id: "preview-r3",
       job_id: "preview-job-3",
       job_title: "Data Engineer",
@@ -410,6 +651,18 @@ function previewJobs(): Array<Record<string, unknown>> {
       job_id: "preview-job-1",
       title: "Backend Engineer",
       company_id: "preview-co-acme",
+      company_name: "Acme",
+      location_text: "Berlin, Germany",
+      workplace_type: "remote",
+      salary_min: 80000,
+      salary_max: 105000,
+      salary_currency: "EUR",
+      fit_score: 0.78,
+      risk: 0.05,
+      risk_confidence: 0.82,
+      risk_class: "likely_active",
+      risk_label: "Recent activity, consistent description",
+      credibility: 0.95,
       canonical_url: "https://boards.greenhouse.io/acme/jobs/1",
       posting_status: "active",
       source_id: "preview-src-1",
@@ -420,6 +673,16 @@ function previewJobs(): Array<Record<string, unknown>> {
       job_id: "preview-job-2",
       title: "Platform Engineer",
       company_id: "preview-co-beta",
+      company_name: "Beta",
+      location_text: "London, UK",
+      workplace_type: "hybrid",
+      // Deliberately unassessed: no fit or risk may be shown as zero.
+      fit_score: null,
+      risk: null,
+      risk_confidence: null,
+      risk_class: null,
+      risk_label: null,
+      credibility: null,
       canonical_url: "https://jobs.lever.co/beta/2",
       posting_status: "active",
       source_id: "preview-src-2",
@@ -430,11 +693,108 @@ function previewJobs(): Array<Record<string, unknown>> {
       job_id: "preview-job-3",
       title: "Data Engineer",
       company_id: "preview-co-gamma",
+      company_name: "Gamma",
+      location_text: "Remote (EU)",
+      workplace_type: "remote",
+      salary_min: null,
+      salary_max: null,
+      salary_currency: null,
+      fit_score: 0.42,
+      risk: 0.82,
+      risk_confidence: 0.7,
+      risk_class: "likely_inactive",
+      risk_label: "Application page returned a closed message",
+      credibility: 0.18,
       canonical_url: "https://jobs.ashbyhq.com/gamma/3",
       posting_status: "active",
       source_id: "preview-src-3",
       provenance: ["extract.embedded_json"],
       via_index: false,
+    },
+    // Enough extra rows that the eight-row dashboard page is a slice of the
+    // whole set, so the headline aggregate cannot be mistaken for a page count.
+    ...Array.from({ length: 8 }, (_, index) => ({
+      job_id: `preview-job-${index + 4}`,
+      title: `Sample Engineer ${index + 1}`,
+      company_id: `preview-co-${index + 4}`,
+      company_name: `Sample Co ${index + 1}`,
+      location_text: "Remote (EU)",
+      workplace_type: "remote",
+      salary_min: null,
+      salary_max: null,
+      salary_currency: null,
+      fit_score: 0.5 - index * 0.02,
+      risk: 0.02,
+      risk_confidence: 0.6,
+      risk_class: "likely_active",
+      risk_label: "Recent activity",
+      credibility: 0.98,
+      canonical_url: `https://example.test/jobs/${index + 4}`,
+      posting_status: "active",
+      source_id: "preview-src-1",
+      provenance: ["extract.jsonld"],
+      via_index: false,
+    })),
+    {
+      // Ranked below the eight-row page, so the whole-corpus count must still
+      // include it.
+      job_id: "preview-job-12",
+      title: "Legacy Systems Engineer",
+      company_id: "preview-co-delta",
+      company_name: "Delta",
+      location_text: "Hamburg, Germany",
+      workplace_type: "onsite",
+      salary_min: null,
+      salary_max: null,
+      salary_currency: null,
+      fit_score: 0.31,
+      risk: 0.6,
+      risk_confidence: 0.45,
+      risk_class: "needs_verification",
+      risk_label: "Posting age and no strong evidence either way",
+      credibility: 0.4,
+      canonical_url: "https://example.test/jobs/12",
+      posting_status: "active",
+      source_id: "preview-src-2",
+      provenance: ["extract.static_html"],
+      via_index: false,
+    },
+  ];
+}
+
+function previewSources(): Array<Record<string, unknown>> {
+  return [
+    {
+      source_id: "preview-src-1",
+      url: "https://boards.greenhouse.io/acme",
+      kind: "ats",
+      enabled: true,
+      tier: "hot",
+      tier_reason: "Crawl succeeded 12 times",
+      last_crawled_at: "2026-11-21T08:00:00Z",
+    },
+    {
+      source_id: "preview-src-2",
+      url: "https://jobs.lever.co/beta",
+      kind: "ats",
+      enabled: true,
+      tier: "warm",
+      tier_reason: "One crawl error",
+      last_crawled_at: "2026-11-20T08:00:00Z",
+    },
+  ];
+}
+
+function previewCrawlRuns(): Array<Record<string, unknown>> {
+  return [
+    {
+      run_id: "preview-run-1",
+      source_id: "preview-src-1",
+      status: "completed",
+      started_at: "2026-11-21T07:55:00Z",
+      finished_at: "2026-11-21T08:00:00Z",
+      stats: { discovered: 12, new: 4 },
+      error: null,
     },
   ];
 }

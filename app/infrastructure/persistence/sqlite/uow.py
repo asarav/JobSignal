@@ -26,6 +26,16 @@ from app.infrastructure.persistence.sqlite.applications import (
     SqliteJobUserStateRepository,
     SqliteSuppressionRepository,
 )
+from app.infrastructure.persistence.sqlite.backups import (
+    SqliteBackupRunRepository,
+)
+from app.infrastructure.persistence.sqlite.company_identity import (
+    SqliteCompanyMergeRepository,
+    SqliteJobKeywordRepository,
+)
+from app.infrastructure.persistence.sqlite.intelligence import (
+    SqliteIntelligenceRepositories,
+)
 from app.infrastructure.persistence.sqlite.migrator import apply_pragmas, migrate
 from app.infrastructure.persistence.sqlite.repositories import (
     SqliteAliasRepository,
@@ -45,6 +55,9 @@ from app.infrastructure.persistence.sqlite.repositories import (
 from app.infrastructure.persistence.sqlite.resume_match import (
     SqliteMatchRepository,
     SqliteResumeRepository,
+)
+from app.infrastructure.persistence.sqlite.weights import (
+    SqliteFitWeightRepository,
 )
 
 
@@ -73,6 +86,10 @@ class SqliteUnitOfWork:
         self.observations: ObservationRepository = _Unimplemented()  # type: ignore[assignment]
         self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
         self.matches = SqliteMatchRepository(self._conn, self._clock_now)
+        self.intelligence: Any = _Unimplemented()
+        self.company_merges: Any = _Unimplemented()
+        self.weight_versions: Any = _Unimplemented()
+        self.backups: Any = _Unimplemented()
         self.keywords: KeywordRepository = _Unimplemented()  # type: ignore[assignment]
         self.settings = None  # type: ignore[assignment]
         self.tasks = None  # type: ignore[assignment]
@@ -100,6 +117,11 @@ class SqliteUnitOfWork:
         self.job_user_state = SqliteJobUserStateRepository(self._conn, self._clock_now)
         self.resumes = SqliteResumeRepository(self._conn, self._clock_now)
         self.matches = SqliteMatchRepository(self._conn, self._clock_now)
+        self.intelligence = SqliteIntelligenceRepositories(self._conn)
+        self.company_merges = SqliteCompanyMergeRepository(self._conn)
+        self.keywords = SqliteJobKeywordRepository(self._conn)
+        self.weight_versions = SqliteFitWeightRepository(self._conn)
+        self.backups = SqliteBackupRunRepository(self._conn)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -123,6 +145,10 @@ class SqliteUnitOfWorkFactory:
     def __init__(self, db_path: Path, clock_now: Callable[[], Any]) -> None:
         self._db_path = db_path
         self._clock_now = clock_now
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
 
     async def initialize(self) -> int:
         """Apply pending migrations and return the resulting schema version."""

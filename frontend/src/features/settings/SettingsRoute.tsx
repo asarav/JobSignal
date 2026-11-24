@@ -80,15 +80,21 @@ export function SettingsRoute() {
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [backupRuns, setBackupRuns] = useState<Record<string, unknown>[]>([]);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [importPath, setImportPath] = useState("");
+  const [importConfirmed, setImportConfirmed] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [nextSettings, nextPlugins, nextSources] = await Promise.all([
+      const [nextSettings, nextPlugins, nextSources, nextBackups] = await Promise.all([
         workerClient.getSettings(),
         workerClient.listPlugins(),
         workerClient.listSources(),
+        workerClient.getBackupHistory({ limit: 10 }),
       ]);
+      setBackupRuns(nextBackups.runs ?? []);
       setSettings(nextSettings);
       setPlugins(nextPlugins.plugins);
       setSources(nextSources.sources);
@@ -108,6 +114,48 @@ export function SettingsRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const exportBackup = useCallback(async () => {
+    setBusy(true);
+    setBackupMessage(null);
+    try {
+      const result = await workerClient.exportBackup({});
+      setBackupMessage(`Saved ${result.path} (${result.checksum.slice(0, 12)}…)`);
+      await load();
+    } catch (exc) {
+      setBackupMessage(
+        exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [load]);
+
+  const importBackup = useCallback(async () => {
+    setBusy(true);
+    setBackupMessage(null);
+    try {
+      const result = await workerClient.importBackup({
+        path: importPath.trim(),
+        confirm: true,
+      });
+      const counts = result.counts ?? {};
+      const tables = Object.keys(counts).length;
+      const rows = Object.values(counts).reduce((total, value) => total + value, 0);
+      setBackupMessage(
+        result.verified
+          ? `Restored ${tables} tables (${rows} rows) and checked every row count.`
+          : "The restore did not verify; nothing was kept.",
+      );
+      await load();
+    } catch (exc) {
+      setBackupMessage(
+        exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [importPath, load]);
 
   const toggle = async (plugin: PluginsListResponsePluginInfo) => {
     setBusy(true);
@@ -557,6 +605,69 @@ export function SettingsRoute() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">
+          {Copy.settings.backup}
+          <InfoTip label={Copy.settings.backup}>{Copy.tooltips.backup}</InfoTip>
+        </h2>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void exportBackup()}
+            className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {Copy.settings.exportBackup}
+          </button>
+          {backupMessage ? (
+            <span className="text-xs text-slate-600">{backupMessage}</span>
+          ) : null}
+        </div>
+        <div className="mt-4 flex flex-col gap-2">
+          <label className="text-xs text-slate-500" htmlFor="backup-import-path">
+            {Copy.settings.importPath}
+          </label>
+          <input
+            id="backup-import-path"
+            type="text"
+            value={importPath}
+            placeholder="backups/jobsignal-backup-20260101T000000Z.json"
+            onChange={(event) => setImportPath(event.target.value)}
+            className="rounded border border-slate-300 px-2 py-1 font-mono text-sm"
+          />
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={importConfirmed}
+              onChange={(event) => setImportConfirmed(event.target.checked)}
+            />
+            {Copy.settings.importConfirm}
+          </label>
+          <button
+            type="button"
+            disabled={busy || !importConfirmed || importPath.trim() === ""}
+            onClick={() => void importBackup()}
+            className="self-start rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {Copy.settings.importBackup}
+          </button>
+        </div>
+        <h3 className="mt-4 text-sm font-semibold text-slate-900">
+          {Copy.settings.backupHistory}
+        </h3>
+        {backupRuns.length === 0 ? (
+          <p className="mt-2 text-xs text-slate-500">{Copy.settings.noBackups}</p>
+        ) : (
+          <ul className="mt-2 space-y-1 text-xs text-slate-600">
+            {backupRuns.map((run) => (
+              <li key={String(run.id)}>
+                {String(run.kind)} · {String(run.created_at)} · {String(run.path)}
+              </li>
+            ))}
+          </ul>
         )}
       </section>
     </div>

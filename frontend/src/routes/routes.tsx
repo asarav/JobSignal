@@ -1,10 +1,14 @@
 import { Route, Routes } from "react-router-dom";
 import { Copy } from "../copy/copy";
 import { ApplicationsRoute } from "../features/applications/ApplicationsRoute";
+import { CompaniesRoute } from "../features/companies/CompaniesRoute";
 import { DiagnosticsRoute } from "../features/diagnostics/DiagnosticsRoute";
 import { DiscoverRoute } from "../features/discover/DiscoverRoute";
 import { HomeRoute } from "../features/home/HomeRoute";
 import { JobDetailRoute } from "../features/jobs/JobDetailRoute";
+import { KeywordsRoute } from "../features/keywords/KeywordsRoute";
+import { PostingIntelligenceRoute } from "../features/posting-intelligence/PostingIntelligenceRoute";
+import { SavedRoute } from "../features/saved/SavedRoute";
 import { SeenRoute } from "../features/seen/SeenRoute";
 import { PlaceholderRoute } from "../features/placeholder/PlaceholderRoute";
 import { ResumeRoute } from "../features/resume/ResumeRoute";
@@ -54,15 +58,12 @@ export function AppRoutes() {
       <Route path="/" element={<HomeRoute />} />
       <Route path="/discover" element={<DiscoverRoute />} />
       <Route path="/search-profiles" element={<SearchRoute />} />
-      <Route path="/saved" element={<PlaceholderRoute screen="saved" />} />
+      <Route path="/saved" element={<SavedRoute />} />
       <Route path="/applications" element={<ApplicationsRoute />} />
-      <Route path="/companies" element={<PlaceholderRoute screen="companies" />} />
-      <Route path="/companies/:id" element={<PlaceholderRoute screen="companies" />} />
-      <Route
-        path="/posting-intelligence"
-        element={<PlaceholderRoute screen="postingIntelligence" />}
-      />
-      <Route path="/keywords" element={<PlaceholderRoute screen="keywords" />} />
+      <Route path="/companies" element={<CompaniesRoute />} />
+      <Route path="/companies/:id" element={<CompaniesRoute />} />
+      <Route path="/posting-intelligence" element={<PostingIntelligenceRoute />} />
+      <Route path="/keywords" element={<KeywordsRoute />} />
       <Route path="/resume" element={<ResumeRoute />} />
       <Route path="/seen" element={<SeenRoute />} />
       <Route path="/jobs/:id" element={<JobDetailRoute />} />

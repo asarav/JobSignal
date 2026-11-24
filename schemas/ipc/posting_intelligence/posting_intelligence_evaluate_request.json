@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "scope": {
+      "default": "active",
+      "enum": [
+        "active",
+        "all"
+      ],
+      "type": "string"
+    },
+    "limit": {
+      "default": 0,
+      "type": "integer"
+    },
+    "refresh_endpoints": {
+      "default": false,
+      "type": "boolean"
+    },
+    "force": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "title": "PostingIntelligenceEvaluateRequest",
+  "type": "object"
+}

@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 20,
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "SystemGetBackupHistoryRequest",
+  "type": "object"
+}

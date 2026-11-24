@@ -25,9 +25,10 @@ export const Copy = {
     searchProfiles: "Search your job database and save reusable filters.",
     saved: "Jobs you saved. Not available in this build.",
     applications: "Applications you have sent and the roles they hide.",
-    companies: "Company history and hiring activity. Not available in this build.",
+    companies:
+      "Company history and hiring activity, including merges of the same employer.",
     postingIntelligence: "Repost and posting-quality signals. Not available in this build.",
-    keywords: "Skill demand across postings. Not available in this build.",
+    keywords: "Skill demand across postings and how your profile covers it.",
     resume: "Import a resume, edit your profile and run job matching.",
     settings: "Sources, crawl schedules, feature flags and plugins.",
     diagnostics: "Worker health, tasks and recent events.",
@@ -47,11 +48,6 @@ export const Copy = {
     welcome:
       "The worker finds career sites on its own, crawls the boards that matter most, links reposts and duplicates, matches jobs against your resume and shows which source each posting came from. Everything stays on this computer.",
     notImplemented: "Not available in this build",
-    notImplementedList: [
-      "Posting-quality / ghost-job risk signals",
-      "Company history and hiring activity",
-      "Skill demand across postings",
-    ],
     health: "Worker health",
     version: "App version",
   },
@@ -79,6 +75,14 @@ export const Copy = {
     enable: "Enable",
     disable: "Disable",
     loadError: "Could not load settings.",
+    backup: "Backup and restore",
+    exportBackup: "Export a backup",
+    importBackup: "Restore from a backup",
+    importPath: "Backup file (inside the data directory)",
+    importConfirm:
+      "I understand a restore only fills an empty database and cannot overwrite existing data.",
+    backupHistory: "Backup history",
+    noBackups: "No backups exported yet.",
     overrides: "Stored configuration overrides",
     noOverrides: "No overrides stored; built-in defaults are in use.",
   },
@@ -182,6 +186,12 @@ export const Copy = {
     seen:
       "Jobs that disappeared from their source, plus jobs linked as duplicates or reposts.",
     relatedJob: "The job this posting was automatically linked to as a duplicate or repost.",
+    mergeCompany:
+      "Merging treats two company names as one employer. The decision is recorded and can be undone; nothing about the postings themselves is changed.",
+    mergeAudit:
+      "The merge audit trail is append-only. A separation is recorded as a new decision rather than removing the old one.",
+    keywordsHow:
+      "Prevalence counts the share of postings that mention a skill. Below the small-sample threshold only counts are shown, and a posting with no readable text is missing evidence rather than a zero.",
     unmerge:
       "Undo the duplicate link so both jobs stay separate. This decision is remembered; automation will not link them again.",
     importResume:
@@ -218,6 +228,8 @@ export const Copy = {
       "Extraction and discovery plugins the worker may use, including the network hosts each is allowed to contact.",
     queueDepth: "Number of tasks waiting to run in the local worker.",
     diskUsage: "Space used by the local job database and logs.",
+    backup:
+      "A backup is a portable JSON file of your local data. A restore only fills an empty database, so nothing you already have is overwritten.",
     testTask:
       "Starts a short no-op task so you can check progress reporting and cancellation.",
     exportLogs:

@@ -29,6 +29,6 @@ describe("routes", () => {
         <AppRoutes />
       </MemoryRouter>,
     );
-    expect(screen.getByRole("heading", { name: /discover jobs/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /find jobs/i })).toBeInTheDocument();
   });
 });

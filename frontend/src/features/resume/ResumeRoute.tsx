@@ -56,8 +56,9 @@ type MatchResult = {
   job_id: string;
   job_title?: string | null;
   company_name?: string | null;
-  fit_score: number;
-  dimension_coverage: number;
+  //: Missing values stay null so the UI can say "not assessed", never 0.00.
+  fit_score: number | null;
+  dimension_coverage: number | null;
   dimensions?: Dimension[];
   explanations?: Explanation[];
 };
@@ -144,8 +145,8 @@ function parseMatchResults(rows: unknown[] | undefined): MatchResult[] {
       job_id: String(row.job_id ?? ""),
       job_title: typeof row.job_title === "string" ? row.job_title : null,
       company_name: typeof row.company_name === "string" ? row.company_name : null,
-      fit_score: numberOrNull(row.fit_score) ?? 0,
-      dimension_coverage: numberOrNull(row.dimension_coverage) ?? 0,
+      fit_score: numberOrNull(row.fit_score),
+      dimension_coverage: numberOrNull(row.dimension_coverage),
       dimensions: Array.isArray(row.dimensions)
         ? (row.dimensions as Dimension[]).map((dimension) => ({
             ...dimension,
@@ -935,19 +936,40 @@ export function ResumeRoute() {
                     ) : null}
                   </div>
                   <div className="text-xs text-slate-600">
-                    Fit score <span title={Copy.tooltips.fitScore}>{result.fit_score.toFixed(2)}</span>{" "}
-                    · data coverage{" "}
-                    <span title={Copy.tooltips.coverage}>
-                      {Math.round(result.dimension_coverage * 100)}%
-                    </span>
-                    {result.dimension_coverage < 0.6 ? (
+                    {result.fit_score === null ? (
                       <span
-                        title={Copy.tooltips.limitedData}
-                        className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-800"
+                        title={Copy.tooltips.fitScore}
+                        className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-slate-600"
                       >
-                        limited data
+                        Not assessed yet
                       </span>
-                    ) : null}
+                    ) : (
+                      <>
+                        Fit score{" "}
+                        <span title={Copy.tooltips.fitScore}>
+                          {result.fit_score.toFixed(2)}
+                        </span>
+                      </>
+                    )}{" "}
+                    ·{" "}
+                    {result.dimension_coverage === null ? (
+                      <span title={Copy.tooltips.coverage}>data coverage not recorded</span>
+                    ) : (
+                      <>
+                        data coverage{" "}
+                        <span title={Copy.tooltips.coverage}>
+                          {Math.round(result.dimension_coverage * 100)}%
+                        </span>
+                        {result.dimension_coverage < 0.6 ? (
+                          <span
+                            title={Copy.tooltips.limitedData}
+                            className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-800"
+                          >
+                            limited data
+                          </span>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 </div>
                 <details className="mt-2 text-xs text-slate-600">
@@ -974,10 +996,12 @@ export function ResumeRoute() {
                         {DIMENSION_LABELS[dimension.dimension] ?? dimension.dimension}
                       </dt>
                       <div className="h-1.5 flex-1 rounded bg-slate-100">
-                        <div
-                          className="h-1.5 rounded bg-slate-700"
-                          style={{ width: `${Math.round((dimension.score ?? 0) * 100)}%` }}
-                        />
+                        {dimension.available && typeof dimension.score === "number" ? (
+                          <div
+                            className="h-1.5 rounded bg-slate-700"
+                            style={{ width: `${Math.round(dimension.score * 100)}%` }}
+                          />
+                        ) : null}
                       </div>
                       <dd className="w-24 text-right text-slate-500">
                         {dimension.available && dimension.score !== null

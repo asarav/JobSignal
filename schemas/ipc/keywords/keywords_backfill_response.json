@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "processed": {
+      "default": 0,
+      "type": "integer"
+    },
+    "remaining": {
+      "default": 0,
+      "type": "integer"
+    }
+  },
+  "title": "KeywordsBackfillResponse",
+  "type": "object"
+}

@@ -14,12 +14,16 @@ import type {
   BrowserOpenJobRequest,
   BrowserOpenJobResponse,
   ApplicationsCreateResponse,
+  ApplicationsGetAnalyticsRequest,
+  ApplicationsGetAnalyticsResponse,
   ApplicationsGetCompanyHistoryRequest,
   ApplicationsGetCompanyHistoryResponse,
   ApplicationsGetSuppressionPolicyRequest,
   ApplicationsGetSuppressionPolicyResponse,
   ApplicationsGetSuppressionsRequest,
   ApplicationsGetSuppressionsResponse,
+  ApplicationsRecordOutcomeRequest,
+  ApplicationsRecordOutcomeResponse,
   ApplicationsListRequest,
   ApplicationsListResponse,
   ApplicationsRestoreSuppressedJobRequest,
@@ -28,6 +32,15 @@ import type {
   ApplicationsUpdateStatusResponse,
   ApplicationsUpdateSuppressionPolicyRequest,
   ApplicationsUpdateSuppressionPolicyResponse,
+  CompaniesGetDetailRequest,
+  CompaniesGetMergeHistoryRequest,
+  CompaniesGetMergeHistoryResponse,
+  CompaniesMergeRequest,
+  CompaniesMergeResponse,
+  CompaniesUnmergeRequest,
+  CompaniesGetDetailResponse,
+  CompaniesListRequest,
+  CompaniesListResponse,
   CrawlRunsListRequest,
   CrawlRunsListResponse,
   DiagnosticsFetchUrlRequest,
@@ -39,11 +52,25 @@ import type {
   DiscoveryRunRequest,
   DiscoveryRunResponse,
   Envelope,
+  KeywordsBackfillRequest,
+  KeywordsBackfillResponse,
+  KeywordsCoverageRequest,
+  KeywordsCoverageResponse,
   KeywordsExtractRequest,
+  KeywordsPrevalenceRequest,
+  KeywordsTrendsRequest,
+  KeywordsTrendsResponse,
+  KeywordsPrevalenceResponse,
   KeywordsExtractResponse,
   MatchingRunRequest,
   MatchingRunResponse,
+  MatchingApplyWeightProposalRequest,
+  MatchingApplyWeightProposalResponse,
   MatchingGetResultsRequest,
+  MatchingGetWeightHistoryRequest,
+  MatchingGetWeightHistoryResponse,
+  MatchingGetWeightProposalsRequest,
+  MatchingGetWeightProposalsResponse,
   MatchingGetResultsResponse,
   MatchingUpdateWeightsRequest,
   MatchingUpdateWeightsResponse,
@@ -65,8 +92,26 @@ import type {
   JobsGetDetailResponse,
   JobsListRequest,
   JobsListResponse,
+  JobsListSavedRequest,
+  JobsListSavedResponse,
   JobsListSeenRequest,
   JobsListSeenResponse,
+  JobsRankedRequest,
+  JobsRankedResponse,
+  JobsVerifyNowRequest,
+  JobsVerifyNowResponse,
+  PostingIntelligenceConfigureModelRequest,
+  PostingIntelligenceConfigureModelResponse,
+  PostingIntelligenceEvaluateRequest,
+  PostingIntelligenceEvaluateResponse,
+  PostingIntelligenceGetCalibrationRequest,
+  PostingIntelligenceGetCalibrationResponse,
+  PostingIntelligenceGetCompanyAssessmentRequest,
+  PostingIntelligenceGetCompanyAssessmentResponse,
+  PostingIntelligenceGetRiskHistoryRequest,
+  PostingIntelligenceGetRiskHistoryResponse,
+  PostingIntelligenceGetSignalsRequest,
+  PostingIntelligenceGetSignalsResponse,
   JobsSearchRequest,
   JobsSetUserStateRequest,
   JobsSetUserStateResponse,
@@ -103,7 +148,13 @@ import type {
   SourcesSetExtractionOrderResponse,
   SourcesSetScheduleRequest,
   SourcesSetScheduleResponse,
+  SystemExportBackupRequest,
+  SystemExportBackupResponse,
+  SystemGetBackupHistoryRequest,
+  SystemGetBackupHistoryResponse,
   SystemHealthRequest,
+  SystemImportBackupRequest,
+  SystemImportBackupResponse,
   SystemHealthResponse,
   SystemHelloRequest,
   SystemHelloResponse,
@@ -120,6 +171,9 @@ export type WorkerMethod =
   | "system.hello"
   | "system.health"
   | "system.shutdown"
+  | "system.export_backup"
+  | "system.import_backup"
+  | "system.get_backup_history"
   | "tasks.list"
   | "tasks.cancel"
   | "settings.get"
@@ -145,6 +199,15 @@ export type WorkerMethod =
   | "jobs.list_duplicates"
   | "jobs.list_seen"
   | "jobs.get_detail"
+  | "jobs.ranked"
+  | "jobs.list_saved"
+  | "jobs.verify_now"
+  | "posting_intelligence.evaluate"
+  | "posting_intelligence.get_signals"
+  | "posting_intelligence.get_risk_history"
+  | "posting_intelligence.get_company_assessment"
+  | "posting_intelligence.configure_model"
+  | "posting_intelligence.get_calibration"
   | "crawl_runs.list"
   | "search_profiles.list"
   | "search_profiles.save"
@@ -157,6 +220,12 @@ export type WorkerMethod =
   | "applications.add_event"
   | "applications.record_outcome"
   | "applications.get_company_history"
+  | "applications.get_analytics"
+  | "companies.list"
+  | "companies.get_detail"
+  | "companies.merge"
+  | "companies.unmerge"
+  | "companies.get_merge_history"
   | "applications.get_suppressions"
   | "applications.get_suppression_policy"
   | "applications.restore_suppressed_job"
@@ -176,6 +245,13 @@ export type WorkerMethod =
   | "resume.parse"
   | "resume.set_skill_status"
   | "keywords.extract"
+  | "keywords.prevalence"
+  | "keywords.coverage"
+  | "keywords.backfill"
+  | "keywords.trends"
+  | "matching.get_weight_proposals"
+  | "matching.apply_weight_proposal"
+  | "matching.get_weight_history"
   | "matching.run"
   | "matching.get_results"
   | "matching.update_weights";
@@ -244,6 +320,24 @@ export class WorkerClient {
     return this.request("system.shutdown", { ...request });
   }
 
+  exportBackup(
+    request: SystemExportBackupRequest = {},
+  ): Promise<SystemExportBackupResponse> {
+    return this.request("system.export_backup", { ...request });
+  }
+
+  importBackup(
+    request: SystemImportBackupRequest,
+  ): Promise<SystemImportBackupResponse> {
+    return this.request("system.import_backup", { ...request });
+  }
+
+  getBackupHistory(
+    request: SystemGetBackupHistoryRequest = {},
+  ): Promise<SystemGetBackupHistoryResponse> {
+    return this.request("system.get_backup_history", { ...request });
+  }
+
   listTasks(request: TasksListRequest = {}): Promise<TasksListResponse> {
     return this.request("tasks.list", { ...request });
   }
@@ -308,6 +402,72 @@ export class WorkerClient {
     return this.request("jobs.unmerge", { ...request });
   }
 
+  rankedJobs(request: JobsRankedRequest = {}): Promise<JobsRankedResponse> {
+    return this.request("jobs.ranked", { ...request });
+  }
+
+  listSavedJobs(request: JobsListSavedRequest = {}): Promise<JobsListSavedResponse> {
+    return this.request("jobs.list_saved", { ...request });
+  }
+
+  verifyJobNow(request: JobsVerifyNowRequest): Promise<JobsVerifyNowResponse> {
+    return this.request("jobs.verify_now", { ...request });
+  }
+
+  evaluatePostingIntelligence(
+    request: PostingIntelligenceEvaluateRequest = {},
+  ): Promise<PostingIntelligenceEvaluateResponse> {
+    return this.request("posting_intelligence.evaluate", { ...request });
+  }
+
+  getPostingSignals(
+    request: PostingIntelligenceGetSignalsRequest,
+  ): Promise<PostingIntelligenceGetSignalsResponse> {
+    return this.request("posting_intelligence.get_signals", { ...request });
+  }
+
+  getRiskHistory(
+    request: PostingIntelligenceGetRiskHistoryRequest,
+  ): Promise<PostingIntelligenceGetRiskHistoryResponse> {
+    return this.request("posting_intelligence.get_risk_history", { ...request });
+  }
+
+  getCompanyAssessment(
+    request: PostingIntelligenceGetCompanyAssessmentRequest,
+  ): Promise<PostingIntelligenceGetCompanyAssessmentResponse> {
+    return this.request("posting_intelligence.get_company_assessment", { ...request });
+  }
+
+  configurePostingIntelligence(
+    request: PostingIntelligenceConfigureModelRequest,
+  ): Promise<PostingIntelligenceConfigureModelResponse> {
+    return this.request("posting_intelligence.configure_model", { ...request });
+  }
+
+  listCompanies(request: CompaniesListRequest = {}): Promise<CompaniesListResponse> {
+    return this.request("companies.list", { ...request });
+  }
+
+  getCompanyDetail(
+    request: CompaniesGetDetailRequest,
+  ): Promise<CompaniesGetDetailResponse> {
+    return this.request("companies.get_detail", { ...request });
+  }
+
+  mergeCompany(request: CompaniesMergeRequest): Promise<CompaniesMergeResponse> {
+    return this.request("companies.merge", { ...request });
+  }
+
+  unmergeCompany(request: CompaniesUnmergeRequest): Promise<CompaniesMergeResponse> {
+    return this.request("companies.unmerge", { ...request });
+  }
+
+  getCompanyMergeHistory(
+    request: CompaniesGetMergeHistoryRequest = {},
+  ): Promise<CompaniesGetMergeHistoryResponse> {
+    return this.request("companies.get_merge_history", { ...request });
+  }
+
   listCrawlRuns(request: CrawlRunsListRequest = {}): Promise<CrawlRunsListResponse> {
     return this.request("crawl_runs.list", { ...request });
   }
@@ -356,6 +516,28 @@ export class WorkerClient {
   extractKeywords(request: KeywordsExtractRequest): Promise<KeywordsExtractResponse> {
     return this.request("keywords.extract", { ...request });
   }
+
+  getKeywordsPrevalence(
+    request: KeywordsPrevalenceRequest = {},
+  ): Promise<KeywordsPrevalenceResponse> {
+    return this.request("keywords.prevalence", { ...request });
+  }
+
+  getKeywordsCoverage(
+    request: KeywordsCoverageRequest = {},
+  ): Promise<KeywordsCoverageResponse> {
+    return this.request("keywords.coverage", { ...request });
+  }
+
+  backfillKeywords(request: KeywordsBackfillRequest = {}): Promise<KeywordsBackfillResponse> {
+    return this.request("keywords.backfill", { ...request });
+  }
+
+  getKeywordTrends(
+    request: KeywordsTrendsRequest = {},
+  ): Promise<KeywordsTrendsResponse> {
+    return this.request("keywords.trends", { ...request });
+  }
   runMatching(request: MatchingRunRequest = {}): Promise<MatchingRunResponse> {
     return this.request("matching.run", { ...request });
   }
@@ -364,6 +546,24 @@ export class WorkerClient {
   }
   updateMatchingWeights(request: MatchingUpdateWeightsRequest): Promise<MatchingUpdateWeightsResponse> {
     return this.request("matching.update_weights", { ...request });
+  }
+
+  getWeightProposals(
+    request: MatchingGetWeightProposalsRequest = {},
+  ): Promise<MatchingGetWeightProposalsResponse> {
+    return this.request("matching.get_weight_proposals", { ...request });
+  }
+
+  applyWeightProposal(
+    request: MatchingApplyWeightProposalRequest,
+  ): Promise<MatchingApplyWeightProposalResponse> {
+    return this.request("matching.apply_weight_proposal", { ...request });
+  }
+
+  getWeightHistory(
+    request: MatchingGetWeightHistoryRequest = {},
+  ): Promise<MatchingGetWeightHistoryResponse> {
+    return this.request("matching.get_weight_history", { ...request });
   }
 
   enablePlugin(request: PluginsEnableRequest): Promise<{ ok: boolean }> {
@@ -418,6 +618,24 @@ export class WorkerClient {
     request: ApplicationsGetCompanyHistoryRequest,
   ): Promise<ApplicationsGetCompanyHistoryResponse> {
     return this.request("applications.get_company_history", { ...request });
+  }
+
+  recordApplicationOutcome(
+    request: ApplicationsRecordOutcomeRequest,
+  ): Promise<ApplicationsRecordOutcomeResponse> {
+    return this.request("applications.record_outcome", { ...request });
+  }
+
+  getAnalytics(
+    request: ApplicationsGetAnalyticsRequest = {},
+  ): Promise<ApplicationsGetAnalyticsResponse> {
+    return this.request("applications.get_analytics", { ...request });
+  }
+
+  getCalibration(
+    request: PostingIntelligenceGetCalibrationRequest = {},
+  ): Promise<PostingIntelligenceGetCalibrationResponse> {
+    return this.request("posting_intelligence.get_calibration", { ...request });
   }
 
   getSuppressions(

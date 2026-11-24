@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "checked": {
+      "default": 0,
+      "type": "integer"
+    },
+    "states": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "job_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "JobsVerifyNowResponse",
+  "type": "object"
+}

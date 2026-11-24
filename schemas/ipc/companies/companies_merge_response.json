@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "survivor_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "changed": {
+      "default": false,
+      "type": "boolean"
+    },
+    "record_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "previous_survivor_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "company_id",
+    "survivor_id",
+    "action"
+  ],
+  "title": "CompaniesMergeResponse",
+  "type": "object"
+}

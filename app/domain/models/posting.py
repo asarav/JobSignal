@@ -94,7 +94,7 @@ class JobHistory:
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
     snapshot_count: int = 0
-    observations: Sequence[Mapping[str, Any]] = ()
+    observations: Sequence[ObservationPoint] = ()
     snapshots: Sequence[SnapshotPoint] = ()
     reposts: Sequence[RepostPoint] = ()
     endpoints: Sequence[EndpointPoint] = ()
@@ -217,3 +217,65 @@ class RiskAssessment:
     evidence_sufficiency: str = "insufficient"
     config_hash: str = ""
     top_signals: Sequence[str] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SignalObservationRecord:
+    """One stored provider verdict, immutable once written."""
+
+    id: str
+    job_id: str
+    signal: SignalResult
+    evaluated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RiskAssessmentRecord:
+    """A stored assessment plus the exact signals that produced it."""
+
+    id: str
+    job_id: str
+    assessment: RiskAssessment
+    model_version_id: str
+    signal_observation_ids: Sequence[str]
+    input_hash: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ClassificationChangeRecord:
+    """A class transition between two consecutive assessments (§9.6)."""
+
+    id: str
+    job_id: str
+    from_class: str | None
+    to_class: str
+    from_assessment_id: str | None
+    to_assessment_id: str
+    changed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointObservationRecord:
+    """One polite check of the employer's application page (§9.3)."""
+
+    id: str
+    job_id: str
+    observed_at: datetime
+    state: str
+    http_status: int | None = None
+    final_url: str | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class CompanySummaryRecord:
+    """An immutable company hiring snapshot (spec §9.7)."""
+
+    id: str
+    company_id: str
+    computed_at: datetime
+    sample_tier: str
+    metrics: Mapping[str, Any]
+    labels: Sequence[Mapping[str, Any]] = ()
+    evidence: Sequence[Mapping[str, Any]] = ()
+    methodology_version: str = "company_summary.v1"

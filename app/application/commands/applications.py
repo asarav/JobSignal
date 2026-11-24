@@ -17,6 +17,8 @@ from app.application import suppression as suppression_glue
 from app.application.config import live_config
 from app.application.container import Container
 from app.application.dto import (
+    AnalyticsParams,
+    AnalyticsResult,
     ApplicationCreateParams,
     ApplicationEventParams,
     ApplicationInfo,
@@ -276,6 +278,14 @@ class ApplicationsUseCase:
             )
             await uow.commit()
         return OkResult()
+
+    async def get_analytics(self, params: AnalyticsParams) -> AnalyticsResult:
+        from app.application.analytics import OutcomeAnalyticsService
+
+        payload = await OutcomeAnalyticsService(self._container).get_analytics(
+            days=params.days, profile_id=params.profile_id
+        )
+        return AnalyticsResult(**payload)
 
     async def list(self) -> ApplicationListResult:
         async with self._container.uow_factory() as uow:

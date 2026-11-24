@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "default": true,
+      "type": "boolean"
+    },
+    "verified": {
+      "default": false,
+      "type": "boolean"
+    },
+    "path": {
+      "type": "string"
+    },
+    "checksum": {
+      "type": "string"
+    },
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "schema_version": {
+      "default": 0,
+      "type": "integer"
+    },
+    "imported_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "path",
+    "checksum",
+    "imported_at"
+  ],
+  "title": "SystemImportBackupResponse",
+  "type": "object"
+}

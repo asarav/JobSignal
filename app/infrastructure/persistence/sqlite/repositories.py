@@ -697,11 +697,16 @@ class SqliteJobRepository:
             "updated_at_hint": row["updated_at_hint"],
         }
 
-    async def count(self, *, exclude_job_ids=None):
+    async def count(self, *, exclude_job_ids=None, first_seen_after=None):
         exclusion, excluded = _exclusion("id", exclude_job_ids)
-        where = f" WHERE {exclusion}" if exclusion else ""
+        clauses = [exclusion] if exclusion else []
+        params: list[Any] = list(excluded)
+        if first_seen_after is not None:
+            clauses.append("first_seen_at > ?")
+            params.append(first_seen_after.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         cur = await self._conn.execute(
-            f"SELECT COUNT(*) FROM jobs{where}", tuple(excluded)
+            f"SELECT COUNT(*) FROM jobs{where}", tuple(params)
         )
         row = await cur.fetchone()
         return int(row[0]) if row else 0

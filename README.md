@@ -287,17 +287,198 @@ submission guard lives for the whole session.
   budget instead of a fixed 60 s, which used to report a failure for work that
   was still running.
 
+## What Milestone 8 adds (first slice)
+
+Posting intelligence is now stored, not only computed. Every evaluated job gets
+an append-only assessment built from eight explainable signals, each carrying
+its evidence and observation time, plus the exact model configuration that
+produced it.
+
+- **History that cannot be rewritten.** `signal_observations`,
+  `risk_assessments`, `risk_model_versions`, `classification_changes`,
+  `company_hiring_summaries` and `application_endpoint_observations` are
+  append-only; database triggers abort an `UPDATE` or `DELETE`.
+- **Separate risk and confidence.** A weak signal can never lift a posting above
+  "needs verification"; a blocked page or a login wall is missing evidence, not
+  a negative one.
+- **Reproducible verdicts.** An assessment references the exact signal rows, the
+  model version and a config hash, so re-running the pure model reproduces its
+  numbers. A test asserts this.
+- **No duplicate assessments.** Identical inputs reuse the existing row; a new
+  snapshot, repost, endpoint check, configuration change or daily pass appends a
+  new one and records any class change.
+- **Company hiring summaries** are written at most once per company per day and
+  only carry labels at the *adequate* sample tier; below it they show raw counts.
+- **`posting_intelligence.*` IPC** (`evaluate`, `get_signals`,
+  `get_risk_history`, `get_company_assessment`, `configure_model`). The M0 guard
+  that blocked the prefix is retired; the allowlist now explicitly forbids
+  `browser.submit`, `browser.click`, `browser.press`, `browser.evaluate`,
+  `browser.type` and `applications.submit`.
+
+- **Polite endpoint verification.** `jobs.verify_now` (and a budgeted sweep in
+  the maintenance loop) fetches the employer's application page over plain HTTP
+  through the policy client: GET only, robots rules, redirect re-validation and a
+  7-day per-job budget. It records the state it observed and never clicks,
+  types or submits. A timeout, a block or a login wall is recorded as such and
+  treated as missing evidence, never as a negative signal.
+- **Risk on every job surface.** The Discover list and the job detail view show a
+  risk chip that names the class and reports confidence separately (never a bare
+  percentage), with the evidence and any classification history behind it. The
+  `/posting-intelligence` screen explains the model, lets you save a new model
+  version, run a bounded evaluation and look up company evidence.
+
+See [docs/how-posting-intelligence-works.md](docs/how-posting-intelligence-works.md)
+and [ADR-0011](docs/adr/0011-posting-intelligence-history.md).
+
+## Finding your best jobs (M8.5)
+
+"Best" is three separable, explainable inputs, and it is never a probability of
+an interview:
+
+1. **Satisfaction** — `fit.weighted_v1` over six dimensions with your weights,
+   applied after the profile's hard filters.
+2. **Success evidence** — credibility `1 − risk`, kept separate from confidence,
+   plus company hiring evidence.
+3. **Actionability** — freshness, endpoint state, suppression and salary data.
+
+`jobs.ranked` joins the latest stored fit and the latest assessment, applies the
+profile's credibility policy and returns a `rank_score` plus the reasons behind
+it:
+
+```
+rank_score = fit × (1 − 0.5 · risk · min(1, confidence / 0.5))
+```
+
+`deprioritize` is the default and never hides a row. `show_all` orders by fit
+only. `hide_high_risk` hides only when risk is high *and* confidence is at least
+0.5. `require_evidence` shows only postings assessed as likely active. Hidden
+rows stay reachable with the "Show hidden" toggle, and every row can explain its
+order. Ranking runs over a bounded window of the most recent matches (500 by
+default, reported in the response) so a large database stays responsive; the
+window is stated in the UI.
+
+The Discover screen is now the ranked shortlist with policy and sort controls,
+fill-in-your-profiles filters, per-row explanations and save toggles. Saved jobs
+have their own screen, and search profiles store both hard filters and a
+credibility policy.
+
+See [docs/how-ranking-works.md](docs/how-ranking-works.md).
+
+## Outcomes, analytics and calibration (M9)
+
+Each tracked application accepts a confirmed outcome (acknowledged, recruiter
+contacted, interview, rejection, offer, or *no response*). `no_response` is a
+record, never a posting-risk signal.
+
+`applications.get_analytics` groups your response history by risk class, endpoint
+state, repost count, company tier, fit band and posting age. Every group reports
+`n`, a Wilson 95% interval and an `insufficient` flag below 5 applications; the
+UI hides the rate for those groups. These are associations in your own history,
+and they never reorder jobs automatically.
+
+`posting_intelligence.get_calibration` compares predicted risk with endpoint
+observations and returns a proposal only at 30+ observations. Accepting a
+proposal means saving a new model version, so earlier assessments keep their
+history.
+
+See [docs/how-outcomes-and-calibration-work.md](docs/how-outcomes-and-calibration-work.md).
+
+## Companies and merging (M9 breadth)
+
+`companies.list` and `companies.get_detail` power the Companies screen: postings,
+active counts, reposts, your own applications and the daily hiring summary at its
+sample tier. Small samples show counts, never labels.
+
+Two records for the same employer can be merged (`companies.merge`) and separated
+again (`companies.unmerge`). A merge is an append-only decision in
+`company_merges`: nothing is updated or deleted, and the canonical survivor is
+resolved when evidence is read. Lists, detail, job rows and summaries all read
+under the survivor; `companies.get_merge_history` returns the audit trail, which
+the screen shows with an explicit confirm step before each merge.
+
+See [docs/how-companies-work.md](docs/how-companies-work.md) and
+[ADR-0013](docs/adr/0013-company-merge-and-keyword-history.md).
+
+## Keyword demand (M9 breadth)
+
+Keywords are extracted once per posting revision and stored with it
+(`job_keyword_revisions`, `job_keywords`), filled by the normal assessment pass.
+`keywords.prevalence` reports the share of postings mentioning each skill, and
+`keywords.coverage` compares those skills with your profile. Both disclose `n`,
+hide the rate below 10 postings, and treat unreadable postings as missing evidence
+rather than zero demand. Reads are batched, and company scope resolves merges. The
+Keyword Insights screen carries a "How this works" explanation.
+
+See [docs/how-keywords-work.md](docs/how-keywords-work.md).
+
+## Trends and weight suggestions (M10)
+
+`keywords.trends` reads the same stored keyword history as a per-month time
+series: postings in scope, mention counts per keyword, and a share only when
+the period holds at least 10 postings. Empty periods are reported as missing
+evidence, and company scope resolves merges. Two batched reads feed a whole
+response.
+
+`matching.get_weight_proposals` compares the stored fit dimensions of
+applications that got a reply with those that did not. At 20+ applications
+with at least 5 per side it returns an explainable suggestion (gap, sample,
+changed dimensions); otherwise it says `insufficient_evidence` and still shows
+the observed associations. Nothing is applied automatically:
+`matching.apply_weight_proposal` needs an explicit confirmation and appends a
+row to `fit_weight_versions` (migration 0017), which is append-only, so the
+previous weighting is always recoverable via `matching.get_weight_history`.
+Manual weight edits are recorded the same way.
+
+Risk badges now open their own explanation instead of relying on a hover
+tooltip, and the Posting Intelligence screen has a Weight suggestions tab.
+
+See
+[docs/how-keyword-trends-and-weight-suggestions.md](docs/how-keyword-trends-and-weight-suggestions.md)
+and [ADR-0014](docs/adr/0014-associations-and-weight-history.md).
+
+## Hardening (M11)
+
+- **Benchmarks.** `python scripts/bench_hot_paths.py` seeds a deterministic
+  SQLite database (20 companies, 500 postings, 100 applications, one keyword
+  revision per posting) and measures every hot read path the plan names:
+  `jobs.list`, `jobs.ranked`, `applications.get_analytics`,
+  `keywords.prevalence` and `keywords.trends` — plus the ranking surfaces'
+  search/detail reads `jobs.search`, `jobs.get_detail` and
+  `companies.get_detail`. `NAMED_HOT_PATHS` is the plan's list and a test pins
+  it, so a scenario cannot be dropped silently. Absolute budgets live in
+  `BUDGETS_MS`; the checked-in
+  baseline (`benchmarks/hot_paths_baseline.json`) is compared with a 1.25x
+  threshold plus 5 ms of scheduler slack (each scenario is warmed up first; the
+  small floor only absorbs timer noise, so a real slowdown still fails), and
+  `--write` refreshes it deliberately.
+- **Backup and restore.** `system.export_backup`, `system.import_backup` and
+  `system.get_backup_history` back the Settings screen. Import requires an
+  explicit confirmation, only fills an empty database (no overwrite mode), and
+  verifies every table's row count before it reports success. Both directions
+  are recorded in the append-only `backup_runs` table (migration 0018).
+  See [docs/backup-and-restore.md](docs/backup-and-restore.md) and
+  [ADR-0015](docs/adr/0015-local-backup-and-restore.md).
+- **Conditional endpoint reads.** Endpoint checks send `If-None-Match` from the
+  stored `ETag`, fall back to `If-Modified-Since`, and on a `304` record a
+  revalidation that reuses the previous classification instead of refetching.
+  See [ADR-0016](docs/adr/0016-conditional-endpoint-requests.md).
+- **Auto-update stays off.** [ADR-0012](docs/adr/0012-auto-update.md) remains the
+  decision (disabled, no updater plugin, manual download from a signed
+  manifest); `tests/safety/test_auto_update.py` now enforces that the Tauri
+  config carries no updater and that the ADR keeps its rollback rule.
+
+All checks run against these: full pytest with the coverage gate, ruff, mypy,
+import-linter, `gen_schemas.py --check`, `gen-ts-types.mjs --check`, frontend
+`tsc`/`vitest`/`vite build`, and Rust `cargo test --lib`/`clippy`.
+
 ## Still not implemented
 
 These are **intentionally absent** so far, and the IPC allowlist rejects them
 (there is a test for it):
 
-- A Saved-jobs screen — job user state is stored, the screen is not built
-- Company intelligence, outcome analytics — Milestone 9
-- Ghost-job / posting-quality risk models — Milestone 8
-- Outcome feedback and analytics — Milestone 9
-- Posting intelligence UI refinement — Milestone 10
-- Hardening and distribution — Milestone 11
+- Automatic update delivery: the build is installed manually from
+  `frontend/src-tauri/tauri.conf.json` targets; nothing replaces itself
+  (ADR-0012)
 
 No browser automation is installed by default; Playwright is an opt-in extra.
 

@@ -1,0 +1,36 @@
+{
+  "dataset": {
+    "companies": 20,
+    "jobs": 500,
+    "applications": 100,
+    "keyword_revisions": 500
+  },
+  "tolerance": 1.25,
+  "absolute_slack_ms": 5.0,
+  "scenarios": {
+    "jobs.list": {
+      "median_ms": 5.79
+    },
+    "jobs.ranked": {
+      "median_ms": 10.1
+    },
+    "applications.get_analytics": {
+      "median_ms": 48.23
+    },
+    "keywords.prevalence": {
+      "median_ms": 3.99
+    },
+    "keywords.trends": {
+      "median_ms": 5.19
+    },
+    "jobs.search": {
+      "median_ms": 9.67
+    },
+    "jobs.get_detail": {
+      "median_ms": 6.76
+    },
+    "companies.get_detail": {
+      "median_ms": 30.53
+    }
+  }
+}

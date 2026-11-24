@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "days": {
+      "default": 365,
+      "maximum": 3650,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    }
+  },
+  "title": "ApplicationsGetAnalyticsRequest",
+  "type": "object"
+}

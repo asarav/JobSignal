@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "PostingIntelligenceGetSignalsRequest",
+  "type": "object"
+}

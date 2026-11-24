@@ -1,0 +1,49 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "default": true,
+      "type": "boolean"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "version_id": {
+      "type": "string"
+    },
+    "weights": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
+    },
+    "previous_weights": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id",
+    "version_id",
+    "source",
+    "created_at"
+  ],
+  "title": "MatchingApplyWeightProposalResponse",
+  "type": "object"
+}

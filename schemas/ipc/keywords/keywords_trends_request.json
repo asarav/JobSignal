@@ -1,0 +1,46 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "bucket": {
+      "default": "month",
+      "type": "string"
+    },
+    "periods": {
+      "default": 12,
+      "maximum": 60,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "min_sample": {
+      "default": 10,
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "limit": {
+      "default": 8,
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "keyword_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "KeywordsTrendsRequest",
+  "type": "object"
+}

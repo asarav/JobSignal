@@ -1,0 +1,292 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "jobs": {
+      "items": {
+        "$ref": "#/$defs/JobsRankedResponseJobSummary"
+      },
+      "type": "array"
+    },
+    "total": {
+      "default": 0,
+      "type": "integer"
+    },
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "policy": {
+      "default": "deprioritize",
+      "type": "string"
+    },
+    "window": {
+      "default": 0,
+      "type": "integer"
+    },
+    "window_truncated": {
+      "default": false,
+      "type": "boolean"
+    },
+    "hidden_by_policy": {
+      "default": 0,
+      "type": "integer"
+    },
+    "needs_attention": {
+      "default": 0,
+      "type": "integer"
+    },
+    "new_since": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "JobsRankedResponse",
+  "type": "object",
+  "$defs": {
+    "JobsRankedResponseJobSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "company_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "canonical_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "posting_status": {
+          "default": "active",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "via_index": {
+          "default": false,
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "related_job_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "company_name": {
+          "default": "",
+          "type": "string"
+        },
+        "location_text": {
+          "default": "",
+          "type": "string"
+        },
+        "workplace_type": {
+          "default": "unknown",
+          "type": "string"
+        },
+        "salary_min": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "salary_max": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "salary_currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "posted_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "first_seen_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fit_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_confidence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "credibility": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "saved": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rank_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rank_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hidden_by_policy": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "job_id",
+        "title"
+      ],
+      "type": "object"
+    }
+  }
+}

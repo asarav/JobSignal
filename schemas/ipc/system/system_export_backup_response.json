@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "default": true,
+      "type": "boolean"
+    },
+    "path": {
+      "type": "string"
+    },
+    "checksum": {
+      "type": "string"
+    },
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "schema_version": {
+      "default": 0,
+      "type": "integer"
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "path",
+    "checksum",
+    "created_at"
+  ],
+  "title": "SystemExportBackupResponse",
+  "type": "object"
+}

@@ -23,6 +23,27 @@
       "response_schema": "schemas/ipc/system/system_shutdown_response.json"
     },
     {
+      "method": "system.export_backup",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/system/system_export_backup_request.json",
+      "response_schema": "schemas/ipc/system/system_export_backup_response.json"
+    },
+    {
+      "method": "system.import_backup",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/system/system_import_backup_request.json",
+      "response_schema": "schemas/ipc/system/system_import_backup_response.json"
+    },
+    {
+      "method": "system.get_backup_history",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/system/system_get_backup_history_request.json",
+      "response_schema": "schemas/ipc/system/system_get_backup_history_response.json"
+    },
+    {
       "method": "tasks.list",
       "long_running": false,
       "timeout_s": 60.0,
@@ -191,11 +212,32 @@
       "response_schema": "schemas/ipc/jobs/jobs_list_seen_response.json"
     },
     {
+      "method": "jobs.ranked",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/jobs/jobs_ranked_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_ranked_response.json"
+    },
+    {
+      "method": "jobs.list_saved",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/jobs/jobs_list_saved_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_list_saved_response.json"
+    },
+    {
       "method": "jobs.get_detail",
       "long_running": false,
       "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_get_detail_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_get_detail_response.json"
+    },
+    {
+      "method": "jobs.verify_now",
+      "long_running": true,
+      "timeout_s": 600.0,
+      "request_schema": "schemas/ipc/jobs/jobs_verify_now_request.json",
+      "response_schema": "schemas/ipc/jobs/jobs_verify_now_response.json"
     },
     {
       "method": "resume.import",
@@ -268,11 +310,60 @@
       "response_schema": "schemas/ipc/matching/matching_update_weights_response.json"
     },
     {
+      "method": "matching.get_weight_proposals",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/matching/matching_get_weight_proposals_request.json",
+      "response_schema": "schemas/ipc/matching/matching_get_weight_proposals_response.json"
+    },
+    {
+      "method": "matching.apply_weight_proposal",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/matching/matching_apply_weight_proposal_request.json",
+      "response_schema": "schemas/ipc/matching/matching_apply_weight_proposal_response.json"
+    },
+    {
+      "method": "matching.get_weight_history",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/matching/matching_get_weight_history_request.json",
+      "response_schema": "schemas/ipc/matching/matching_get_weight_history_response.json"
+    },
+    {
       "method": "keywords.extract",
       "long_running": false,
       "timeout_s": 60.0,
       "request_schema": "schemas/ipc/keywords/keywords_extract_request.json",
       "response_schema": "schemas/ipc/keywords/keywords_extract_response.json"
+    },
+    {
+      "method": "keywords.prevalence",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/keywords/keywords_prevalence_request.json",
+      "response_schema": "schemas/ipc/keywords/keywords_prevalence_response.json"
+    },
+    {
+      "method": "keywords.coverage",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/keywords/keywords_coverage_request.json",
+      "response_schema": "schemas/ipc/keywords/keywords_coverage_response.json"
+    },
+    {
+      "method": "keywords.trends",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/keywords/keywords_trends_request.json",
+      "response_schema": "schemas/ipc/keywords/keywords_trends_response.json"
+    },
+    {
+      "method": "keywords.backfill",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/keywords/keywords_backfill_request.json",
+      "response_schema": "schemas/ipc/keywords/keywords_backfill_response.json"
     },
     {
       "method": "crawl_runs.list",
@@ -359,6 +450,13 @@
       "response_schema": "schemas/ipc/applications/applications_get_company_history_response.json"
     },
     {
+      "method": "applications.get_analytics",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/applications/applications_get_analytics_request.json",
+      "response_schema": "schemas/ipc/applications/applications_get_analytics_response.json"
+    },
+    {
       "method": "applications.get_suppressions",
       "long_running": false,
       "timeout_s": 60.0,
@@ -392,6 +490,41 @@
       "timeout_s": 60.0,
       "request_schema": "schemas/ipc/jobs/jobs_set_user_state_request.json",
       "response_schema": "schemas/ipc/jobs/jobs_set_user_state_response.json"
+    },
+    {
+      "method": "companies.list",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/companies/companies_list_request.json",
+      "response_schema": "schemas/ipc/companies/companies_list_response.json"
+    },
+    {
+      "method": "companies.get_detail",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/companies/companies_get_detail_request.json",
+      "response_schema": "schemas/ipc/companies/companies_get_detail_response.json"
+    },
+    {
+      "method": "companies.merge",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/companies/companies_merge_request.json",
+      "response_schema": "schemas/ipc/companies/companies_merge_response.json"
+    },
+    {
+      "method": "companies.unmerge",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/companies/companies_unmerge_request.json",
+      "response_schema": "schemas/ipc/companies/companies_unmerge_response.json"
+    },
+    {
+      "method": "companies.get_merge_history",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/companies/companies_get_merge_history_request.json",
+      "response_schema": "schemas/ipc/companies/companies_get_merge_history_response.json"
     },
     {
       "method": "browser.open_job",
@@ -434,9 +567,56 @@
       "timeout_s": 60.0,
       "request_schema": "schemas/ipc/browser/browser_close_session_request.json",
       "response_schema": "schemas/ipc/browser/browser_close_session_response.json"
+    },
+    {
+      "method": "posting_intelligence.evaluate",
+      "long_running": false,
+      "timeout_s": 900.0,
+      "request_schema": "schemas/ipc/posting_intelligence/posting_intelligence_evaluate_request.json",
+      "response_schema": "schemas/ipc/posting_intelligence/posting_intelligence_evaluate_response.json"
+    },
+    {
+      "method": "posting_intelligence.get_signals",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_signals_request.json",
+      "response_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_signals_response.json"
+    },
+    {
+      "method": "posting_intelligence.get_risk_history",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_risk_history_request.json",
+      "response_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_risk_history_response.json"
+    },
+    {
+      "method": "posting_intelligence.get_company_assessment",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_company_assessment_request.json",
+      "response_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_company_assessment_response.json"
+    },
+    {
+      "method": "posting_intelligence.configure_model",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/posting_intelligence/posting_intelligence_configure_model_request.json",
+      "response_schema": "schemas/ipc/posting_intelligence/posting_intelligence_configure_model_response.json"
+    },
+    {
+      "method": "posting_intelligence.get_calibration",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_calibration_request.json",
+      "response_schema": "schemas/ipc/posting_intelligence/posting_intelligence_get_calibration_response.json"
     }
   ],
   "forbidden_prefixes": [
-    "posting_intelligence."
+    "browser.submit",
+    "browser.click",
+    "browser.press",
+    "browser.evaluate",
+    "browser.type",
+    "applications.submit"
   ]
 }

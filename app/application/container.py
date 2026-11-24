@@ -50,3 +50,6 @@ class Container:
     #: registered ``extraction`` plugins.
     extraction_pipeline: Any = None
     extra: dict[str, Any] = field(default_factory=dict)
+    #: Portable backup archive adapter (M11). ``None`` when the data store
+    #: cannot provide one.
+    backup_store: Any = None

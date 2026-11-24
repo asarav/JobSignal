@@ -9,6 +9,19 @@ from typing import Any
 from app.domain.models.candidate import SearchProfile
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
+from app.infrastructure.persistence.memory.backups import (
+    InMemoryBackupRunRepository,
+)
+from app.infrastructure.persistence.memory.company_identity import (
+    InMemoryCompanyMergeRepository,
+    InMemoryJobKeywordRepository,
+)
+from app.infrastructure.persistence.memory.intelligence import (
+    InMemoryIntelligenceRepositories,
+)
+from app.infrastructure.persistence.memory.weights import (
+    InMemoryFitWeightRepository,
+)
 
 
 class _Unimplemented:
@@ -399,9 +412,26 @@ class InMemoryJobRepository:
         matches = apply_hard_filters(items, filters)
         return matches[offset : offset + limit], len(matches)
 
-    async def count(self, *, exclude_job_ids=None) -> int:
+    async def count(self, *, exclude_job_ids=None, first_seen_after=None) -> int:
         excluded = set(exclude_job_ids or ())
-        return sum(1 for jid in self._store if jid not in excluded)
+        cutoff = (
+            first_seen_after.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if first_seen_after is not None
+            else None
+        )
+        total = 0
+        for jid, job in self._store.items():
+            if jid in excluded:
+                continue
+            if cutoff is not None:
+                seen = job.get("first_seen_at")
+                if seen is None:
+                    continue
+                text = seen.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(seen, "strftime") else str(seen)
+                if text <= cutoff:
+                    continue
+            total += 1
+        return total
 
     async def mark_not_seen(self, source_id, seen_ids, cutoff, threshold=2, min_spacing_hours=24):
         from datetime import datetime
@@ -661,6 +691,11 @@ class InMemoryUnitOfWork:
         job_user_state=None,
         suppression_policy=None,
         crawl_events=None,
+        intelligence_repos=None,
+        company_merges=None,
+        keywords=None,
+        weight_versions=None,
+        backups=None,
     ):
         self._settings_store = settings if settings is not None else {}
         self._tasks_store = tasks if tasks is not None else {}
@@ -702,10 +737,18 @@ class InMemoryUnitOfWork:
         self.job_user_state = InMemoryJobUserStateRepository(
             self._job_user_state_store
         )
+        self.intelligence = (
+            intelligence_repos or InMemoryIntelligenceRepositories()
+        )
         self.observations = InMemoryObservationRepository(self._observations_store)
         self.resumes = resumes if resumes is not None else InMemoryResumeRepository()
         self.matches = matches if matches is not None else InMemoryMatchRepository()
-        self.keywords = _Unimplemented()
+        self.company_merges = company_merges or InMemoryCompanyMergeRepository()
+        self.keywords = keywords or InMemoryJobKeywordRepository()
+        self.weight_versions = (
+            weight_versions or InMemoryFitWeightRepository()
+        )
+        self.backups = backups or InMemoryBackupRunRepository()
         self.settings = InMemorySettingsRepository(self._settings_store)
         self.tasks = InMemoryTaskRepository(self._tasks_store)
         self.plugins = InMemoryPluginStateRepository(self._plugins_store, self._configs_store)
@@ -757,6 +800,11 @@ class InMemoryUnitOfWorkFactory:
         self.suppressions: dict[tuple[str, str], Any] = {}
         self.suppression_policy: dict[str, dict[str, object]] = {}
         self.job_user_state: dict[str, dict[str, object]] = {}
+        self.intelligence = InMemoryIntelligenceRepositories()
+        self.company_merges = InMemoryCompanyMergeRepository()
+        self.keywords = InMemoryJobKeywordRepository(self.jobs)
+        self.weight_versions = InMemoryFitWeightRepository()
+        self.backups = InMemoryBackupRunRepository()
 
     def __call__(self) -> InMemoryUnitOfWork:
         return InMemoryUnitOfWork(
@@ -784,6 +832,11 @@ class InMemoryUnitOfWorkFactory:
             self.job_user_state,
             self.suppression_policy,
             crawl_events=self.crawl_events,
+            intelligence_repos=self.intelligence,
+            company_merges=self.company_merges,
+            keywords=self.keywords,
+            weight_versions=self.weight_versions,
+            backups=self.backups,
         )
 
 
@@ -939,6 +992,21 @@ class InMemoryMatchRepository:
         rows.sort(key=lambda r: (-float(r.get("fit_score") or 0), str(r.get("evaluated_at") or "")))
         return rows[:limit]
 
+    async def latest_for_jobs(self, job_ids, profile_id):
+        wanted = {str(value) for value in job_ids if value}
+        out = {}
+        for row in sorted(
+            self._results,
+            key=lambda item: str(item.get('evaluated_at') or ''),
+            reverse=True,
+        ):
+            if (
+                row['candidate_profile_id'] == profile_id
+                and str(row['job_id']) in wanted
+            ):
+                out.setdefault(str(row['job_id']), dict(row))
+        return out
+
     async def find_result(self, profile_id, job_id, input_hash):
         for row in self._results:
             if (row["candidate_profile_id"] == profile_id and row["job_id"] == job_id
@@ -961,6 +1029,14 @@ class InMemoryMatchRepository:
 
     async def list_explanations(self, result_id):
         return list(self._explanations.get(result_id, []))
+
+    async def dimensions_for_results(self, result_ids):
+        wanted = [str(value) for value in result_ids if value]
+        rows = []
+        for result_id in wanted:
+            for dimension in self._dimensions.get(result_id, []):
+                rows.append({"matching_result_id": result_id, **dict(dimension)})
+        return rows
 
     async def get_weights(self, profile_id):
         return self._weights.get(profile_id)

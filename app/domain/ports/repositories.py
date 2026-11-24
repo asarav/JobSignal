@@ -18,6 +18,13 @@ from app.domain.models.identity import JobFingerprintSet
 from app.domain.models.job import JobView, NormalizedJob
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
+from app.domain.ports.backup import BackupRunRepository
+from app.domain.ports.company_identity import (
+    CompanyMergeRepository,
+    JobKeywordRepository,
+)
+from app.domain.ports.fit_weights import FitWeightRepository
+from app.domain.ports.intelligence import PostingIntelligenceRepositories
 
 
 class SettingsRepository(Protocol):
@@ -145,7 +152,12 @@ class JobRepository(Protocol):
         """Return one filtered page plus the total number of matches."""
         ...
 
-    async def count(self, *, exclude_job_ids: Sequence[str] | None = None) -> int: ...
+    async def count(
+        self,
+        *,
+        exclude_job_ids: Sequence[str] | None = None,
+        first_seen_after: datetime | None = None,
+    ) -> int: ...
 
     async def mark_not_seen(
         self, source_id: str, seen_ids: Sequence[str], cutoff: datetime,
@@ -345,12 +357,19 @@ class MatchRepository(Protocol):
         explanations: list[dict[str, Any]] | None = None,
     ) -> None: ...
     async def list_results(self, profile_id: str, limit: int = 50) -> Sequence[Mapping[str, object]]: ...
+    async def latest_for_jobs(
+        self, job_ids: Sequence[str], profile_id: str
+    ) -> Mapping[str, Mapping[str, object]]: ...
+
     async def find_result(
         self, profile_id: str, job_id: str, input_hash: str
     ) -> Mapping[str, object] | None: ...
     async def delete_results(self, profile_id: str, job_id: str) -> None: ...
     async def list_dimensions(self, result_id: str) -> Sequence[Mapping[str, object]]: ...
     async def list_explanations(self, result_id: str) -> Sequence[Mapping[str, object]]: ...
+    async def dimensions_for_results(
+        self, result_ids: Sequence[str]
+    ) -> Sequence[Mapping[str, object]]: ...
     async def get_weights(self, profile_id: str) -> Mapping[str, object] | None: ...
     async def set_weights(self, profile_id: str, weights: Mapping[str, object]) -> None: ...
 
@@ -520,7 +539,7 @@ class UnitOfWork(Protocol):
     observations: ObservationRepository
     resumes: ResumeRepository
     matches: MatchRepository
-    keywords: KeywordRepository
+    keywords: JobKeywordRepository
     tasks: TaskRepository
     plugins: PluginStateRepository
     sources: SourceRepository
@@ -530,6 +549,10 @@ class UnitOfWork(Protocol):
     aliases: AliasRepository
     dedup: DedupRepository
     search_profiles: SearchProfileRepository
+    intelligence: PostingIntelligenceRepositories
+    company_merges: CompanyMergeRepository
+    weight_versions: FitWeightRepository
+    backups: BackupRunRepository
 
     async def __aenter__(self) -> UnitOfWork: ...
 

@@ -1,0 +1,11 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "title": "PostingIntelligenceConfigureModelRequest",
+  "type": "object"
+}

@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "company_id"
+  ],
+  "title": "CompaniesUnmergeRequest",
+  "type": "object"
+}

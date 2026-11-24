@@ -13,8 +13,19 @@ from app.application.dto import (
     JobListResult,
     JobSearchParams,
     JobSummary,
+    RankedJobListResult,
+    RankedJobParams,
 )
 from app.domain.models.common import PortError
+from app.domain.models.enums import RiskClass
+from app.domain.services.company_resolution import canonical_map
+from app.domain.services.ranking import (
+    DEFAULT_POLICY,
+    explain,
+    rank_score,
+    visibility,
+)
+from app.domain.services.risk import CLASS_LABELS
 
 
 class JobsUseCase:
@@ -46,8 +57,10 @@ class JobsUseCase:
                         exclude_job_ids=excluded,
                     )
                 total = await uow.jobs.count(exclude_job_ids=excluded)
+                summaries = [_summary(r) for r in rows]
+                await _enrich(uow, summaries)
                 await uow.commit()
-            return JobListResult(jobs=[_summary(r) for r in rows], total=total)
+            return JobListResult(jobs=summaries, total=total)
 
         async with self._container.uow_factory() as uow:
             excluded = await _hidden_job_ids(uow, self._container.clock.now())
@@ -60,8 +73,10 @@ class JobsUseCase:
                 offset=params.offset,
                 exclude_job_ids=excluded,
             )
+            summaries = [_summary(r) for r in rows]
+            await _enrich(uow, summaries)
             await uow.commit()
-        return JobListResult(jobs=[_summary(r) for r in rows], total=total)
+        return JobListResult(jobs=summaries, total=total)
 
     async def search(self, params: JobSearchParams) -> JobListResult:
         async with self._container.uow_factory() as uow:
@@ -69,8 +84,159 @@ class JobsUseCase:
             rows = await uow.jobs.search(
                 params.query, limit=params.limit, exclude_job_ids=excluded
             )
+            summaries = [_summary(r) for r in rows]
+            await _enrich(uow, summaries)
             await uow.commit()
-        return JobListResult(jobs=[_summary(r) for r in rows], total=len(rows))
+        return JobListResult(jobs=summaries, total=len(rows))
+
+    async def ranked(self, params: RankedJobParams) -> RankedJobListResult:
+        """The shortlist: hard filters first, then policy-aware ranking.
+
+        Ranking happens over a bounded recent window. The window is
+        reported so the UI can say what was ranked; a job outside it is
+        still reachable through search.
+        """
+        profile_id = params.search_profile_id or "default"
+        async with self._container.uow_factory() as uow:
+            profile = await uow.search_profiles.get(profile_id)
+            default_policy = str(
+                getattr(
+                    self._container.config.ranking,
+                    "credibility_policy",
+                    DEFAULT_POLICY,
+                )
+            )
+            policy: str = str(
+                params.ranking_policy
+                or (profile.ranking_policy if profile else None)
+                or default_policy
+            )
+            filters = dict(
+                params.filters
+                or (profile.hard_filters if profile else {})
+                or {}
+            )
+            hidden = (
+                []
+                if params.include_suppressed
+                else await _hidden_job_ids(uow, self._container.clock.now())
+            )
+            # Headline counts describe the whole corpus; the ranking window and
+            # the page size below only affect which rows are returned.
+            corpus_total = await uow.jobs.count(exclude_job_ids=hidden)
+            needs_attention = await uow.intelligence.assessments.count_latest_in_classes(
+                (
+                    RiskClass.NEEDS_VERIFICATION.value,
+                    RiskClass.LIKELY_INACTIVE.value,
+                ),
+                exclude_job_ids=hidden,
+            )
+            since = _parse_iso(params.seen_since)
+            new_since = (
+                corpus_total
+                if since is None
+                else await uow.jobs.count(
+                    exclude_job_ids=hidden, first_seen_after=since
+                )
+            )
+            rows, _ = await uow.jobs.filtered_page(
+                filters,
+                query=params.query,
+                limit=params.window,
+                offset=0,
+                exclude_job_ids=hidden,
+            )
+            summaries = [_summary(row) for row in rows]
+            await _enrich(uow, summaries)
+            await _attach_fit(uow, summaries, profile_id)
+            await uow.commit()
+
+        if params.ensure_fit and params.sort == "rank" and summaries:
+            from app.application.commands.matching import MatchingUseCase
+
+            missing = [item.job_id for item in summaries if item.fit_score is None]
+            if missing:
+                await MatchingUseCase(self._container).run(
+                    profile_id, job_ids=missing[:200]
+                )
+                async with self._container.uow_factory() as uow:
+                    await _attach_fit(uow, summaries, profile_id)
+                    await uow.commit()
+
+        hidden_count = 0
+        visible: list[JobSummary] = []
+        for item in summaries:
+            state = visibility(
+                item.risk_class, item.risk_confidence, policy=policy
+            )
+            item.hidden_by_policy = state == "hidden"
+            item.rank_score = rank_score(
+                item.fit_score, item.risk, item.risk_confidence, policy=policy
+            )
+            item.rank_reasons = list(
+                explain(
+                    fit=item.fit_score,
+                    risk=item.risk,
+                    confidence=item.risk_confidence,
+                    risk_label=item.risk_label,
+                    policy=policy,
+                    visibility_state=state,
+                ).reasons
+            )
+            if state == "hidden":
+                hidden_count += 1
+                if not params.include_hidden:
+                    continue
+            visible.append(item)
+
+        if params.sort == "fit":
+            visible.sort(key=lambda item: (-(item.fit_score or -1), item.title))
+        elif params.sort == "credibility":
+            visible.sort(key=lambda item: (-(item.credibility or -1), item.title))
+        elif params.sort == "freshness":
+            visible.sort(
+                key=lambda item: item.posted_at or item.first_seen_at or "",
+                reverse=True,
+            )
+        else:
+            visible.sort(
+                key=lambda item: (
+                    item.rank_score is None,
+                    -(item.rank_score or 0.0),
+                    item.title,
+                )
+            )
+        total = len(visible)
+        page = visible[params.offset : params.offset + params.limit]
+        return RankedJobListResult(
+            jobs=page,
+            total=total,
+            profile_id=profile_id,
+            policy=policy,
+            window=len(summaries),
+            window_truncated=len(summaries) >= params.window,
+            hidden_by_policy=hidden_count,
+            needs_attention=needs_attention,
+            new_since=new_since,
+        )
+
+    async def list_saved(self) -> JobListResult:
+        async with self._container.uow_factory() as uow:
+            states = list(await uow.job_user_state.list(state="saved"))
+            job_ids = [str(row["job_id"]) for row in states]
+            rows = await uow.jobs.list_by_ids(job_ids) if job_ids else []
+            summaries = [_summary(row) for row in rows]
+            await _enrich(uow, summaries)
+            await uow.commit()
+        return JobListResult(jobs=summaries, total=len(summaries))
+
+    async def verify_now(self, job_id: str) -> dict[str, Any]:
+        """One polite endpoint check on demand (spec §15.4)."""
+        from app.application.endpoint_verifier import EndpointVerifier
+
+        return await EndpointVerifier(self._container).verify(
+            job_ids=[job_id], force=True
+        )
 
     async def get_detail(self, job_id: str) -> JobDetailResult:
         """Full job record with the history the /jobs/:id view needs."""
@@ -272,6 +438,56 @@ async def _hidden_job_ids(uow: Any, now: Any) -> list[str]:
     return list(dict.fromkeys([*suppressed, *dismissed]))
 
 
+async def _attach_fit(
+    uow: Any, summaries: Sequence[JobSummary], profile_id: str
+) -> None:
+    rows = await uow.matches.latest_for_jobs(
+        [item.job_id for item in summaries], profile_id
+    )
+    for item in summaries:
+        row = rows.get(item.job_id)
+        if row is not None and row.get("fit_score") is not None:
+            item.fit_score = round(float(row["fit_score"]), 4)
+
+
+async def _enrich(uow: Any, summaries: Sequence[JobSummary]) -> None:
+    """Attach the fields list views need without an N+1 per row.
+
+    Missing evidence stays ``None`` rather than 0, so the UI can say
+    "not assessed yet" instead of implying a verdict.
+    """
+    if not summaries:
+        return
+    job_ids = [item.job_id for item in summaries]
+    assessments = await uow.intelligence.assessments.latest_for_jobs(job_ids)
+    states = await uow.job_user_state.get_many(job_ids)
+    companies = {
+        str(row.get("id")): str(row.get("canonical_name") or "")
+        for row in await uow.companies.list()
+    }
+    merged = canonical_map(await uow.company_merges.latest_actions())
+    for item in summaries:
+        canonical = merged.get(item.company_id or "", item.company_id or "")
+        if canonical:
+            item.company_id = canonical
+        item.company_name = companies.get(canonical, companies.get(item.company_id or "", ""))
+        item.saved = states.get(item.job_id) == "saved"
+        assessment = assessments.get(item.job_id)
+        if assessment is None:
+            continue
+        risk = float(assessment["risk"])
+        confidence = float(assessment["confidence"])
+        risk_class = str(assessment["class"])
+        item.risk = round(risk, 4)
+        item.risk_confidence = round(confidence, 4)
+        item.risk_class = risk_class
+        item.credibility = round(1.0 - risk, 4)
+        try:
+            item.risk_label = CLASS_LABELS[RiskClass(risk_class)]
+        except ValueError:
+            item.risk_label = None
+
+
 def _summary(
     row: Mapping[str, Any],
     *,
@@ -295,7 +511,47 @@ def _summary(
         via_index=_via_index(row),
         reason=reason,
         related_job_ids=list(related_job_ids),
+        location_text=_location_text(row),
+        workplace_type=str(row.get("workplace_type") or "unknown"),
+        salary_min=_salary_value(row, "min_amount"),
+        salary_max=_salary_value(row, "max_amount"),
+        salary_currency=_salary_text(row, "currency"),
+        posted_at=_text(row.get("posted_at")),
+        first_seen_at=_text(row.get("first_seen_at")),
     )
+
+
+def _text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(value)
+
+
+def _location_text(row: Mapping[str, Any]) -> str:
+    locations = row.get("locations") or []
+    if not isinstance(locations, list) or not locations:
+        return ""
+    first = locations[0]
+    if isinstance(first, Mapping):
+        return str(first.get("raw") or first.get("city") or "")
+    return str(first)
+
+
+def _salary_payload(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    salary = row.get("salary")
+    return salary if isinstance(salary, Mapping) else {}
+
+
+def _salary_value(row: Mapping[str, Any], key: str) -> int | None:
+    value = _salary_payload(row).get(key)
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+def _salary_text(row: Mapping[str, Any], key: str) -> str | None:
+    value = _salary_payload(row).get(key)
+    return str(value) if value else None
 
 
 def _related_ids(
@@ -345,6 +601,17 @@ def _provenance_entries(row: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if not isinstance(raw, list):
         return []
     return [entry for entry in raw if isinstance(entry, Mapping)]
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp from the client, ignoring anything malformed."""
+
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _provenance_strategies(row: Mapping[str, Any]) -> list[str]:

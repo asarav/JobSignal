@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "assessment": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "signals": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "PostingIntelligenceGetSignalsResponse",
+  "type": "object"
+}

@@ -51,6 +51,28 @@ export interface ApplicationsCreateResponse {
   }[];
 }
 
+// schemas/ipc/applications/applications_get_analytics_request.json
+export interface ApplicationsGetAnalyticsRequest {
+  days?: number;
+  profile_id?: string;
+}
+
+// schemas/ipc/applications/applications_get_analytics_response.json
+export interface ApplicationsGetAnalyticsResponse {
+  generated_at: string;
+  window_days: number;
+  applications: number;
+  responded: number;
+  overall: {
+    [k: string]: unknown;
+  };
+  min_sample: number;
+  groups?: {
+    [k: string]: unknown;
+  }[];
+  note?: string;
+}
+
 // schemas/ipc/applications/applications_get_company_history_request.json
 export interface ApplicationsGetCompanyHistoryRequest {
   company_id: string;
@@ -321,6 +343,132 @@ export interface BrowserOpenJobResponse {
   job_id?: string;
 }
 
+// schemas/ipc/companies/companies_get_detail_request.json
+export interface CompaniesGetDetailRequest {
+  company_id: string;
+}
+
+// schemas/ipc/companies/companies_get_detail_response.json
+export interface CompaniesGetDetailResponse {
+  company_id: string;
+  name: string;
+  requested_id?: string | null;
+  merged_ids?: string[];
+  domain?: string | null;
+  jobs?: CompaniesGetDetailResponseJobSummary[];
+  job_count?: number;
+  active_job_count?: number;
+  repost_count?: number;
+  summary?: {
+    [k: string]: unknown;
+  } | null;
+  applications?: {
+    [k: string]: unknown;
+  }[];
+  recent_window_days?: number;
+  window_start?: string | null;
+}
+export interface CompaniesGetDetailResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
+  provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
+}
+
+// schemas/ipc/companies/companies_get_merge_history_request.json
+export interface CompaniesGetMergeHistoryRequest {
+  company_id?: string | null;
+  limit?: number;
+}
+
+// schemas/ipc/companies/companies_get_merge_history_response.json
+export interface CompaniesGetMergeHistoryResponse {
+  company_id?: string | null;
+  records?: {
+    [k: string]: unknown;
+  }[];
+  currently_merged?: {
+    [k: string]: string;
+  };
+  total?: number;
+}
+
+// schemas/ipc/companies/companies_list_request.json
+export interface CompaniesListRequest {}
+
+// schemas/ipc/companies/companies_list_response.json
+export interface CompaniesListResponse {
+  companies?: CompaniesListResponseCompanyInfo[];
+  total?: number;
+}
+export interface CompaniesListResponseCompanyInfo {
+  company_id: string;
+  name: string;
+  domain?: string | null;
+  job_count?: number;
+  active_job_count?: number;
+  application_count?: number;
+  last_seen_at?: string | null;
+  merged_ids?: string[];
+  merged_company_count?: number;
+}
+
+// schemas/ipc/companies/companies_merge_request.json
+export interface CompaniesMergeRequest {
+  company_id: string;
+  into_id: string;
+  reason?: string;
+}
+
+// schemas/ipc/companies/companies_merge_response.json
+export interface CompaniesMergeResponse {
+  company_id: string;
+  survivor_id: string;
+  action: string;
+  changed?: boolean;
+  record_id?: string | null;
+  previous_survivor_id?: string | null;
+}
+
+// schemas/ipc/companies/companies_unmerge_request.json
+export interface CompaniesUnmergeRequest {
+  company_id: string;
+}
+
+// schemas/ipc/companies/companies_unmerge_response.json
+export interface CompaniesUnmergeResponse {
+  company_id: string;
+  survivor_id: string;
+  action: string;
+  changed?: boolean;
+  record_id?: string | null;
+  previous_survivor_id?: string | null;
+}
+
 // schemas/ipc/crawl_runs/crawl_runs_list_request.json
 export interface CrawlRunsListRequest {}
 
@@ -479,6 +627,24 @@ export interface JobsListDuplicatesResponseJobSummary {
   via_index?: boolean;
   reason?: string | null;
   related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_list_request.json
@@ -509,6 +675,63 @@ export interface JobsListResponseJobSummary {
   via_index?: boolean;
   reason?: string | null;
   related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
+}
+
+// schemas/ipc/jobs/jobs_list_saved_request.json
+export interface JobsListSavedRequest {}
+
+// schemas/ipc/jobs/jobs_list_saved_response.json
+export interface JobsListSavedResponse {
+  jobs: JobsListSavedResponseJobSummary[];
+  total?: number;
+}
+export interface JobsListSavedResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
+  provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_list_seen_request.json
@@ -530,6 +753,24 @@ export interface JobsListSeenResponseJobSummary {
   via_index?: boolean;
   reason?: string | null;
   related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_merge_request.json
@@ -541,6 +782,67 @@ export interface JobsMergeRequest {
 // schemas/ipc/jobs/jobs_merge_response.json
 export interface JobsMergeResponse {
   ok?: boolean;
+}
+
+// schemas/ipc/jobs/jobs_ranked_request.json
+export interface JobsRankedRequest {
+  search_profile_id?: string | null;
+  ranking_policy?: string | null;
+  query?: string | null;
+  filters?: {
+    [k: string]: unknown;
+  };
+  sort?: "rank" | "fit" | "freshness" | "credibility";
+  include_suppressed?: boolean;
+  include_hidden?: boolean;
+  ensure_fit?: boolean;
+  limit?: number;
+  offset?: number;
+  window?: number;
+  seen_since?: string | null;
+}
+
+// schemas/ipc/jobs/jobs_ranked_response.json
+export interface JobsRankedResponse {
+  jobs?: JobsRankedResponseJobSummary[];
+  total?: number;
+  profile_id?: string;
+  policy?: string;
+  window?: number;
+  window_truncated?: boolean;
+  hidden_by_policy?: number;
+  needs_attention?: number;
+  new_since?: number | null;
+}
+export interface JobsRankedResponseJobSummary {
+  job_id: string;
+  title: string;
+  company_id?: string | null;
+  canonical_url?: string | null;
+  posting_status?: string;
+  source_id?: string | null;
+  provenance?: string[];
+  via_index?: boolean;
+  reason?: string | null;
+  related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_search_request.json
@@ -565,6 +867,24 @@ export interface JobsSearchResponseJobSummary {
   via_index?: boolean;
   reason?: string | null;
   related_job_ids?: string[];
+  company_name?: string;
+  location_text?: string;
+  workplace_type?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  posted_at?: string | null;
+  first_seen_at?: string | null;
+  fit_score?: number | null;
+  risk?: number | null;
+  risk_confidence?: number | null;
+  risk_class?: string | null;
+  risk_label?: string | null;
+  credibility?: number | null;
+  saved?: boolean;
+  rank_score?: number | null;
+  rank_reasons?: string[];
+  hidden_by_policy?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_set_user_state_request.json
@@ -592,6 +912,59 @@ export interface JobsUnmergeResponse {
   ok?: boolean;
 }
 
+// schemas/ipc/jobs/jobs_verify_now_request.json
+export interface JobsVerifyNowRequest {
+  job_id: string;
+}
+
+// schemas/ipc/jobs/jobs_verify_now_response.json
+export interface JobsVerifyNowResponse {
+  task_id?: string | null;
+  checked?: number;
+  states?: {
+    [k: string]: number;
+  };
+  job_ids?: string[];
+}
+
+// schemas/ipc/keywords/keywords_backfill_request.json
+export interface KeywordsBackfillRequest {
+  limit?: number;
+}
+
+// schemas/ipc/keywords/keywords_backfill_response.json
+export interface KeywordsBackfillResponse {
+  processed?: number;
+  remaining?: number;
+}
+
+// schemas/ipc/keywords/keywords_coverage_request.json
+export interface KeywordsCoverageRequest {
+  company_id?: string | null;
+  profile_id?: string;
+  min_sample?: number;
+  limit?: number;
+}
+
+// schemas/ipc/keywords/keywords_coverage_response.json
+export interface KeywordsCoverageResponse {
+  scope: string;
+  company_id?: string | null;
+  profile_id?: string;
+  n_jobs?: number;
+  min_sample?: number;
+  small_sample?: boolean;
+  candidate_skills?: number;
+  coverage_ratio?: number | null;
+  covered?: {
+    [k: string]: unknown;
+  }[];
+  missing?: {
+    [k: string]: unknown;
+  }[];
+  note?: string;
+}
+
 // schemas/ipc/keywords/keywords_extract_request.json
 export interface KeywordsExtractRequest {
   text: string;
@@ -600,6 +973,79 @@ export interface KeywordsExtractRequest {
 // schemas/ipc/keywords/keywords_extract_response.json
 export interface KeywordsExtractResponse {
   keywords?: string[];
+}
+
+// schemas/ipc/keywords/keywords_prevalence_request.json
+export interface KeywordsPrevalenceRequest {
+  company_id?: string | null;
+  min_sample?: number;
+  limit?: number;
+}
+
+// schemas/ipc/keywords/keywords_prevalence_response.json
+export interface KeywordsPrevalenceResponse {
+  scope: string;
+  company_id?: string | null;
+  n_jobs?: number;
+  min_sample?: number;
+  small_sample?: boolean;
+  keywords?: {
+    [k: string]: unknown;
+  }[];
+  note?: string;
+}
+
+// schemas/ipc/keywords/keywords_trends_request.json
+export interface KeywordsTrendsRequest {
+  company_id?: string | null;
+  bucket?: string;
+  periods?: number;
+  min_sample?: number;
+  limit?: number;
+  keyword_ids?: string[];
+}
+
+// schemas/ipc/keywords/keywords_trends_response.json
+export interface KeywordsTrendsResponse {
+  scope: string;
+  company_id?: string | null;
+  bucket?: string;
+  min_sample?: number;
+  keywords?: {
+    [k: string]: unknown;
+  }[];
+  periods?: {
+    [k: string]: unknown;
+  }[];
+  n_jobs?: number;
+  note?: string;
+}
+
+// schemas/ipc/matching/matching_apply_weight_proposal_request.json
+export interface MatchingApplyWeightProposalRequest {
+  profile_id?: string;
+  weights?: {
+    [k: string]: unknown;
+  };
+  evidence?: {
+    [k: string]: unknown;
+  };
+  reason?: string;
+}
+
+// schemas/ipc/matching/matching_apply_weight_proposal_response.json
+export interface MatchingApplyWeightProposalResponse {
+  ok?: boolean;
+  profile_id: string;
+  version_id: string;
+  weights?: {
+    [k: string]: number;
+  };
+  previous_weights?: {
+    [k: string]: number;
+  } | null;
+  source: string;
+  created_at: string;
 }
 
 // schemas/ipc/matching/matching_get_results_request.json
@@ -615,6 +1061,57 @@ export interface MatchingGetResultsResponse {
   weights?: {
     [k: string]: number;
   };
+}
+
+// schemas/ipc/matching/matching_get_weight_history_request.json
+export interface MatchingGetWeightHistoryRequest {
+  profile_id?: string;
+  limit?: number;
+}
+
+// schemas/ipc/matching/matching_get_weight_history_response.json
+export interface MatchingGetWeightHistoryResponse {
+  profile_id: string;
+  weights?: {
+    [k: string]: number;
+  };
+  versions?: {
+    [k: string]: unknown;
+  }[];
+  note?: string;
+}
+
+// schemas/ipc/matching/matching_get_weight_proposals_request.json
+export interface MatchingGetWeightProposalsRequest {
+  profile_id?: string;
+  days?: number;
+}
+
+// schemas/ipc/matching/matching_get_weight_proposals_response.json
+export interface MatchingGetWeightProposalsResponse {
+  profile_id: string;
+  generated_at: string;
+  window_days?: number;
+  applications?: number;
+  responded?: number;
+  not_responded?: number;
+  min_sample?: number;
+  min_per_side?: number;
+  min_gap?: number;
+  weights?: {
+    [k: string]: number;
+  };
+  associations?: {
+    [k: string]: unknown;
+  }[];
+  insufficient_evidence?: boolean;
+  proposal?: {
+    [k: string]: unknown;
+  } | null;
+  latest_version?: {
+    [k: string]: unknown;
+  } | null;
+  note?: string;
 }
 
 // schemas/ipc/matching/matching_run_request.json
@@ -722,6 +1219,103 @@ export interface PluginsResetCircuitRequest {
 // schemas/ipc/plugins/plugins_reset_circuit_response.json
 export interface PluginsResetCircuitResponse {
   ok?: boolean;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_configure_model_request.json
+export interface PostingIntelligenceConfigureModelRequest {
+  config?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_configure_model_response.json
+export interface PostingIntelligenceConfigureModelResponse {
+  model_version_id: string;
+  model_id: string;
+  model_version: string;
+  config_hash: string;
+  config?: {
+    [k: string]: unknown;
+  };
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_evaluate_request.json
+export interface PostingIntelligenceEvaluateRequest {
+  job_ids?: string[];
+  scope?: "active" | "all";
+  limit?: number;
+  refresh_endpoints?: boolean;
+  force?: boolean;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_evaluate_response.json
+export interface PostingIntelligenceEvaluateResponse {
+  task_id?: string | null;
+  evaluated?: number;
+  skipped?: number;
+  job_ids?: string[];
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_calibration_request.json
+export interface PostingIntelligenceGetCalibrationRequest {}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_calibration_response.json
+export interface PostingIntelligenceGetCalibrationResponse {
+  sample_size: number;
+  min_sample: number;
+  observed_closed: number;
+  buckets?: {
+    [k: string]: unknown;
+  }[];
+  proposal?: {
+    [k: string]: unknown;
+  } | null;
+  note?: string;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_company_assessment_request.json
+export interface PostingIntelligenceGetCompanyAssessmentRequest {
+  company_id: string;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_company_assessment_response.json
+export interface PostingIntelligenceGetCompanyAssessmentResponse {
+  company_id: string;
+  summary?: {
+    [k: string]: unknown;
+  } | null;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_risk_history_request.json
+export interface PostingIntelligenceGetRiskHistoryRequest {
+  job_id: string;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_risk_history_response.json
+export interface PostingIntelligenceGetRiskHistoryResponse {
+  job_id: string;
+  assessments?: {
+    [k: string]: unknown;
+  }[];
+  changes?: {
+    [k: string]: unknown;
+  }[];
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_signals_request.json
+export interface PostingIntelligenceGetSignalsRequest {
+  job_id: string;
+}
+
+// schemas/ipc/posting_intelligence/posting_intelligence_get_signals_response.json
+export interface PostingIntelligenceGetSignalsResponse {
+  job_id: string;
+  assessment?: {
+    [k: string]: unknown;
+  } | null;
+  signals?: {
+    [k: string]: unknown;
+  }[];
 }
 
 // schemas/ipc/resume/resume_get_profile_request.json
@@ -996,6 +1590,36 @@ export interface SourcesSetScheduleResponse {
   ok?: boolean;
 }
 
+// schemas/ipc/system/system_export_backup_request.json
+export interface SystemExportBackupRequest {
+  path?: string | null;
+}
+
+// schemas/ipc/system/system_export_backup_response.json
+export interface SystemExportBackupResponse {
+  ok?: boolean;
+  path: string;
+  checksum: string;
+  counts?: {
+    [k: string]: number;
+  };
+  schema_version?: number;
+  created_at: string;
+}
+
+// schemas/ipc/system/system_get_backup_history_request.json
+export interface SystemGetBackupHistoryRequest {
+  limit?: number;
+}
+
+// schemas/ipc/system/system_get_backup_history_response.json
+export interface SystemGetBackupHistoryResponse {
+  runs?: {
+    [k: string]: unknown;
+  }[];
+  note?: string;
+}
+
 // schemas/ipc/system/system_health_request.json
 export interface SystemHealthRequest {}
 
@@ -1026,6 +1650,25 @@ export interface SystemHelloResponse {
   schema_version: number;
   plugin_api_version: string;
   capabilities: string[];
+}
+
+// schemas/ipc/system/system_import_backup_request.json
+export interface SystemImportBackupRequest {
+  path: string;
+  confirm?: boolean;
+}
+
+// schemas/ipc/system/system_import_backup_response.json
+export interface SystemImportBackupResponse {
+  ok?: boolean;
+  verified?: boolean;
+  path: string;
+  checksum: string;
+  counts?: {
+    [k: string]: number;
+  };
+  schema_version?: number;
+  imported_at: string;
 }
 
 // schemas/ipc/system/system_shutdown_request.json

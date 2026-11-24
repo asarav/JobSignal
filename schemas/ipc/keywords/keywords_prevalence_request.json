@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "min_sample": {
+      "default": 10,
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "limit": {
+      "default": 50,
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "KeywordsPrevalenceRequest",
+  "type": "object"
+}

@@ -1,0 +1,27 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "assessments": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "changes": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "PostingIntelligenceGetRiskHistoryResponse",
+  "type": "object"
+}

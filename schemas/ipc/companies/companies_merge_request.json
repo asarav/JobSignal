@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "into_id": {
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "company_id",
+    "into_id"
+  ],
+  "title": "CompaniesMergeRequest",
+  "type": "object"
+}

@@ -1,0 +1,73 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "type": "string"
+    },
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "n_jobs": {
+      "default": 0,
+      "type": "integer"
+    },
+    "min_sample": {
+      "default": 10,
+      "type": "integer"
+    },
+    "small_sample": {
+      "default": true,
+      "type": "boolean"
+    },
+    "candidate_skills": {
+      "default": 0,
+      "type": "integer"
+    },
+    "coverage_ratio": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "covered": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "missing": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "KeywordsCoverageResponse",
+  "type": "object"
+}

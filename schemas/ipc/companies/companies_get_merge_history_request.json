@@ -1,0 +1,24 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "limit": {
+      "default": 200,
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "CompaniesGetMergeHistoryRequest",
+  "type": "object"
+}

@@ -186,6 +186,31 @@ class ApplicationEventParams(DTO):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class AnalyticsParams(DTO):
+    days: int = Field(default=365, ge=1, le=3650)
+    profile_id: str = "default"
+
+
+class AnalyticsResult(DTO):
+    generated_at: str
+    window_days: int
+    applications: int
+    responded: int
+    overall: dict[str, Any]
+    min_sample: int
+    groups: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+
+
+class CalibrationResult(DTO):
+    sample_size: int
+    min_sample: int
+    observed_closed: int
+    buckets: list[dict[str, Any]] = Field(default_factory=list)
+    proposal: dict[str, Any] | None = None
+    note: str = ""
+
+
 class ApplicationOutcomeParams(DTO):
     application_id: str
     kind: str
@@ -398,6 +423,90 @@ class JobSummary(DTO):
     #: ``posting_removed`` …); ``None`` in ordinary result lists.
     reason: str | None = None
     related_job_ids: list[str] = Field(default_factory=list)
+    company_name: str = ""
+    location_text: str = ""
+    workplace_type: str = "unknown"
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str | None = None
+    posted_at: str | None = None
+    first_seen_at: str | None = None
+    #: Heuristic fit (satisfaction) and credibility (success evidence) are
+    #: separate, and neither is a probability of an interview.
+    fit_score: float | None = None
+    risk: float | None = None
+    risk_confidence: float | None = None
+    risk_class: str | None = None
+    risk_label: str | None = None
+    credibility: float | None = None
+    saved: bool = False
+    rank_score: float | None = None
+    rank_reasons: list[str] = Field(default_factory=list)
+    hidden_by_policy: bool = False
+
+
+class CompanyInfo(DTO):
+    company_id: str
+    name: str
+    domain: str | None = None
+    job_count: int = 0
+    active_job_count: int = 0
+    application_count: int = 0
+    last_seen_at: str | None = None
+    merged_ids: list[str] = Field(default_factory=list)
+    merged_company_count: int = 0
+
+
+class CompanyListResult(DTO):
+    companies: list[CompanyInfo] = Field(default_factory=list)
+    total: int = 0
+
+
+class CompanyDetailParams(DTO):
+    company_id: str
+
+
+class CompanyMergeParams(DTO):
+    company_id: str
+    into_id: str
+    reason: str = ""
+
+
+class CompanyMergeResult(DTO):
+    company_id: str
+    survivor_id: str
+    action: str
+    changed: bool = False
+    record_id: str | None = None
+    previous_survivor_id: str | None = None
+
+
+class CompanyMergeHistoryParams(DTO):
+    company_id: str | None = None
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+class CompanyMergeHistoryResult(DTO):
+    company_id: str | None = None
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    currently_merged: dict[str, str] = Field(default_factory=dict)
+    total: int = 0
+
+
+class CompanyDetailResult(DTO):
+    company_id: str
+    name: str
+    requested_id: str | None = None
+    merged_ids: list[str] = Field(default_factory=list)
+    domain: str | None = None
+    jobs: list[JobSummary] = Field(default_factory=list)
+    job_count: int = 0
+    active_job_count: int = 0
+    repost_count: int = 0
+    summary: dict[str, Any] | None = None
+    applications: list[dict[str, Any]] = Field(default_factory=list)
+    recent_window_days: int = 90
+    window_start: str | None = None
 
 
 class JobListResult(DTO):
@@ -408,6 +517,37 @@ class JobListResult(DTO):
 class JobSearchParams(DTO):
     query: str
     limit: int = 50
+
+
+class RankedJobParams(DTO):
+    search_profile_id: str | None = None
+    ranking_policy: str | None = None
+    query: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    sort: Literal["rank", "fit", "freshness", "credibility"] = "rank"
+    include_suppressed: bool = False
+    include_hidden: bool = False
+    #: Compute missing fit for the ranking window (bounded).
+    ensure_fit: bool = False
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+    #: How many recent matches are considered before ranking.
+    window: int = Field(default=500, ge=1, le=2000)
+    #: ISO timestamp of the previous visit, for the whole-corpus "new" count.
+    seen_since: str | None = None
+
+
+class RankedJobListResult(DTO):
+    jobs: list[JobSummary] = Field(default_factory=list)
+    total: int = 0
+    profile_id: str = "default"
+    policy: str = "deprioritize"
+    window: int = 0
+    window_truncated: bool = False
+    hidden_by_policy: int = 0
+    #: Whole-corpus counts, not the paged/ranked slice (dashboard headline).
+    needs_attention: int = 0
+    new_since: int | None = None
 
 
 class JobFilter(DTO):
@@ -462,6 +602,58 @@ class MatchingWeightsResult(DTO):
     weights: dict[str, float] = Field(default_factory=dict)
 
 
+class MatchingWeightProposalsParams(DTO):
+    profile_id: str = "default"
+    days: int = Field(default=365, ge=1, le=3650)
+
+
+class MatchingWeightProposalResult(DTO):
+    profile_id: str
+    generated_at: str
+    window_days: int = 365
+    applications: int = 0
+    responded: int = 0
+    not_responded: int = 0
+    min_sample: int = 20
+    min_per_side: int = 5
+    min_gap: float = 0.05
+    weights: dict[str, float] = Field(default_factory=dict)
+    associations: list[dict[str, Any]] = Field(default_factory=list)
+    insufficient_evidence: bool = True
+    proposal: dict[str, Any] | None = None
+    latest_version: dict[str, Any] | None = None
+    note: str = ""
+
+
+class MatchingApplyWeightsParams(DTO):
+    profile_id: str = "default"
+    weights: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class MatchingApplyWeightsResult(DTO):
+    ok: bool = True
+    profile_id: str
+    version_id: str
+    weights: dict[str, float] = Field(default_factory=dict)
+    previous_weights: dict[str, float] | None = None
+    source: str
+    created_at: str
+
+
+class MatchingWeightHistoryParams(DTO):
+    profile_id: str = "default"
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class MatchingWeightHistoryResult(DTO):
+    profile_id: str
+    weights: dict[str, float] = Field(default_factory=dict)
+    versions: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+
+
 class ResumeSkillStatusParams(DTO):
     profile_id: str = "default"
     keyword_id: str
@@ -480,12 +672,115 @@ class ResumeParseResult(DTO):
     years_experience: float | None = None
 
 
+class BackupExportParams(DTO):
+    path: str | None = None
+
+
+class BackupExportResult(DTO):
+    ok: bool = True
+    path: str
+    checksum: str
+    counts: dict[str, int] = Field(default_factory=dict)
+    schema_version: int = 0
+    created_at: str
+
+
+class BackupImportParams(DTO):
+    path: str
+    confirm: bool = False
+
+
+class BackupImportResult(DTO):
+    ok: bool = True
+    verified: bool = False
+    path: str
+    checksum: str
+    counts: dict[str, int] = Field(default_factory=dict)
+    schema_version: int = 0
+    imported_at: str
+
+
+class BackupHistoryParams(DTO):
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class BackupHistoryResult(DTO):
+    runs: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+
+
 class KeywordsExtractParams(DTO):
     text: str
 
 
 class KeywordsExtractResult(DTO):
     keywords: list[str] = Field(default_factory=list)
+
+
+class KeywordsPrevalenceParams(DTO):
+    company_id: str | None = None
+    min_sample: int = Field(default=10, ge=1, le=1000)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class KeywordsPrevalenceResult(DTO):
+    scope: str
+    company_id: str | None = None
+    n_jobs: int = 0
+    min_sample: int = 10
+    small_sample: bool = True
+    keywords: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+
+
+class KeywordsTrendsParams(DTO):
+    company_id: str | None = None
+    bucket: str = "month"
+    periods: int = Field(default=12, ge=1, le=60)
+    min_sample: int = Field(default=10, ge=1, le=1000)
+    limit: int = Field(default=8, ge=1, le=50)
+    keyword_ids: list[str] = Field(default_factory=list)
+
+
+class KeywordsTrendsResult(DTO):
+    scope: str
+    company_id: str | None = None
+    bucket: str = "month"
+    min_sample: int = 10
+    keywords: list[dict[str, Any]] = Field(default_factory=list)
+    periods: list[dict[str, Any]] = Field(default_factory=list)
+    n_jobs: int = 0
+    note: str = ""
+
+
+class KeywordsCoverageParams(DTO):
+    company_id: str | None = None
+    profile_id: str = "default"
+    min_sample: int = Field(default=10, ge=1, le=1000)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class KeywordsCoverageResult(DTO):
+    scope: str
+    company_id: str | None = None
+    profile_id: str = "default"
+    n_jobs: int = 0
+    min_sample: int = 10
+    small_sample: bool = True
+    candidate_skills: int = 0
+    coverage_ratio: float | None = None
+    covered: list[dict[str, Any]] = Field(default_factory=list)
+    missing: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+
+
+class KeywordsBackfillParams(DTO):
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class KeywordsBackfillResult(DTO):
+    processed: int = 0
+    remaining: int = 0
 
 class ResumeImportParams(DTO):
     file_path: str
@@ -557,3 +852,64 @@ def task_summary(task: Any) -> TaskSummary:
         finished_at=iso(task.finished_at),
         parent_task_id=task.parent_task_id,
     )
+
+
+# --- M8: posting intelligence ------------------------------------------------
+
+
+class PostingIntelligenceEvaluateParams(DTO):
+    job_ids: list[str] = Field(default_factory=list)
+    scope: Literal["active", "all"] = "active"
+    #: Cap for a scope pass; 0 means every matching job.
+    limit: int = 0
+    refresh_endpoints: bool = False
+    #: Re-assess even when the inputs have not changed (a model change or an
+    #: explicit "re-check" from the UI). Ordinary runs reuse identical inputs.
+    force: bool = False
+
+
+class PostingIntelligenceEvaluateResult(DTO):
+    task_id: str | None = None
+    evaluated: int = 0
+    skipped: int = 0
+    job_ids: list[str] = Field(default_factory=list)
+
+
+class PostingIntelligenceSignalsResult(DTO):
+    job_id: str
+    assessment: dict[str, Any] | None = None
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PostingIntelligenceHistoryResult(DTO):
+    job_id: str
+    assessments: list[dict[str, Any]] = Field(default_factory=list)
+    changes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PostingIntelligenceCompanyParams(DTO):
+    company_id: str
+
+
+class PostingIntelligenceCompanyResult(DTO):
+    company_id: str
+    summary: dict[str, Any] | None = None
+
+
+class PostingIntelligenceConfigParams(DTO):
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class EndpointVerifyResult(DTO):
+    task_id: str | None = None
+    checked: int = 0
+    states: dict[str, int] = Field(default_factory=dict)
+    job_ids: list[str] = Field(default_factory=list)
+
+
+class PostingIntelligenceConfigResult(DTO):
+    model_version_id: str
+    model_id: str
+    model_version: str
+    config_hash: str
+    config: dict[str, Any] = Field(default_factory=dict)

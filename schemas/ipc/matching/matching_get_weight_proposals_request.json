@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "days": {
+      "default": 365,
+      "maximum": 3650,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "MatchingGetWeightProposalsRequest",
+  "type": "object"
+}

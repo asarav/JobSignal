@@ -1,0 +1,18 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "runs": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "SystemGetBackupHistoryResponse",
+  "type": "object"
+}

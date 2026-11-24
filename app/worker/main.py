@@ -22,6 +22,7 @@ from app.application.auto_discover import (
     AutoDiscoverUseCase,
     effective_crawl_interval_s,
 )
+from app.application.commands.companies import CompaniesUseCase
 from app.application.commands.diagnostics import FetchUrlUseCase
 from app.application.commands.discovery import DiscoveryUseCase
 from app.application.commands.hello import HealthUseCase, HelloUseCase
@@ -52,6 +53,7 @@ from app.worker.composition_root import build_container
 from app.worker.ipc.dispatcher import Dispatcher, validate_request
 from app.worker.ipc.envelope import PROTOCOL_VERSION, error_envelope, event_envelope, ok_envelope
 from app.worker.ipc.events import QueuedEventPublisher, event_writer
+from app.worker.ipc.handlers.companies import CompaniesHandlers
 from app.worker.ipc.handlers.diagnostics import DiagnosticsHandlers
 from app.worker.ipc.handlers.discovery import DiscoveryHandlers
 from app.worker.ipc.handlers.jobs import JobsHandlers
@@ -67,6 +69,10 @@ MAX_CONCURRENT_REQUESTS = 8
 #: How often due suppressions are lapsed in the background (spec §8.2: daily;
 #: the query is indexed and cheap, so a shorter tick only makes expiry prompt).
 MAINTENANCE_POLL_S = 900.0
+#: Posting-intelligence maintenance runs on a slow, bounded cycle: a
+#: daily verdict pass for active jobs and a budgeted endpoint sweep.
+INTELLIGENCE_STARTUP_DELAY_S = 600.0
+INTELLIGENCE_PASS_INTERVAL_S = 21_600.0
 
 #: IPC methods that can change which sources exist or when they run.  Listing
 #: sources must not reschedule the world, and neither must an extraction-order
@@ -136,10 +142,14 @@ def _build_dispatcher(
     container: Any, wiring: DiscoveryWiring | None = None
 ) -> Dispatcher:
     from app.application.dto import (
+        AnalyticsParams,
         ApplicationCreateParams,
         ApplicationEventParams,
         ApplicationOutcomeParams,
         ApplicationStatusParams,
+        BackupExportParams,
+        BackupHistoryParams,
+        BackupImportParams,
         BrowserAutofillParams,
         BrowserCloseParams,
         BrowserHandoffParams,
@@ -147,7 +157,10 @@ def _build_dispatcher(
         BrowserOpenJobParams,
         BrowserPlanParams,
         CancelTaskParams,
+        CompanyDetailParams,
         CompanyHistoryParams,
+        CompanyMergeHistoryParams,
+        CompanyMergeParams,
         DiscoveryRunParams,
         EmptyParams,
         FetchUrlParams,
@@ -157,12 +170,23 @@ def _build_dispatcher(
         JobMergeParams,
         JobSearchParams,
         JobUserStateParams,
+        KeywordsBackfillParams,
+        KeywordsCoverageParams,
         KeywordsExtractParams,
+        KeywordsPrevalenceParams,
+        KeywordsTrendsParams,
+        MatchingApplyWeightsParams,
         MatchingRunParams,
+        MatchingWeightHistoryParams,
+        MatchingWeightProposalsParams,
         MatchingWeightsParams,
         PluginConfigureParams,
         PluginIdParams,
         PluginOptionalIdParams,
+        PostingIntelligenceCompanyParams,
+        PostingIntelligenceConfigParams,
+        PostingIntelligenceEvaluateParams,
+        RankedJobParams,
         RestoreSuppressedJobParams,
         ResumeImportParams,
         ResumeOverridesParams,
@@ -184,10 +208,27 @@ def _build_dispatcher(
     )
 
     dispatcher = Dispatcher()
-    system = SystemHandlers(HelloUseCase(container), HealthUseCase(container))
+    system = SystemHandlers(
+        HelloUseCase(container), HealthUseCase(container), container
+    )
     dispatcher.register("system.hello", system.hello, params_model=HelloParams)
     dispatcher.register("system.health", system.health, params_model=EmptyParams)
     dispatcher.register("system.shutdown", system.shutdown, params_model=EmptyParams)
+    dispatcher.register(
+        "system.export_backup",
+        system.export_backup,
+        params_model=BackupExportParams,
+    )
+    dispatcher.register(
+        "system.import_backup",
+        system.import_backup,
+        params_model=BackupImportParams,
+    )
+    dispatcher.register(
+        "system.get_backup_history",
+        system.get_backup_history,
+        params_model=BackupHistoryParams,
+    )
 
     tasks = TasksHandlers(TasksUseCase(container))
     dispatcher.register("tasks.list", tasks.list, params_model=TaskFilter)
@@ -242,7 +283,41 @@ def _build_dispatcher(
     dispatcher.register("jobs.unmerge", discovery.jobs.unmerge, params_model=JobMergeParams)
     dispatcher.register("jobs.list_duplicates", discovery.jobs.list_duplicates, params_model=EmptyParams)
     dispatcher.register("jobs.list_seen", discovery.jobs.list_seen, params_model=EmptyParams)
+    dispatcher.register(
+        "jobs.ranked", discovery.jobs.ranked, params_model=RankedJobParams
+    )
+    dispatcher.register(
+        "jobs.list_saved", discovery.jobs.list_saved, params_model=EmptyParams
+    )
+    dispatcher.register(
+        "companies.list",
+        discovery.companies.list,
+        params_model=EmptyParams,
+    )
+    dispatcher.register(
+        "companies.get_detail",
+        discovery.companies.get_detail,
+        params_model=CompanyDetailParams,
+    )
+    dispatcher.register(
+        "companies.merge",
+        discovery.companies.merge,
+        params_model=CompanyMergeParams,
+    )
+    dispatcher.register(
+        "companies.unmerge",
+        discovery.companies.unmerge,
+        params_model=CompanyDetailParams,
+    )
+    dispatcher.register(
+        "companies.get_merge_history",
+        discovery.companies.get_merge_history,
+        params_model=CompanyMergeHistoryParams,
+    )
     dispatcher.register("jobs.get_detail", discovery.jobs.get_detail, params_model=JobIdParams)
+    dispatcher.register(
+        "jobs.verify_now", discovery.jobs.verify_now, params_model=JobIdParams
+    )
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)
@@ -257,8 +332,8 @@ def _build_dispatcher(
     resume_uc = ResumeUseCase(container, Path(container.data_dir))
     matching_uc = MatchingUseCase(container)
     resume = ResumeHandlers(resume_uc)
-    matching = MatchingHandlers(matching_uc)
-    keywords = KeywordsHandlers()
+    matching = MatchingHandlers(matching_uc, container)
+    keywords = KeywordsHandlers(container)
 
     dispatcher.register("resume.import", resume.import_resume, params_model=ResumeImportParams)
     dispatcher.register("resume.list_versions", resume.list_versions, params_model=ResumeProfileParams)
@@ -271,7 +346,42 @@ def _build_dispatcher(
     dispatcher.register("matching.run", matching.run, params_model=MatchingRunParams)
     dispatcher.register("matching.get_results", matching.get_results, params_model=ResumeProfileParams)
     dispatcher.register("matching.update_weights", matching.update_weights, params_model=MatchingWeightsParams)
+    dispatcher.register(
+        "matching.get_weight_proposals",
+        matching.get_weight_proposals,
+        params_model=MatchingWeightProposalsParams,
+    )
+    dispatcher.register(
+        "matching.apply_weight_proposal",
+        matching.apply_weight_proposal,
+        params_model=MatchingApplyWeightsParams,
+    )
+    dispatcher.register(
+        "matching.get_weight_history",
+        matching.get_weight_history,
+        params_model=MatchingWeightHistoryParams,
+    )
     dispatcher.register("keywords.extract", keywords.extract, params_model=KeywordsExtractParams)
+    dispatcher.register(
+        "keywords.prevalence",
+        keywords.prevalence,
+        params_model=KeywordsPrevalenceParams,
+    )
+    dispatcher.register(
+        "keywords.coverage",
+        keywords.coverage,
+        params_model=KeywordsCoverageParams,
+    )
+    dispatcher.register(
+        "keywords.backfill",
+        keywords.backfill,
+        params_model=KeywordsBackfillParams,
+    )
+    dispatcher.register(
+        "keywords.trends",
+        keywords.trends,
+        params_model=KeywordsTrendsParams,
+    )
 
     from app.application.commands.applications import (
         ApplicationsUseCase,
@@ -305,6 +415,11 @@ def _build_dispatcher(
         "applications.get_company_history",
         applications.get_company_history,
         params_model=CompanyHistoryParams,
+    )
+    dispatcher.register(
+        "applications.get_analytics",
+        applications.get_analytics,
+        params_model=AnalyticsParams,
     )
     dispatcher.register(
         "applications.get_suppressions",
@@ -355,6 +470,45 @@ def _build_dispatcher(
         "browser.close_session", browser.close_session, params_model=BrowserCloseParams
     )
 
+    from app.application.intelligence import PostingIntelligenceUseCase
+    from app.worker.ipc.handlers.posting_intelligence import (
+        PostingIntelligenceHandlers,
+    )
+
+    intelligence = PostingIntelligenceHandlers(
+        PostingIntelligenceUseCase(container), container.task_runner
+    )
+    dispatcher.register(
+        "posting_intelligence.evaluate",
+        intelligence.evaluate,
+        params_model=PostingIntelligenceEvaluateParams,
+    )
+    dispatcher.register(
+        "posting_intelligence.get_signals",
+        intelligence.get_signals,
+        params_model=JobIdParams,
+    )
+    dispatcher.register(
+        "posting_intelligence.get_risk_history",
+        intelligence.get_risk_history,
+        params_model=JobIdParams,
+    )
+    dispatcher.register(
+        "posting_intelligence.get_company_assessment",
+        intelligence.get_company_assessment,
+        params_model=PostingIntelligenceCompanyParams,
+    )
+    dispatcher.register(
+        "posting_intelligence.configure_model",
+        intelligence.configure_model,
+        params_model=PostingIntelligenceConfigParams,
+    )
+    dispatcher.register(
+        "posting_intelligence.get_calibration",
+        intelligence.get_calibration,
+        params_model=EmptyParams,
+    )
+
     profiles = SearchProfilesHandlers(SearchProfilesUseCase(container))
     dispatcher.register("search_profiles.list", profiles.list, params_model=EmptyParams)
     dispatcher.register("search_profiles.save", profiles.save, params_model=SearchProfileSaveParams)
@@ -369,6 +523,7 @@ class DiscoveryWiring:
     registry: SourceRegistry
     sources: SourcesHandlers
     jobs: JobsHandlers
+    companies: CompaniesHandlers
     discovery: DiscoveryHandlers
     discovery_use_case: DiscoveryUseCase
     auto_discover_use_case: AutoDiscoverUseCase
@@ -376,6 +531,7 @@ class DiscoveryWiring:
     crawl_gate: asyncio.Semaphore
     config: Any
     container: Any = None
+    policy_http: Any = None
 
     async def retier(self) -> int:
         """Recompute source tiers now (profile edits, §6.8 / M6)."""
@@ -448,13 +604,15 @@ def _build_discovery(container: Any) -> DiscoveryWiring:
     return DiscoveryWiring(
         registry=registry,
         sources=SourcesHandlers(SourcesUseCase(container, registry)),
-        jobs=JobsHandlers(JobsUseCase(container)),
+        jobs=JobsHandlers(JobsUseCase(container), container.task_runner),
+        companies=CompaniesHandlers(CompaniesUseCase(container)),
         discovery=DiscoveryHandlers(discovery_use_case, auto_discover_use_case),
         discovery_use_case=discovery_use_case,
         auto_discover_use_case=auto_discover_use_case,
         scheduler=CrawlScheduler(),
         crawl_gate=crawl_gate,
         config=container.config,
+        policy_http=policy_http,
         container=container,
     )
 
@@ -553,12 +711,29 @@ async def main() -> int:
 
     async def _maintenance_loop() -> None:
         from app.application.commands.applications import SuppressionsUseCase
+        from app.application.endpoint_verifier import EndpointVerifier
+        from app.application.intelligence import RiskEvaluationService
 
+        loop = asyncio.get_running_loop()
+        next_intelligence_pass = loop.time() + INTELLIGENCE_STARTUP_DELAY_S
         while True:
             try:
                 await SuppressionsUseCase(container).sweep()
             except Exception as exc:  # noqa: BLE001 - maintenance must keep running
                 logger.warning("suppression.sweep_failed", error=str(exc))
+            if loop.time() >= next_intelligence_pass:
+                next_intelligence_pass = loop.time() + INTELLIGENCE_PASS_INTERVAL_S
+                # Bounded on every axis: endpoint checks respect the 7-day
+                # budget, and risk evaluation reuses identical inputs.
+                try:
+                    await EndpointVerifier(
+                        container, http=wiring.policy_http
+                    ).verify(limit=10)
+                    await RiskEvaluationService(container).evaluate(
+                        scope="active", limit=200
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    logger.warning("intelligence.pass_failed", error=str(exc))
             await asyncio.sleep(MAINTENANCE_POLL_S)
 
     discovery_task = asyncio.create_task(_auto_discover_loop())

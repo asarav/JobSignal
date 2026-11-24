@@ -177,6 +177,28 @@ class TaskRunner:
         from app.application.commands.diagnostics import DiagnosticsSleepUseCase
         from app.application.dto import SleepTaskParams
 
+        if task.type == "jobs.verify_now":
+            from app.application.dto import JobIdParams
+            from app.application.endpoint_verifier import EndpointVerifier
+
+            verify_params = JobIdParams.model_validate(dict(task.params))
+            return await EndpointVerifier(self._container).verify(
+                job_ids=[verify_params.job_id], force=True
+            )
+        if task.type == "posting_intelligence.evaluate":
+            from app.application.dto import PostingIntelligenceEvaluateParams
+            from app.application.intelligence import RiskEvaluationService
+
+            risk_params = PostingIntelligenceEvaluateParams.model_validate(
+                dict(task.params)
+            )
+            return await RiskEvaluationService(self._container).evaluate(
+                job_ids=risk_params.job_ids or None,
+                scope=risk_params.scope,
+                limit=risk_params.limit or None,
+                force=risk_params.force,
+                refresh_endpoints=risk_params.refresh_endpoints,
+            )
         if task.type != "diagnostics.sleep":
             raise PortError(
                 code="validation.invalid_params",

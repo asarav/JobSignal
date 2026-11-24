@@ -116,6 +116,21 @@ def build_container(
 
     events = overrides.get("events") or _LoggingEventPublisher(logger)
 
+    backup_store = overrides.get("backup_store")
+    if backup_store is None:
+        from app.infrastructure.persistence.memory.backups import (
+            InMemoryBackupStore,
+        )
+        from app.infrastructure.persistence.sqlite.backups import (
+            SqliteBackupStore,
+        )
+        if isinstance(uow_factory, SqliteUnitOfWorkFactory):
+            backup_store = SqliteBackupStore(
+                uow_factory.db_path, data_dir=cfg.paths.data_dir
+            )
+        else:
+            backup_store = InMemoryBackupStore(data_dir=cfg.paths.data_dir)
+
     base = Container(
         config=cfg,
         clock=clock,
@@ -131,6 +146,7 @@ def build_container(
         protocol_version=cfg.protocol_version,
         extraction_pipeline=build_extraction_pipeline(registry),
         extra={"browser": browser},
+        backup_store=backup_store,
     )
     runner = TaskRunner(base)
     return replace(base, task_runner=runner)

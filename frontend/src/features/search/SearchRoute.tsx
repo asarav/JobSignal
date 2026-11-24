@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { Copy } from "../../copy/copy";
@@ -15,6 +16,7 @@ export function SearchRoute() {
   const [titleInclude, setTitleInclude] = useState("");
   const [location, setLocation] = useState("");
   const [workplace, setWorkplace] = useState("");
+  const [rankingPolicy, setRankingPolicy] = useState("deprioritize");
   const [jobs, setJobs] = useState<JobsListResponseJobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -51,6 +53,7 @@ export function SearchRoute() {
     setWorkplace(
       Array.isArray(types) && typeof types[0] === "string" ? types[0] : "",
     );
+    setRankingPolicy(selectedProfile?.ranking_policy ?? "deprioritize");
   }, [selectedProfile]);
 
   const runSearch = useCallback(async () => {
@@ -90,6 +93,7 @@ export function SearchRoute() {
         profile_id: selectedProfile?.profile_id ?? undefined,
         name,
         hard_filters: currentFilters(),
+        ranking_policy: rankingPolicy,
       });
       setSelected(saved.profile_id);
       await loadProfiles();
@@ -206,6 +210,29 @@ export function SearchRoute() {
             <option value="onsite">On-site</option>
           </select>
         </div>
+        <div className="mt-3">
+          <label
+            className="block text-xs font-medium text-slate-600"
+            htmlFor="ranking-policy"
+          >
+            Credibility policy
+          </label>
+          <select
+            id="ranking-policy"
+            className="mt-1 rounded border border-slate-300 px-3 py-2 text-sm"
+            value={rankingPolicy}
+            onChange={(event) => setRankingPolicy(event.target.value)}
+          >
+            <option value="deprioritize">Move low-credibility jobs down</option>
+            <option value="show_all">Show everything</option>
+            <option value="hide_high_risk">Hide likely-inactive jobs</option>
+            <option value="require_evidence">Require positive evidence</option>
+          </select>
+          <p className="mt-1 text-xs text-slate-500">
+            Fit stays the satisfaction score. Credibility scales how far a posting moves
+            down; it never becomes a probability of an interview.
+          </p>
+        </div>
         {selectedProfile ? (
           <button
             type="button"
@@ -255,9 +282,26 @@ export function SearchRoute() {
         ) : (
           <ul className="mt-3 divide-y divide-slate-100">
             {jobs.map((job) => (
-              <li key={job.job_id} className="py-2">
-                <div className="font-medium text-slate-900">{job.title}</div>
-                <div className="text-xs text-slate-500">{job.canonical_url}</div>
+              <li key={job.job_id} className="py-3">
+                <Link
+                  className="font-medium text-slate-900 underline"
+                  to={`/jobs/${job.job_id}`}
+                >
+                  {job.title}
+                </Link>
+                <div className="text-xs text-slate-500">
+                  {[job.company_name, job.location_text].filter(Boolean).join(" · ") ||
+                    "Company and location not recorded"}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">
+                    {job.posting_status}
+                  </span>
+                  {job.saved ? <span>Saved</span> : null}
+                  {job.canonical_url ? (
+                    <span className="truncate text-slate-400">{job.canonical_url}</span>
+                  ) : null}
+                </div>
                 {job.provenance && job.provenance.length > 0 ? (
                   <div className="mt-1 text-xs text-slate-400">
                     <span title={Copy.tooltips.extractedBy}>

@@ -1,0 +1,79 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "companies": {
+      "items": {
+        "$ref": "#/$defs/CompaniesListResponseCompanyInfo"
+      },
+      "type": "array"
+    },
+    "total": {
+      "default": 0,
+      "type": "integer"
+    }
+  },
+  "title": "CompaniesListResponse",
+  "type": "object",
+  "$defs": {
+    "CompaniesListResponseCompanyInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "job_count": {
+          "default": 0,
+          "type": "integer"
+        },
+        "active_job_count": {
+          "default": 0,
+          "type": "integer"
+        },
+        "application_count": {
+          "default": 0,
+          "type": "integer"
+        },
+        "last_seen_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "merged_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "merged_company_count": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "company_id",
+        "name"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 100,
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "KeywordsBackfillRequest",
+  "type": "object"
+}

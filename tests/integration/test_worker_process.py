@@ -168,8 +168,6 @@ async def test_invalid_params_are_mapped(tmp_path):
                     "browser.open",
             "matching.score",
             "browser.submit",
-            "companies.list",
-            "posting_intelligence.evaluate",
             "totally.unknown",
     ],
 )

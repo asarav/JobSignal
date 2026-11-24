@@ -1,0 +1,337 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "requested_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "merged_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "domain": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "jobs": {
+      "items": {
+        "$ref": "#/$defs/CompaniesGetDetailResponseJobSummary"
+      },
+      "type": "array"
+    },
+    "job_count": {
+      "default": 0,
+      "type": "integer"
+    },
+    "active_job_count": {
+      "default": 0,
+      "type": "integer"
+    },
+    "repost_count": {
+      "default": 0,
+      "type": "integer"
+    },
+    "summary": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "applications": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "recent_window_days": {
+      "default": 90,
+      "type": "integer"
+    },
+    "window_start": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "company_id",
+    "name"
+  ],
+  "title": "CompaniesGetDetailResponse",
+  "type": "object",
+  "$defs": {
+    "CompaniesGetDetailResponseJobSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "company_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "canonical_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "posting_status": {
+          "default": "active",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "via_index": {
+          "default": false,
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "related_job_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "company_name": {
+          "default": "",
+          "type": "string"
+        },
+        "location_text": {
+          "default": "",
+          "type": "string"
+        },
+        "workplace_type": {
+          "default": "unknown",
+          "type": "string"
+        },
+        "salary_min": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "salary_max": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "salary_currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "posted_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "first_seen_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fit_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_confidence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "credibility": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "saved": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rank_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rank_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hidden_by_policy": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "job_id",
+        "title"
+      ],
+      "type": "object"
+    }
+  }
+}

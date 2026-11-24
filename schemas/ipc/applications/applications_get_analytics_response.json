@@ -1,0 +1,45 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "generated_at": {
+      "type": "string"
+    },
+    "window_days": {
+      "type": "integer"
+    },
+    "applications": {
+      "type": "integer"
+    },
+    "responded": {
+      "type": "integer"
+    },
+    "overall": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "min_sample": {
+      "type": "integer"
+    },
+    "groups": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "generated_at",
+    "window_days",
+    "applications",
+    "responded",
+    "overall",
+    "min_sample"
+  ],
+  "title": "ApplicationsGetAnalyticsResponse",
+  "type": "object"
+}

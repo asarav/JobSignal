@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   listPlugins: vi.fn(),
   listSources: vi.fn(),
+  getBackupHistory: vi.fn(),
+  exportBackup: vi.fn(),
+  importBackup: vi.fn(),
   updateSettings: vi.fn(),
 }));
 
@@ -22,6 +25,7 @@ function prime(snippets: Record<string, string>) {
   mocks.getSettings.mockResolvedValue({ config, overrides: {}, schema_version: 1 });
   mocks.listPlugins.mockResolvedValue({ plugins: [] });
   mocks.listSources.mockResolvedValue({ sources: [] });
+  mocks.getBackupHistory.mockResolvedValue({ runs: [] });
   mocks.updateSettings.mockResolvedValue({ config, overrides: {} });
 }
 

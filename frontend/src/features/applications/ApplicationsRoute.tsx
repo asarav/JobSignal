@@ -21,7 +21,7 @@ const STATUSES = [
 
 const STATUS_LABELS: Record<string, string> = {
   interested: "Interested",
-  saved: "Saved",
+  saved: "Saved (tracking)",
   applied: "Applied",
   acknowledged: "Acknowledged",
   recruiter_contacted: "Recruiter contacted",
@@ -31,6 +31,15 @@ const STATUS_LABELS: Record<string, string> = {
   offered: "Offer",
   accepted: "Accepted",
 };
+
+const OUTCOME_OPTIONS = [
+  { kind: "acknowledged", label: "Acknowledged" },
+  { kind: "recruiter_contact", label: "Recruiter contacted" },
+  { kind: "interview", label: "Interview" },
+  { kind: "rejection", label: "Rejection" },
+  { kind: "offer", label: "Offer" },
+  { kind: "no_response", label: "No response (not a risk signal)" },
+];
 
 const REASON_LABELS: Record<string, string> = {
   exact_repost_of_applied: "Same job reposted",
@@ -76,6 +85,7 @@ export function ApplicationsRoute() {
     ApplicationsGetSuppressionsResponseSuppressionInfo[]
   >([]);
   const [policy, setPolicy] = useState<PolicyForm | null>(null);
+  const [analytics, setAnalytics] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -99,6 +109,36 @@ export function ApplicationsRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const result = await workerClient.getAnalytics({ days: 365 });
+      setAnalytics(result as unknown as Record<string, unknown>);
+    } catch (exc) {
+      setError(message(exc));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAnalytics();
+  }, [loadAnalytics]);
+
+  const recordOutcome = async (applicationId: string, kind: string) => {
+    if (!kind) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await workerClient.recordApplicationOutcome({
+        application_id: applicationId,
+        kind,
+      });
+      await Promise.all([load(), loadAnalytics()]);
+    } catch (exc) {
+      setError(message(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const changeStatus = async (applicationId: string, status: string) => {
     setBusy(true);
@@ -155,7 +195,7 @@ export function ApplicationsRoute() {
     <div className="space-y-6">
       <PageHeader
         title="Applications"
-        description="What you have applied to, and the roles hidden because of it. Nothing here sends an application."
+        description="Your application history, and the roles hidden because of it. Saving a job for later is the separate bookmark on Discover and Job detail. Nothing here sends an application."
       />
 
       {error ? (
@@ -200,9 +240,95 @@ export function ApplicationsRoute() {
                   {formatDate(application.updated_at)} ·{" "}
                   {application.events?.length ?? 0} events
                 </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                  <label htmlFor={`outcome-${application.application_id}`}>
+                    Record an outcome
+                  </label>
+                  <select
+                    id={`outcome-${application.application_id}`}
+                    disabled={busy}
+                    defaultValue=""
+                    onChange={(event) => {
+                      void recordOutcome(application.application_id, event.target.value);
+                      event.target.value = "";
+                    }}
+                    className="rounded border border-slate-300 px-2 py-1"
+                  >
+                    <option value="">— choose —</option>
+                    {OUTCOME_OPTIONS.map((option) => (
+                      <option key={option.kind} value={option.kind}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-slate-400">
+                    {(application.outcomes ?? []).length} outcomes recorded
+                  </span>
+                </div>
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-slate-900">Response analytics</h2>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void loadAnalytics()}
+            className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Refresh
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Associations from your own history. Groups with fewer than{" "}
+          {String(analytics?.min_sample ?? 5)} applications hide their rate, and nothing
+          here changes ranking automatically.
+        </p>
+        {!analytics ? (
+          <p className="mt-2 text-sm text-slate-500">No analytics loaded yet.</p>
+        ) : (
+          <table className="mt-2 w-full text-left text-xs text-slate-700">
+            <thead>
+              <tr className="text-slate-500">
+                <th className="py-1">Dimension</th>
+                <th>Group</th>
+                <th>n</th>
+                <th>Response rate</th>
+                <th>95% interval</th>
+              </tr>
+            </thead>
+            <tbody>
+              {((analytics.groups ?? []) as Record<string, unknown>[]).map(
+                (row, index) => {
+                  const insufficient = row.insufficient === true;
+                  const interval = row.interval as number[] | null | undefined;
+                  return (
+                    <tr key={index} className="border-t border-slate-100">
+                      <td className="py-1">{String(row.group).replaceAll("_", " ")}</td>
+                      <td>{String(row.key)}</td>
+                      <td>{String(row.n)}</td>
+                      <td>
+                        {insufficient
+                          ? "hidden (small sample)"
+                          : typeof row.rate === "number"
+                            ? row.rate.toFixed(2)
+                            : "—"}
+                      </td>
+                      <td>
+                        {insufficient || !interval
+                          ? "—"
+                          : `${interval[0].toFixed(2)}–${interval[1].toFixed(2)}`}
+                      </td>
+                    </tr>
+                  );
+                },
+              )}
+            </tbody>
+          </table>
         )}
       </section>
 

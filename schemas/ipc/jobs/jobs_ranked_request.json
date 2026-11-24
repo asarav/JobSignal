@@ -1,0 +1,94 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "search_profile_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ranking_policy": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "query": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "filters": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "sort": {
+      "default": "rank",
+      "enum": [
+        "rank",
+        "fit",
+        "freshness",
+        "credibility"
+      ],
+      "type": "string"
+    },
+    "include_suppressed": {
+      "default": false,
+      "type": "boolean"
+    },
+    "include_hidden": {
+      "default": false,
+      "type": "boolean"
+    },
+    "ensure_fit": {
+      "default": false,
+      "type": "boolean"
+    },
+    "limit": {
+      "default": 50,
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "window": {
+      "default": 500,
+      "maximum": 2000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "seen_since": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "JobsRankedRequest",
+  "type": "object"
+}

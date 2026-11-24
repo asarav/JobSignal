@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.application.commands.applications import ApplicationsUseCase, SuppressionsUseCase
 from app.application.dto import (
+    AnalyticsParams,
     ApplicationCreateParams,
     ApplicationEventParams,
     ApplicationOutcomeParams,
@@ -40,6 +41,9 @@ class ApplicationsHandlers:
 
     async def get_company_history(self, params: CompanyHistoryParams) -> dict:
         return (await self._applications.get_company_history(params.company_id)).model_dump()
+
+    async def get_analytics(self, params: AnalyticsParams) -> dict:
+        return (await self._applications.get_analytics(params)).model_dump()
 
     async def get_suppressions(self, params: EmptyParams) -> dict:
         return (await self._suppressions.list()).model_dump()

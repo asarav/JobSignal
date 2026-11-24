@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "type": "string"
+    },
+    "company_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "n_jobs": {
+      "default": 0,
+      "type": "integer"
+    },
+    "min_sample": {
+      "default": 10,
+      "type": "integer"
+    },
+    "small_sample": {
+      "default": true,
+      "type": "boolean"
+    },
+    "keywords": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "KeywordsPrevalenceResponse",
+  "type": "object"
+}

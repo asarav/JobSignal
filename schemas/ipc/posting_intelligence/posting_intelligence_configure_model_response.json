@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "model_version_id": {
+      "type": "string"
+    },
+    "model_id": {
+      "type": "string"
+    },
+    "model_version": {
+      "type": "string"
+    },
+    "config_hash": {
+      "type": "string"
+    },
+    "config": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "model_version_id",
+    "model_id",
+    "model_version",
+    "config_hash"
+  ],
+  "title": "PostingIntelligenceConfigureModelResponse",
+  "type": "object"
+}

@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "summary": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "company_id"
+  ],
+  "title": "PostingIntelligenceGetCompanyAssessmentResponse",
+  "type": "object"
+}

@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "default": "default",
+      "type": "string"
+    },
+    "weights": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "evidence": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "reason": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "MatchingApplyWeightProposalRequest",
+  "type": "object"
+}

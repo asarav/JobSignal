@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "confirm": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "SystemImportBackupRequest",
+  "type": "object"
+}

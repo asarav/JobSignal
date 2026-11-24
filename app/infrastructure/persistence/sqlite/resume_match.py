@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 import aiosqlite
@@ -352,6 +353,36 @@ class SqliteMatchRepository:
         )
         return [dict(r) for r in await cur.fetchall()]
 
+    async def latest_for_jobs(
+        self, job_ids, profile_id: str
+    ) -> dict[str, dict[str, Any]]:
+        """The newest stored fit per job, batched (no N+1)."""
+        wanted = [str(value) for value in job_ids if value]
+        if not wanted:
+            return {}
+        placeholders = ','.join('?' for _ in wanted)
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            f"""
+            SELECT mr.* FROM matching_results AS mr
+            JOIN (
+              SELECT job_id, MAX(evaluated_at) AS at
+              FROM matching_results
+              WHERE candidate_profile_id = ?
+                AND job_id IN ({placeholders})
+              GROUP BY job_id
+            ) AS latest
+              ON latest.job_id = mr.job_id AND latest.at = mr.evaluated_at
+            ORDER BY mr.rowid DESC
+            """,
+            (profile_id, *wanted),
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for row in await cur.fetchall():
+            decoded = dict(row)
+            out.setdefault(str(decoded['job_id']), decoded)
+        return out
+
     async def find_result(
         self, profile_id: str, job_id: str, input_hash: str
     ) -> dict[str, Any] | None:
@@ -378,6 +409,21 @@ class SqliteMatchRepository:
             (result_id,),
         )
         return [dict(r) for r in await cur.fetchall()]
+
+    async def dimensions_for_results(
+        self, result_ids: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        wanted = [str(value) for value in result_ids if value]
+        if not wanted:
+            return []
+        self._conn.row_factory = aiosqlite.Row
+        placeholders = ','.join('?' for _ in wanted)
+        cur = await self._conn.execute(
+            f"""SELECT * FROM matching_dimension_scores
+               WHERE matching_result_id IN ({placeholders}) ORDER BY rowid""",
+            wanted,
+        )
+        return [dict(row) for row in await cur.fetchall()]
 
     async def list_explanations(self, result_id: str) -> list[dict[str, Any]]:
         self._conn.row_factory = aiosqlite.Row

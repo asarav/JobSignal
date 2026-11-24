@@ -515,6 +515,22 @@ fn open_original_file(state: State<'_, Supervisor>, path: String) -> Result<(), 
         .map_err(|error| format!("could not open the file: {error}"))
 }
 
+/// Only ordinary web pages may be handed to the system browser.
+fn is_external_url(url: &str) -> bool {
+    let value = url.trim();
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+/// Opens a job posting in the user's default browser (never inside the app).
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !is_external_url(&url) {
+        return Err("refusing to open a non-http(s) url".to_string());
+    }
+    tauri_plugin_opener::open_url(url.trim(), None::<&str>)
+        .map_err(|error| format!("could not open the url: {error}"))
+}
+
 #[tauri::command]
 async fn worker_request(
     state: State<'_, Supervisor>,
@@ -550,7 +566,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             worker_request,
             worker_shutdown,
-            open_original_file
+            open_original_file,
+            open_external_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building Lodestar")
@@ -566,6 +583,14 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_urls_are_limited_to_http_and_https() {
+        assert!(is_external_url("https://example.com/jobs/1"));
+        assert!(is_external_url(" http://example.com "));
+        assert!(!is_external_url("javascript:alert(1)"));
+        assert!(!is_external_url("file:///etc/passwd"));
+    }
 
     #[test]
     fn allowlist_matches_schema_registry() {
@@ -651,7 +676,7 @@ mod tests {
         }
         // The allowlist is generated from the schema registry; it must not
         // contain blanks or duplicates.
-        assert!(ALLOWED_METHODS.len() > 0);
+        assert!(!ALLOWED_METHODS.is_empty());
         let unique: std::collections::HashSet<&&str> = ALLOWED_METHODS.iter().collect();
         assert_eq!(unique.len(), ALLOWED_METHODS.len());
         assert!(ALLOWED_METHODS.iter().all(|method| !method.trim().is_empty()));
