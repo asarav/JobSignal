@@ -31,6 +31,7 @@ export interface ApplicationsCreateRequest {
 export interface ApplicationsCreateResponse {
   application_id: string;
   company_id: string;
+  company_name?: string;
   job_id: string;
   job_title: string;
   job_title_family?: string | null;
@@ -89,6 +90,7 @@ export interface ApplicationsGetCompanyHistoryResponse {
 export interface ApplicationsGetCompanyHistoryResponseApplicationInfo {
   application_id: string;
   company_id: string;
+  company_name?: string;
   job_id: string;
   job_title: string;
   job_title_family?: string | null;
@@ -151,16 +153,24 @@ export interface ApplicationsGetSuppressionsResponseSuppressionInfo {
 }
 
 // schemas/ipc/applications/applications_list_request.json
-export interface ApplicationsListRequest {}
+export interface ApplicationsListRequest {
+  view?: "all" | "active" | "interviewing" | "offers" | "closed" | "follow_up";
+  query?: string | null;
+  sort?: "newest" | "oldest" | "updated";
+  limit?: number;
+  offset?: number;
+}
 
 // schemas/ipc/applications/applications_list_response.json
 export interface ApplicationsListResponse {
   applications: ApplicationsListResponseApplicationInfo[];
   total?: number;
+  summary?: ApplicationsListResponseApplicationSummary;
 }
 export interface ApplicationsListResponseApplicationInfo {
   application_id: string;
   company_id: string;
+  company_name?: string;
   job_id: string;
   job_title: string;
   job_title_family?: string | null;
@@ -179,6 +189,18 @@ export interface ApplicationsListResponseApplicationInfo {
   suppressions?: {
     [k: string]: unknown;
   }[];
+}
+export interface ApplicationsListResponseApplicationSummary {
+  total?: number;
+  applied?: number;
+  active?: number;
+  interviewing?: number;
+  offers?: number;
+  closed?: number;
+  follow_up?: number;
+  applied_last_7_days?: number;
+  responded?: number;
+  responded_last_7_days?: number;
 }
 
 // schemas/ipc/applications/applications_record_outcome_request.json
@@ -217,6 +239,7 @@ export interface ApplicationsUpdateStatusRequest {
 export interface ApplicationsUpdateStatusResponse {
   application_id: string;
   company_id: string;
+  company_name?: string;
   job_id: string;
   job_title: string;
   job_title_family?: string | null;
@@ -394,6 +417,7 @@ export interface CompaniesGetDetailResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
@@ -470,7 +494,10 @@ export interface CompaniesUnmergeResponse {
 }
 
 // schemas/ipc/crawl_runs/crawl_runs_list_request.json
-export interface CrawlRunsListRequest {}
+export interface CrawlRunsListRequest {
+  source_id?: string | null;
+  limit?: number;
+}
 
 // schemas/ipc/crawl_runs/crawl_runs_list_response.json
 export interface CrawlRunsListResponse {
@@ -533,7 +560,22 @@ export interface DiscoveryRunRequest {
 
 // schemas/ipc/discovery/discovery_run_response.json
 export interface DiscoveryRunResponse {
-  ok?: boolean;
+  discovered?: number;
+  new?: number;
+  updated?: number;
+  skipped?: number;
+  removed?: number;
+  errors?: number;
+  gone?: number;
+  refs_total?: number | null;
+  truncated?: boolean;
+  errors_by_code?: {
+    [k: string]: number;
+  };
+  error_samples?: {
+    [k: string]: unknown;
+  }[];
+  error?: string | null;
 }
 
 // schemas/ipc/envelope.json
@@ -642,6 +684,7 @@ export interface JobsListDuplicatesResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
@@ -690,13 +733,20 @@ export interface JobsListResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
 }
 
 // schemas/ipc/jobs/jobs_list_saved_request.json
-export interface JobsListSavedRequest {}
+export interface JobsListSavedRequest {
+  view?: "ready" | "all";
+  query?: string | null;
+  sort?: "rank" | "newest" | "company";
+  limit?: number;
+  offset?: number;
+}
 
 // schemas/ipc/jobs/jobs_list_saved_response.json
 export interface JobsListSavedResponse {
@@ -729,6 +779,7 @@ export interface JobsListSavedResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
@@ -768,6 +819,7 @@ export interface JobsListSeenResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
@@ -796,6 +848,8 @@ export interface JobsRankedRequest {
   include_suppressed?: boolean;
   include_hidden?: boolean;
   ensure_fit?: boolean;
+  min_fit?: number | null;
+  risk_classes?: string[];
   limit?: number;
   offset?: number;
   window?: number;
@@ -840,6 +894,7 @@ export interface JobsRankedResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
@@ -882,6 +937,7 @@ export interface JobsSearchResponseJobSummary {
   risk_label?: string | null;
   credibility?: number | null;
   saved?: boolean;
+  tracked?: boolean;
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
@@ -1346,6 +1402,10 @@ export interface ResumeImportResponse {
     [k: string]: string;
   };
   years_experience?: number | null;
+  experience?: number;
+  education?: number;
+  certifications?: number;
+  projects?: number;
 }
 
 // schemas/ipc/resume/resume_list_versions_request.json

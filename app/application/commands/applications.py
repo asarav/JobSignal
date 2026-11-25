@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.application import suppression as suppression_glue
@@ -22,9 +22,11 @@ from app.application.dto import (
     ApplicationCreateParams,
     ApplicationEventParams,
     ApplicationInfo,
+    ApplicationListParams,
     ApplicationListResult,
     ApplicationOutcomeParams,
     ApplicationStatusParams,
+    ApplicationSummary,
     CompanyHistoryResult,
     JobUserStateParams,
     JobUserStateResult,
@@ -37,6 +39,10 @@ from app.application.dto import (
 )
 from app.domain.models.application import (
     APPLICATION_STATUSES,
+    CLOSED_STATUSES,
+    FOLLOW_UP_AFTER_DAYS,
+    IN_FLIGHT_STATUSES,
+    OFFER_STATUSES,
     OUTCOME_KINDS,
     PRE_APPLICATION_STATUSES,
     Application,
@@ -163,7 +169,7 @@ class ApplicationsUseCase:
                     )
                     await self._after_applied(uow, application, now)
             await uow.commit()
-            return await self._detail(uow, application)
+            return await self._detail(uow, application, await self._company_name(uow, application))
 
     async def update_status(self, params: ApplicationStatusParams) -> ApplicationInfo:
         status = _require_status(params.status)
@@ -208,7 +214,9 @@ class ApplicationsUseCase:
             elif current.applied_at is None:
                 await self._after_applied(uow, updated or current, now)
             await uow.commit()
-            return await self._detail(uow, updated or current)
+            return await self._detail(
+                uow, updated or current, await self._company_name(uow, updated or current)
+            )
 
     async def add_event(self, params: ApplicationEventParams) -> OkResult:
         kind = params.kind.strip()
@@ -287,13 +295,54 @@ class ApplicationsUseCase:
         )
         return AnalyticsResult(**payload)
 
-    async def list(self) -> ApplicationListResult:
+    async def list(
+        self, params: ApplicationListParams | None = None
+    ) -> ApplicationListResult:
+        params = params or ApplicationListParams()
+        now = self._container.clock.now()
+        statuses: tuple[str, ...] | None = None
+        applied_before = None
+        if params.view == "active":
+            statuses = IN_FLIGHT_STATUSES
+        elif params.view == "interviewing":
+            statuses = ("interviewing",)
+        elif params.view == "offers":
+            statuses = OFFER_STATUSES
+        elif params.view == "closed":
+            statuses = CLOSED_STATUSES
+        elif params.view == "follow_up":
+            statuses = IN_FLIGHT_STATUSES
+            applied_before = now - timedelta(days=FOLLOW_UP_AFTER_DAYS)
         async with self._container.uow_factory() as uow:
-            rows = await uow.applications.list(limit=200)
-            applications = [await self._detail(uow, row) for row in rows]
+            names = {
+                str(row.get("id")): str(row.get("canonical_name") or "")
+                for row in await uow.companies.list()
+            }
+            query = (params.query or "").strip()
+            company_ids = [
+                company_id
+                for company_id, name in names.items()
+                if query and query.lower() in name.lower()
+            ]
+            rows, total = await uow.applications.page(
+                statuses=statuses,
+                query=query or None,
+                company_ids=company_ids,
+                applied_before=applied_before,
+                sort=params.sort,
+                limit=params.limit,
+                offset=params.offset,
+            )
+            applications = [
+                await self._detail(uow, row, names.get(row.company_id, ""))
+                for row in rows
+            ]
+            stats = await uow.applications.stats(now=now)
             await uow.commit()
         return ApplicationListResult(
-            applications=applications, total=len(applications)
+            applications=applications,
+            total=total,
+            summary=ApplicationSummary(**stats),
         )
 
     async def get_company_history(self, company_id: str) -> CompanyHistoryResult:
@@ -303,7 +352,13 @@ class ApplicationsUseCase:
                 for row in await uow.applications.list(limit=1000)
                 if row.company_id == company_id
             ]
-            applications = [await self._detail(uow, row) for row in rows]
+            name = await self._company_name(
+                uow, rows[0] if rows else None
+            )
+            applications = [
+                await self._detail(uow, row, name if row.company_id == company_id else "")
+                for row in rows
+            ]
             await uow.commit()
         applied = [row.applied_at for row in applications if row.applied_at]
         return CompanyHistoryResult(
@@ -314,13 +369,24 @@ class ApplicationsUseCase:
             last_applied_at=max(applied) if applied else None,
         )
 
-    async def _detail(self, uow: Any, application: Application) -> ApplicationInfo:
+    async def _company_name(
+        self, uow: Any, application: Application | None
+    ) -> str:
+        if application is None or not application.company_id:
+            return ""
+        company = await uow.companies.get(application.company_id)
+        return str(company.get("canonical_name") or "") if company else ""
+
+    async def _detail(
+        self, uow: Any, application: Application, company_name: str = ""
+    ) -> ApplicationInfo:
         events = await uow.applications.list_events(application.id)
         outcomes = await uow.applications.list_outcomes(application.id)
         suppressions = await uow.suppressions.list_for_job(application.job_id)
         return ApplicationInfo(
             application_id=application.id,
             company_id=application.company_id,
+            company_name=company_name,
             job_id=application.job_id,
             job_title=application.job_title,
             job_title_family=application.job_title_family,

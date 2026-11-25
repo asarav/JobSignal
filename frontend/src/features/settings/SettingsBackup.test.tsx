@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsRoute } from "./SettingsRoute";
 import { WorkerError } from "../../services/workerClient";
@@ -37,7 +38,11 @@ beforeEach(() => {
 });
 
 async function renderSettings() {
-  render(<SettingsRoute />);
+  render(
+    <MemoryRouter initialEntries={["/settings?tab=data"]}>
+      <SettingsRoute />
+    </MemoryRouter>,
+  );
   await screen.findByRole("heading", { name: /backup and restore/i });
 }
 

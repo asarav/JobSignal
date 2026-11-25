@@ -32,6 +32,7 @@ class TauriBridge implements WorkerBridge {
  * never used inside the desktop app, and it is clearly labelled in the UI.
  */
 const PREVIEW_SAVED_KEY = "jobsignal.preview.saved.v1";
+const PREVIEW_APPLICATIONS_KEY = "jobsignal.preview.applications.v1";
 const PREVIEW_POLICIES = new Set([
   "show_all",
   "deprioritize",
@@ -60,6 +61,100 @@ function persistPreviewSaved(saved: Set<string>): void {
   } catch {
     // A blocked storage area only costs persistence, not the session.
   }
+}
+
+interface PreviewApplicationRow {
+  application_id: string;
+  job_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  events?: Array<Record<string, unknown>>;
+  outcomes?: Array<Record<string, unknown>>;
+}
+
+function loadPreviewApplications(): PreviewApplicationRow[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(PREVIEW_APPLICATIONS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as PreviewApplicationRow[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistPreviewApplications(rows: PreviewApplicationRow[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PREVIEW_APPLICATIONS_KEY, JSON.stringify(rows));
+  } catch {
+    // A blocked storage area only costs persistence, not the session.
+  }
+}
+
+function previewApplicationSummary(
+  rows: PreviewApplicationRow[],
+): Record<string, number> {
+  const activeStatuses = new Set(["applied", "acknowledged", "recruiter_contacted"]);
+  const closedStatuses = new Set(["rejected", "withdrawn"]);
+  const offerStatuses = new Set(["offered", "accepted"]);
+  const now = Date.now();
+  const cutOff = now - 14 * 86_400_000;
+  const recent = now - 7 * 86_400_000;
+  const summary = {
+    total: rows.length,
+    applied: rows.length,
+    active: 0,
+    interviewing: 0,
+    offers: 0,
+    closed: 0,
+    follow_up: 0,
+    applied_last_7_days: 0,
+    responded: 0,
+    responded_last_7_days: 0,
+  };
+  const responders = new Set<string>();
+  for (const row of rows) {
+    const at = new Date(row.created_at).getTime();
+    if (at >= recent) summary.applied_last_7_days += 1;
+    if (activeStatuses.has(row.status)) {
+      summary.active += 1;
+      if (at <= cutOff) summary.follow_up += 1;
+    } else if (row.status === "interviewing") {
+      summary.interviewing += 1;
+    } else if (offerStatuses.has(row.status)) {
+      summary.offers += 1;
+    } else if (closedStatuses.has(row.status)) {
+      summary.closed += 1;
+    }
+    if ((row.outcomes ?? []).some((outcome) => new Date(String(outcome.occurred_at)).getTime() >= recent)) {
+      summary.responded_last_7_days += 1;
+    }
+    if ((row.outcomes ?? []).length > 0) responders.add(row.application_id);
+  }
+  summary.responded = responders.size;
+  return summary;
+}
+
+function previewApplicationInfo(
+  row: PreviewApplicationRow,
+): Record<string, unknown> {
+  const job = previewJobs().find((candidate) => candidate.job_id === row.job_id);
+  return {
+    ...row,
+    company_id: String(job?.company_id ?? ""),
+    company_name: String(job?.company_name ?? ""),
+    job_title: String(job?.title ?? row.job_id),
+    job_title_family: null,
+    applied_at: row.created_at,
+    resume_version_id: null,
+    notes: "",
+    events: row.events ?? [],
+    outcomes: row.outcomes ?? [],
+    suppressions: [],
+  };
 }
 
 /** Mirror of `credibility_factor` in app/domain/services/ranking.py. */
@@ -147,6 +242,9 @@ class PreviewBridge implements WorkerBridge {
   ];
   private matchResults: Array<Record<string, unknown>> = [];
   private savedJobs = new Set<string>(loadPreviewSaved());
+  private applications = loadPreviewApplications();
+  private mergedCompanies: Record<string, string> = {};
+  private mergeRecords: Array<Record<string, unknown>> = [];
   private overrides: Record<string, unknown> = {};
   private weights: Record<string, number> = {
     skills_resume: 0.35,
@@ -213,19 +311,69 @@ class PreviewBridge implements WorkerBridge {
       case "plugins.list":
         return response({ plugins: previewPlugins() });
       case "sources.list":
-        return response({ sources: previewSources(), total: previewSources().length });
+        return response({ sources: previewSources() });
+      case "sources.add": {
+        const url = String(params.url ?? "");
+        const source = {
+          source_id: `preview-src-added-${previewAddedSources.length + 1}`,
+          url,
+          kind: "preview",
+          enabled: true,
+          interval_s: Number(params.interval_s ?? 3600),
+          tier: "cold",
+          tier_reason: "Preview source, not crawled over the network",
+        };
+        previewAddedSources.push(source);
+        return response(source);
+      }
+      case "discovery.run": {
+        // Preview mode never fetches the network, so the crawl is a no-op with
+        // worker-shaped counters rather than a fabricated harvest.
+        return response({
+          discovered: 0,
+          new: 0,
+          updated: 0,
+          skipped: 0,
+          removed: 0,
+          errors: 0,
+          gone: 0,
+        });
+      }
       case "crawl_runs.list":
         return response({ runs: previewCrawlRuns() });
       case "jobs.list":
-      case "jobs.search":
-        return response({ jobs: this.jobSummaries(), total: this.jobSummaries().length });
+      case "jobs.search": {
+        const jobs = this.jobSummaries().filter((job) => previewMatchesFilters(job, params));
+        const offset = Number(params.offset ?? 0);
+        const limit = Number(params.limit ?? 50);
+        return response({
+          jobs: jobs.slice(offset, offset + limit),
+          total: jobs.length,
+        });
+      }
       case "jobs.ranked": {
         const policy = String(params.ranking_policy ?? "deprioritize");
-        const all = this.rankedJobSummaries(policy);
+        const all = this.rankedJobSummaries(policy).filter((job) =>
+          previewMatchesFilters(job, params),
+        );
         const hiddenCount = all.filter((job) => job.hidden_by_policy === true).length;
-        const visible = all.filter(
+        let visible = all.filter(
           (job) => params.include_hidden === true || job.hidden_by_policy !== true,
         );
+        const minFit = typeof params.min_fit === "number" ? params.min_fit : null;
+        if (minFit !== null) {
+          visible = visible.filter(
+            (job) => typeof job.fit_score === "number" && job.fit_score >= minFit,
+          );
+        }
+        const riskClasses = Array.isArray(params.risk_classes)
+          ? params.risk_classes.map(String)
+          : [];
+        if (riskClasses.length > 0) {
+          visible = visible.filter((job) =>
+            riskClasses.includes(String(job.risk_class ?? "")),
+          );
+        }
         visible.sort((left, right) => {
           const leftScore = typeof left.rank_score === "number" ? left.rank_score : null;
           const rightScore = typeof right.rank_score === "number" ? right.rank_score : null;
@@ -256,8 +404,43 @@ class PreviewBridge implements WorkerBridge {
         });
       }
       case "jobs.list_saved": {
-        const jobs = this.savedJobSummaries();
-        return response({ jobs, total: jobs.length });
+        const tracked = new Set(this.applications.map((row) => row.job_id));
+        let jobs = this.savedJobSummaries();
+        if (String(params.view ?? "ready") === "ready") {
+          jobs = jobs.filter((job) => !tracked.has(String(job.job_id)));
+        }
+        jobs = jobs.map((job) => ({
+          ...job,
+          saved: true,
+          tracked: tracked.has(String(job.job_id)),
+        }));
+        const query = String(params.query ?? "").trim().toLowerCase();
+        if (query) {
+          jobs = jobs.filter(
+            (job) =>
+              String(job.title ?? "").toLowerCase().includes(query) ||
+              String(job.company_name ?? "").toLowerCase().includes(query),
+          );
+        }
+        const sort = String(params.sort ?? "rank");
+        if (sort === "newest") {
+          jobs.sort((left, right) =>
+            String(right.first_seen_at ?? "").localeCompare(String(left.first_seen_at ?? "")),
+          );
+        } else if (sort === "company") {
+          jobs.sort((left, right) =>
+            String(left.company_name ?? "").localeCompare(String(right.company_name ?? "")),
+          );
+        } else {
+          jobs.sort((left, right) => {
+            const leftFit = typeof left.fit_score === "number" ? left.fit_score : -1;
+            const rightFit = typeof right.fit_score === "number" ? right.fit_score : -1;
+            return rightFit - leftFit;
+          });
+        }
+        const offset = Number(params.offset ?? 0);
+        const limit = Number(params.limit ?? 25);
+        return response({ jobs: jobs.slice(offset, offset + limit), total: jobs.length });
       }
       case "jobs.set_user_state": {
         const jobId = String(params.job_id ?? "");
@@ -268,7 +451,12 @@ class PreviewBridge implements WorkerBridge {
         return response({ job_id: jobId, state, hidden: false });
       }
       case "jobs.verify_now":
-        return response({ checked: 0, state: "skipped" });
+        return response({
+          task_id: null,
+          checked: 0,
+          states: {},
+          job_ids: [String(params.job_id ?? "")],
+        });
       case "posting_intelligence.get_signals": {
         const jobId = String(params.job_id ?? "");
         const job = previewJobs().find((row) => row.job_id === jobId && row.risk_class);
@@ -295,15 +483,268 @@ class PreviewBridge implements WorkerBridge {
       }
       case "posting_intelligence.get_risk_history":
         return response({ job_id: String(params.job_id ?? ""), changes: [] });
+      case "companies.list": {
+        const companies = previewCompanyList(this.applications).filter(
+          (row) => !this.mergedCompanies[String(row.company_id)],
+        );
+        return response({ companies, total: companies.length });
+      }
+      case "companies.get_detail": {
+        const requestedId = String(params.company_id ?? "");
+        const survivorId = this.mergedCompanies[requestedId] ?? requestedId;
+        const detail = previewCompanyDetail(survivorId, this.applications);
+        if (!detail) {
+          return {
+            v: 1,
+            type: "response",
+            id: "preview",
+            params: {},
+            ok: false,
+            error: {
+              code: "not_found",
+              message: `No company ${requestedId} in preview data.`,
+              retryable: false,
+              details: {},
+            },
+          };
+        }
+        return response({
+          ...detail,
+          requested_id: requestedId === survivorId ? null : requestedId,
+          merged_ids:
+            requestedId === survivorId
+              ? Object.entries(this.mergedCompanies)
+                  .filter(([, survivor]) => survivor === survivorId)
+                  .map(([merged]) => merged)
+              : [],
+        });
+      }
+      case "companies.get_merge_history": {
+        const companyId = String(params.company_id ?? "");
+        const records = companyId
+          ? this.mergeRecords.filter(
+              (row) => row.merged_id === companyId || row.survivor_id === companyId,
+            )
+          : this.mergeRecords;
+        return response({
+          company_id: companyId || null,
+          records,
+          currently_merged: { ...this.mergedCompanies },
+          total: records.length,
+        });
+      }
+      case "companies.merge": {
+        const companyId = String(params.company_id ?? "");
+        const intoId = String(params.into_id ?? "");
+        if (!companyId || !intoId || companyId === intoId) {
+          return {
+            v: 1,
+            type: "response",
+            id: "preview",
+            params: {},
+            ok: false,
+            error: {
+              code: "validation.invalid_params",
+              message: "Choose two different companies to merge.",
+              retryable: false,
+              details: {},
+            },
+          };
+        }
+        const previous = this.mergedCompanies[companyId] ?? null;
+        const companies = previewCompanyList(this.applications);
+        const mergedName =
+          companies.find((row) => row.company_id === companyId)?.name ?? companyId;
+        const survivorName =
+          companies.find((row) => row.company_id === intoId)?.name ?? intoId;
+        this.mergedCompanies[companyId] = intoId;
+        this.mergeRecords = [
+          ...this.mergeRecords,
+          {
+            record_id: `preview-merge-${this.mergeRecords.length + 1}`,
+            action: "merge",
+            merged_id: companyId,
+            merged_name: mergedName,
+            survivor_id: intoId,
+            survivor_name: survivorName,
+            reason: String(params.reason ?? ""),
+            created_by: "preview",
+            created_at: new Date().toISOString(),
+          },
+        ];
+        return response({
+          company_id: companyId,
+          survivor_id: intoId,
+          action: "merge",
+          changed: previous !== intoId,
+          previous_survivor_id: previous,
+        });
+      }
+      case "companies.unmerge": {
+        const companyId = String(params.company_id ?? "");
+        const previous = this.mergedCompanies[companyId] ?? null;
+        const companies = previewCompanyList(this.applications);
+        const mergedName =
+          companies.find((row) => row.company_id === companyId)?.name ?? companyId;
+        const survivorName = previous
+          ? companies.find((row) => row.company_id === previous)?.name ?? previous
+          : null;
+        delete this.mergedCompanies[companyId];
+        if (previous) {
+          this.mergeRecords = [
+            ...this.mergeRecords,
+            {
+              record_id: `preview-merge-${this.mergeRecords.length + 1}`,
+              action: "unmerge",
+              merged_id: companyId,
+              merged_name: mergedName,
+              survivor_id: previous,
+              survivor_name: survivorName,
+              reason: "",
+              created_by: "preview",
+              created_at: new Date().toISOString(),
+            },
+          ];
+        }
+        return response({
+          company_id: companyId,
+          survivor_id: previous ?? companyId,
+          action: "unmerge",
+          changed: previous !== null,
+          previous_survivor_id: previous,
+        });
+      }
       case "jobs.list_seen":
         return response({ jobs: previewSeenJobs(), total: previewSeenJobs().length });
       case "jobs.list_duplicates":
         return response({ jobs: previewSeenJobs(), total: previewSeenJobs().length });
       case "jobs.get_detail":
         return response(previewJobDetail(String(params.job_id ?? "preview-job-1")));
-      case "applications.list":
-        // Preview samples are discovery data only: no application history.
-        return response({ applications: [], total: 0 });
+      case "applications.list": {
+        const view = String(params.view ?? "all");
+        const activeStatuses = ["applied", "acknowledged", "recruiter_contacted"];
+        const groups: Record<string, string[] | null> = {
+          all: null,
+          active: activeStatuses,
+          interviewing: ["interviewing"],
+          offers: ["offered", "accepted"],
+          closed: ["rejected", "withdrawn"],
+          follow_up: activeStatuses,
+        };
+        let rows =
+          groups[view] === null
+            ? this.applications
+            : this.applications.filter((row) =>
+                (groups[view] ?? []).includes(row.status),
+              );
+        if (view === "follow_up") {
+          const cutOff = Date.now() - 14 * 86_400_000;
+          rows = rows.filter(
+            (row) => new Date(row.created_at).getTime() <= cutOff,
+          );
+        }
+        const query = String(params.query ?? "").trim().toLowerCase();
+        if (query) {
+          rows = rows.filter((row) => {
+            const info = previewApplicationInfo(row);
+            return (
+              String(info.job_title).toLowerCase().includes(query) ||
+              String(info.company_name).toLowerCase().includes(query)
+            );
+          });
+        }
+        const sort = String(params.sort ?? "newest");
+        rows = [...rows].sort((left, right) => {
+          if (sort === "oldest") return left.created_at.localeCompare(right.created_at);
+          if (sort === "updated") return right.updated_at.localeCompare(left.updated_at);
+          return right.created_at.localeCompare(left.created_at);
+        });
+        const total = rows.length;
+        const offset = Number(params.offset ?? 0);
+        const limit = Number(params.limit ?? 25);
+        const applications = rows
+          .slice(offset, offset + limit)
+          .map(previewApplicationInfo);
+        return response({
+          applications,
+          total,
+          summary: previewApplicationSummary(this.applications),
+        });
+      }
+      case "applications.record_outcome": {
+        const applicationId = String(params.application_id ?? "");
+        const kind = String(params.kind ?? "");
+        this.applications = this.applications.map((row) =>
+          row.application_id === applicationId
+            ? {
+                ...row,
+                outcomes: [
+                  ...(row.outcomes ?? []),
+                  {
+                    kind,
+                    occurred_at: String(params.occurred_at ?? new Date().toISOString()),
+                    note: String(params.note ?? ""),
+                  },
+                ],
+                updated_at: new Date().toISOString(),
+              }
+            : row,
+        );
+        persistPreviewApplications(this.applications);
+        return response({ ok: true });
+      }
+      case "applications.get_analytics": {
+        const applications = this.applications.length;
+        const responded = this.applications.filter((row) => (row.outcomes ?? []).length > 0)
+          .length;
+        return response({
+          generated_at: new Date().toISOString(),
+          window_days: Number(params.days ?? 365),
+          applications,
+          responded,
+          overall: {
+            response_rate: applications ? responded / applications : 0,
+          },
+          min_sample: 5,
+          groups: [],
+          note: "Preview mode uses the applications saved in this browser.",
+        });
+      }
+      case "applications.create": {
+        const jobId = String(params.job_id ?? "");
+        const now = new Date().toISOString();
+        const row: PreviewApplicationRow = {
+          application_id: `preview-app-${this.applications.length + 1}`,
+          job_id: jobId,
+          status: String(params.status ?? "applied"),
+          created_at: now,
+          updated_at: now,
+        };
+        this.applications = [...this.applications, row];
+        persistPreviewApplications(this.applications);
+        return response(previewApplicationInfo(row));
+      }
+      case "applications.update_status": {
+        const applicationId = String(params.application_id ?? "");
+        this.applications = this.applications.map((row) =>
+          row.application_id === applicationId
+            ? {
+                ...row,
+                status: String(params.status ?? row.status),
+                updated_at: new Date().toISOString(),
+              }
+            : row,
+        );
+        persistPreviewApplications(this.applications);
+        const updated = this.applications.find(
+          (row) => row.application_id === applicationId,
+        );
+        return response(
+          updated
+            ? previewApplicationInfo(updated)
+            : { application_id: applicationId },
+        );
+      }
       case "applications.get_suppressions":
         return response({ suppressions: [], total: 0 });
       case "applications.get_suppression_policy":
@@ -334,7 +775,6 @@ class PreviewBridge implements WorkerBridge {
       case "resume.list_versions":
         return response({ versions: this.versions });
       case "resume.import": {
-        const filePath = String(params.file_path ?? "");
         const versionId = `preview-v${this.versions.length + 1}`;
         const label = String(params.label ?? "Imported");
         this.versions = [
@@ -348,7 +788,6 @@ class PreviewBridge implements WorkerBridge {
           sections: ["summary", "experience", "skills", "education"],
           contact: { email: "candidate@example.com", phone: "+1 555 0100", location: "Remote" },
           years_experience: 7,
-          source_file: filePath,
         });
       }
       case "resume.get_profile":
@@ -645,6 +1084,89 @@ function previewSuppressionPolicy(): Record<string, unknown> {
   };
 }
 
+function previewCompanyList(
+  applications: PreviewApplicationRow[] = [],
+): Array<Record<string, unknown>> {
+  const companies = new Map<
+    string,
+    {
+      company_id: string;
+      name: string;
+      domain: string | null;
+      jobIds: Set<string>;
+      job_count: number;
+      active_job_count: number;
+    }
+  >();
+  for (const job of previewJobs()) {
+    const companyId = String(job.company_id ?? "");
+    if (!companyId) continue;
+    const entry = companies.get(companyId) ?? {
+      company_id: companyId,
+      name: String(job.company_name ?? companyId),
+      domain: null,
+      jobIds: new Set<string>(),
+      job_count: 0,
+      active_job_count: 0,
+    };
+    entry.jobIds.add(String(job.job_id));
+    entry.job_count += 1;
+    if (job.posting_status === "active") entry.active_job_count += 1;
+    if (!entry.domain && typeof job.canonical_url === "string") {
+      try {
+        entry.domain = new URL(job.canonical_url).hostname;
+      } catch {
+        entry.domain = null;
+      }
+    }
+    companies.set(companyId, entry);
+  }
+  return [...companies.values()]
+    .map((entry) => ({
+      company_id: entry.company_id,
+      name: entry.name,
+      domain: entry.domain,
+      job_count: entry.job_count,
+      active_job_count: entry.active_job_count,
+      application_count: applications.filter((row) => entry.jobIds.has(row.job_id)).length,
+      last_seen_at: "2026-11-21T02:00:00Z",
+      merged_ids: [],
+      merged_company_count: 0,
+    }))
+    .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+}
+
+function previewCompanyDetail(
+  companyId: string,
+  applications: PreviewApplicationRow[] = [],
+): Record<string, unknown> | null {
+  const company = previewCompanyList(applications).find(
+    (row) => row.company_id === companyId,
+  );
+  if (!company) return null;
+  const jobs = previewJobs().filter((job) => job.company_id === companyId);
+  const jobIds = new Set(jobs.map((job) => job.job_id));
+  return {
+    company_id: company.company_id,
+    name: company.name,
+    domain: company.domain,
+    requested_id: null,
+    merged_ids: [],
+    jobs,
+    job_count: company.job_count,
+    active_job_count: company.active_job_count,
+    repost_count: 0,
+    summary: {
+      observed_postings: jobs.length,
+      active_postings: jobs.filter((job) => job.posting_status === "active").length,
+      applications: applications.filter((row) => jobIds.has(row.job_id)).length,
+    },
+    applications: applications.filter((row) => jobIds.has(row.job_id)),
+    recent_window_days: 30,
+    window_start: "2026-10-22T00:00:00Z",
+  };
+}
+
 function previewJobs(): Array<Record<string, unknown>> {
   return [
     {
@@ -762,8 +1284,51 @@ function previewJobs(): Array<Record<string, unknown>> {
   ];
 }
 
+/** Mirror the worker's text and hard-filter params for preview data. */
+function previewMatchesFilters(
+  job: Record<string, unknown>,
+  params: Record<string, unknown>,
+): boolean {
+  const query = String(params.query ?? "").trim().toLowerCase();
+  const haystack = [job.title, job.company_name, job.location_text]
+    .map((value) => String(value ?? ""))
+    .join(" ")
+    .toLowerCase();
+  if (query && !haystack.includes(query)) return false;
+
+  const filters = (params.filters ?? {}) as Record<string, unknown>;
+  const firstSeenAfter = filters.first_seen_after;
+  if (
+    typeof firstSeenAfter === "string" &&
+    firstSeenAfter &&
+    String(job.first_seen_at ?? new Date().toISOString()) <= firstSeenAfter
+  ) {
+    return false;
+  }
+  const title = filters.title_include;
+  if (typeof title === "string" && title && !String(job.title).toLowerCase().includes(title.toLowerCase())) {
+    return false;
+  }
+  const location = filters.location;
+  if (
+    typeof location === "string" &&
+    location &&
+    !String(job.location_text ?? "").toLowerCase().includes(location.toLowerCase())
+  ) {
+    return false;
+  }
+  const types = filters.workplace_types;
+  if (Array.isArray(types) && types.length > 0 && !types.includes(job.workplace_type)) {
+    return false;
+  }
+  return true;
+}
+
+const previewAddedSources: Array<Record<string, unknown>> = [];
+
 function previewSources(): Array<Record<string, unknown>> {
   return [
+    ...previewAddedSources,
     {
       source_id: "preview-src-1",
       url: "https://boards.greenhouse.io/acme",
@@ -771,7 +1336,6 @@ function previewSources(): Array<Record<string, unknown>> {
       enabled: true,
       tier: "hot",
       tier_reason: "Crawl succeeded 12 times",
-      last_crawled_at: "2026-11-21T08:00:00Z",
     },
     {
       source_id: "preview-src-2",
@@ -780,7 +1344,6 @@ function previewSources(): Array<Record<string, unknown>> {
       enabled: true,
       tier: "warm",
       tier_reason: "One crawl error",
-      last_crawled_at: "2026-11-20T08:00:00Z",
     },
   ];
 }

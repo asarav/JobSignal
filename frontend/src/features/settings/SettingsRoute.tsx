@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Copy } from "../../copy/copy";
+import { Link, useSearchParams } from "react-router-dom";
+import { Button, buttonClass } from "../../components/Button";
+import { Disclosure } from "../../components/Disclosure";
 import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
+import { Tabs } from "../../components/Tabs";
+import { Copy } from "../../copy/copy";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
   PluginsListResponsePluginInfo,
@@ -69,7 +73,20 @@ const PLUGIN_HEALTH_LABELS: Record<string, string> = {
   open: "Failing",
 };
 
+const TABS = [
+  { id: "sources", label: "Sources" },
+  { id: "data", label: "Data & backup" },
+  { id: "answers", label: "Application answers" },
+  { id: "plugins", label: "Plugins & flags" },
+];
+
 export function SettingsRoute() {
+  const [params, setParams] = useSearchParams();
+  const activeTab = TABS.some((tab) => tab.id === params.get("tab"))
+    ? (params.get("tab") as string)
+    : "sources";
+  const fromPlan = params.get("from") === "plan";
+
   const [settings, setSettings] = useState<SettingsGetResponse | null>(null);
   const [plugins, setPlugins] = useState<PluginsListResponsePluginInfo[]>([]);
   const [sources, setSources] = useState<SourcesListResponseSourceInfo[]>([]);
@@ -84,6 +101,9 @@ export function SettingsRoute() {
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importConfirmed, setImportConfirmed] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [lastRun, setLastRun] = useState<Record<string, unknown> | null>(null);
+  const [lastAutoRun, setLastAutoRun] = useState<Record<string, unknown> | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -114,6 +134,12 @@ export function SettingsRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const setTab = (tab: string) => {
+    const next = new URLSearchParams(params);
+    next.set("tab", tab);
+    setParams(next, { replace: true });
+  };
 
   const exportBackup = useCallback(async () => {
     setBusy(true);
@@ -214,6 +240,55 @@ export function SettingsRoute() {
     }
   };
 
+  const crawlSource = async (sourceId: string) => {
+    setBusy(true);
+    setLastRun(null);
+    try {
+      const result = await workerClient.runDiscovery({ source_id: sourceId });
+      setLastRun(result as unknown as Record<string, unknown>);
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** The plan's "add a source and crawl it" step, in one action. */
+  const addAndCrawl = async () => {
+    if (!sourceUrl.trim()) return;
+    setBusy(true);
+    setError(null);
+    setLastRun(null);
+    try {
+      const added = await workerClient.addSource({
+        url: sourceUrl.trim(),
+        interval_s: 3600,
+      });
+      setSourceUrl("");
+      const result = await workerClient.runDiscovery({ source_id: added.source_id });
+      setLastRun(result as unknown as Record<string, unknown>);
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const autoDiscover = async () => {
+    setBusy(true);
+    setLastAutoRun(null);
+    try {
+      setLastAutoRun((await workerClient.autoDiscover()) as unknown as Record<string, unknown>);
+      await load();
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const saveAnswers = async () => {
     setBusy(true);
     setError(null);
@@ -267,8 +342,11 @@ export function SettingsRoute() {
   ).length;
 
   return (
-    <div className="space-y-6">
-      <PageHeader title={Copy.settings.title} description={Copy.settings.description} />
+    <div className="space-y-5">
+      <PageHeader
+        title={Copy.settings.title}
+        description="Sources, your data, application answers and optional plugins."
+      />
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
@@ -276,400 +354,441 @@ export function SettingsRoute() {
         </div>
       ) : null}
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.settings.general}</h2>
-        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <dt className="text-slate-500">{Copy.settings.appVersion}</dt>
-            <dd className="font-medium text-slate-900">{config.app_version ?? Copy.settings.none}</dd>
-          </div>
-          <div>
-            <dt className="text-slate-500">
-              {Copy.settings.protocolVersion}
-              <InfoTip label={Copy.settings.protocolVersion}>
-                Version of the message format used between the app and the local worker.
-              </InfoTip>
-            </dt>
-            <dd className="font-medium text-slate-900">
-              {config.protocol_version ?? Copy.settings.none}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-slate-500">
-              {Copy.settings.settingsFormatVersion}
-              <InfoTip label={Copy.settings.settingsFormatVersion}>
-                {Copy.tooltips.settingsSchema}
-              </InfoTip>
-            </dt>
-            <dd className="font-medium text-slate-900">
-              {settings?.schema_version ?? Copy.settings.none}
-            </dd>
-          </div>
-        </dl>
-      </section>
+      <Tabs label="Settings sections" items={TABS} active={activeTab} onChange={setTab} />
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">{Copy.settings.data}</h2>
-        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-slate-500">{Copy.settings.dataDir}</dt>
-            <dd className="break-all font-mono text-xs text-slate-900">
-              {config.paths?.data_dir || Copy.settings.none}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-slate-500">{Copy.settings.database}</dt>
-            <dd className="font-mono text-xs text-slate-900">
-              {config.paths?.db_name ?? Copy.settings.none}
-            </dd>
-          </div>
-        </dl>
-      </section>
+      {activeTab === "sources" ? (
+        <div className="space-y-4">
+          {fromPlan ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700">
+              <span>Add a source and crawl it once. New matches appear on Find jobs.</span>
+              <Link to="/" className="underline">
+                Back to Today
+              </Link>
+            </div>
+          ) : null}
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2
-          className="text-lg font-semibold text-slate-900"
-          aria-label={Copy.settings.featureFlags}
-        >
-          {Copy.settings.featureFlags}
-          <InfoTip label={Copy.settings.featureFlags}>{Copy.tooltips.featureFlags}</InfoTip>
-        </h2>
-        <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
-          {Object.entries(featureFlags).map(([flag, enabled]) => (
-            <li
-              key={flag}
-              className="flex items-center justify-between rounded border border-slate-100 bg-slate-50 px-3 py-2"
-            >
-              <span className="font-mono text-xs text-slate-700">{flag}</span>
-              <span className={enabled ? "text-emerald-700" : "text-slate-500"}>
-                {enabled ? "enabled" : "disabled"}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-xs text-slate-500">
-          {Copy.settings.overrides}:{" "}
-          {Object.keys(overrides).length === 0
-            ? Copy.settings.noOverrides
-            : Object.keys(overrides).join(", ")}
-        </p>
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Autofill answers
-          <InfoTip label="Autofill answers">
-            Only these values are typed into application forms. Demographic, legal and
-            sensitive fields are never filled, whatever is stored here.
-          </InfoTip>
-        </h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Stored locally. Leave a field empty to skip it; nothing is inferred from your
-          resume or from the posting. For a yes/no or multiple-choice question, store the
-          option text ("Yes") — the matching option is picked, and nothing is picked when
-          no option matches.
-        </p>
-        <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-          {ANSWER_FIELDS.map((field) => (
-            <label key={field.key} className="flex flex-col gap-1">
-              <span className="text-xs text-slate-500">{field.label}</span>
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900" aria-label="Sources">
+              Sources
+              <InfoTip label="Sources">{Copy.tooltips.sources}</InfoTip>
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Paste a company careers page or job board listing. Adding it crawls it once
+              immediately.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
               <input
-                type="text"
-                value={answers[field.key] ?? ""}
-                placeholder={field.placeholder}
-                onChange={(event) =>
-                  setAnswers((current) => ({ ...current, [field.key]: event.target.value }))
-                }
-                className="rounded border border-slate-300 px-2 py-1 text-sm"
+                className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="https://boards.greenhouse.io/your-company"
+                aria-label="Career page or job board URL"
+                value={sourceUrl}
+                onChange={(event) => setSourceUrl(event.target.value)}
               />
-            </label>
-          ))}
-        </div>
-        <div className="mt-3 flex items-center gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void saveAnswers()}
-            className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-          >
-            Save answers
-          </button>
-          <span className="text-xs text-slate-500">{storedAnswers} stored</span>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Answers to open questions
-          <InfoTip label="Answers to open questions">
-            Open questions are never generated. An answer saved here is typed only into a
-            field whose question matches it, and never into a demographic, legal or
-            sensitive field.
-          </InfoTip>
-        </h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Questions like &quot;Why do you want to work here?&quot; stay blank unless you
-          save an answer here. The question must match the form&apos;s own wording; case,
-          spacing and punctuation are ignored, and a saved answer cannot unlock a blocked
-          question.
-        </p>
-        <ul className="mt-3 space-y-2">
-          {snippetRows.map((row, index) => (
-            <li key={index} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-              <input
-                type="text"
-                aria-label={`Question ${index + 1}`}
-                value={row.question}
-                placeholder="Question as the form asks it"
-                onChange={(event) =>
-                  setSnippetRows((current) =>
-                    current.map((entry, position) =>
-                      position === index
-                        ? { ...entry, question: event.target.value }
-                        : entry,
-                    ),
-                  )
-                }
-                className="rounded border border-slate-300 px-2 py-1 text-sm"
-              />
-              <textarea
-                aria-label={`Answer ${index + 1}`}
-                rows={2}
-                value={row.answer}
-                placeholder="Your answer"
-                onChange={(event) =>
-                  setSnippetRows((current) =>
-                    current.map((entry, position) =>
-                      position === index
-                        ? { ...entry, answer: event.target.value }
-                        : entry,
-                    ),
-                  )
-                }
-                className="rounded border border-slate-300 px-2 py-1 text-sm"
-              />
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  setSnippetRows((current) =>
-                    current.filter((_, position) => position !== index),
-                  )
-                }
-                className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              <Button
+                variant="primary"
+                disabled={busy || !sourceUrl.trim()}
+                onClick={() => void addAndCrawl()}
               >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              setSnippetRows((current) => [...current, { question: "", answer: "" }])
-            }
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Add a question
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void saveSnippets()}
-            className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-          >
-            Save open-question answers
-          </button>
-          <span className="text-xs text-slate-500">{storedSnippets} saved</span>
-        </div>
-      </section>
+                {busy ? "Adding…" : "Add source and crawl"}
+              </Button>
+            </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900" aria-label="Sources">
-          Sources
-          <InfoTip label="Sources">{Copy.tooltips.sources}</InfoTip>
-        </h2>
-        {sources.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">No sources configured. Add one on the Discover screen.</p>
-        ) : (
-          <ul className="mt-3 divide-y divide-slate-100">
-            {sources.map((source) => (
-              <li key={source.source_id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span className="truncate font-mono text-xs text-slate-700">{source.url}</span>
-                <div className="flex shrink-0 items-center gap-2">
-                  <label
-                    className="flex items-center gap-1 text-xs text-slate-500"
-                    title={Copy.tooltips.crawlInterval}
+            {lastRun ? (
+              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                Crawl finished: {String(lastRun.discovered ?? 0)} postings found,{" "}
+                {String(lastRun.new ?? 0)} new, {String(lastRun.updated ?? 0)} updated,{" "}
+                {String(lastRun.errors ?? 0)} errors.
+              </div>
+            ) : null}
+
+            {sources.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-500">
+                No sources configured yet. Add one above to start collecting jobs.
+              </p>
+            ) : (
+              <ul className="mt-3 divide-y divide-slate-100">
+                {sources.map((source) => (
+                  <li
+                    key={source.source_id}
+                    className="flex flex-wrap items-center justify-between gap-3 py-2 text-sm"
                   >
-                    crawl every
-                    <input
-                      type="number"
-                      min={0}
-                      step={5}
-                      value={intervals[source.source_id] ?? intervalMinutes(source.interval_s)}
-                      onChange={(event) =>
-                        setIntervals((current) => ({
-                          ...current,
-                          [source.source_id]: event.target.value,
-                        }))
-                      }
-                      className="w-16 rounded border border-slate-300 px-2 py-1 text-xs"
-                      aria-label={`Crawl interval in minutes for ${source.url}`}
-                    />
-                    min
-                  </label>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      void saveInterval(
-                        source,
-                        intervals[source.source_id] ?? intervalMinutes(source.interval_s),
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-700">
+                      {source.url}
+                      {source.tier ? (
+                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 font-sans text-xs text-slate-600">
+                          {source.tier}
+                        </span>
+                      ) : null}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label
+                        className="flex items-center gap-1 text-xs text-slate-500"
+                        title={Copy.tooltips.crawlInterval}
+                      >
+                        every
+                        <input
+                          type="number"
+                          min={0}
+                          step={5}
+                          value={intervals[source.source_id] ?? intervalMinutes(source.interval_s)}
+                          onChange={(event) =>
+                            setIntervals((current) => ({
+                              ...current,
+                              [source.source_id]: event.target.value,
+                            }))
+                          }
+                          className="w-16 rounded border border-slate-300 px-2 py-1 text-xs"
+                          aria-label={`Crawl interval in minutes for ${source.url}`}
+                        />
+                        min
+                      </label>
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void saveInterval(
+                            source,
+                            intervals[source.source_id] ?? intervalMinutes(source.interval_s),
+                          )
+                        }
+                      >
+                        Save interval
+                      </Button>
+                      <Button disabled={busy} onClick={() => void crawlSource(source.source_id)}>
+                        Crawl now
+                      </Button>
+                      <Button disabled={busy} onClick={() => void toggleSource(source)}>
+                        {source.enabled ? "Disable" : "Enable"}
+                      </Button>
+                      <Button
+                        className="border-red-300 text-red-700 hover:bg-red-50"
+                        disabled={busy}
+                        onClick={() => void deleteSource(source.source_id)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <Disclosure
+            summary="Auto-discovery"
+            hint="Let the worker find new career sites and re-crawl sources that are due."
+          >
+            <p className="text-sm text-slate-600">
+              A pass looks for new career sites, registers them, and crawls sources whose
+              interval is due. It runs in bounded background passes.
+            </p>
+            <Button
+              variant="primary"
+              className="mt-3"
+              disabled={busy}
+              onClick={() => void autoDiscover()}
+            >
+              {busy ? "Running pass…" : "Run discovery pass"}
+            </Button>
+            {lastAutoRun ? (
+              <p className="mt-3 text-sm text-slate-600">
+                {String(lastAutoRun.discovered ?? 0)} sites found,{" "}
+                {String(lastAutoRun.registered ?? 0)} new sources,{" "}
+                {String(lastAutoRun.crawled ?? 0)} crawled,{" "}
+                {String(lastAutoRun.failed ?? 0)} failed.
+              </p>
+            ) : null}
+          </Disclosure>
+        </div>
+      ) : null}
+
+      {activeTab === "data" ? (
+        <div className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900">{Copy.settings.data}</h2>
+            <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-slate-500">{Copy.settings.dataDir}</dt>
+                <dd className="break-all font-mono text-xs text-slate-900">
+                  {config.paths?.data_dir || Copy.settings.none}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">{Copy.settings.database}</dt>
+                <dd className="font-mono text-xs text-slate-900">
+                  {config.paths?.db_name ?? Copy.settings.none}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">{Copy.settings.appVersion}</dt>
+                <dd>{config.app_version ?? Copy.settings.none}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">{Copy.settings.protocolVersion}</dt>
+                <dd>{config.protocol_version ?? Copy.settings.none}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">{Copy.settings.settingsFormatVersion}</dt>
+                <dd>{settings?.schema_version ?? Copy.settings.none}</dd>
+              </div>
+            </dl>
+            <p className="mt-3 text-xs text-slate-500">
+              Stored locally. <Link to="/diagnostics" className="underline">Diagnostics</Link>{" "}
+              holds worker health and recent tasks.
+            </p>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900">
+              {Copy.settings.backup}
+              <InfoTip label={Copy.settings.backup}>{Copy.tooltips.backup}</InfoTip>
+            </h2>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button variant="primary" disabled={busy} onClick={() => void exportBackup()}>
+                {Copy.settings.exportBackup}
+              </Button>
+              {backupMessage ? (
+                <span className="text-xs text-slate-600">{backupMessage}</span>
+              ) : null}
+            </div>
+            <div className="mt-4 flex flex-col gap-2">
+              <label className="text-xs text-slate-500" htmlFor="backup-import-path">
+                {Copy.settings.importPath}
+              </label>
+              <input
+                id="backup-import-path"
+                type="text"
+                value={importPath}
+                placeholder="backups/jobsignal-backup-20260101T000000Z.json"
+                onChange={(event) => setImportPath(event.target.value)}
+                className="rounded border border-slate-300 px-2 py-1 font-mono text-sm"
+              />
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={importConfirmed}
+                  onChange={(event) => setImportConfirmed(event.target.checked)}
+                />
+                {Copy.settings.importConfirm}
+              </label>
+              <Button
+                className="self-start"
+                disabled={busy || !importConfirmed || importPath.trim() === ""}
+                onClick={() => void importBackup()}
+              >
+                {Copy.settings.importBackup}
+              </Button>
+            </div>
+            <h3 className="mt-4 text-sm font-semibold text-slate-900">
+              {Copy.settings.backupHistory}
+            </h3>
+            {backupRuns.length === 0 ? (
+              <p className="mt-2 text-xs text-slate-500">{Copy.settings.noBackups}</p>
+            ) : (
+              <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                {backupRuns.map((run) => (
+                  <li key={String(run.id)}>
+                    {String(run.kind)} · {String(run.created_at)} · {String(run.path)}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      ) : null}
+
+      {activeTab === "answers" ? (
+        <div className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900">
+              Autofill answers
+              <InfoTip label="Autofill answers">
+                Only these values are typed into application forms. Demographic, legal and
+                sensitive fields are never filled, whatever is stored here.
+              </InfoTip>
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Stored locally. Leave a field empty to skip it; nothing is inferred. For a
+              yes/no question, store the option text (&quot;Yes&quot;).
+            </p>
+            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+              {ANSWER_FIELDS.map((field) => (
+                <label key={field.key} className="flex flex-col gap-1">
+                  <span className="text-xs text-slate-500">{field.label}</span>
+                  <input
+                    type="text"
+                    value={answers[field.key] ?? ""}
+                    placeholder={field.placeholder}
+                    onChange={(event) =>
+                      setAnswers((current) => ({ ...current, [field.key]: event.target.value }))
+                    }
+                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <Button variant="primary" disabled={busy} onClick={() => void saveAnswers()}>
+                Save answers
+              </Button>
+              <span className="text-xs text-slate-500">{storedAnswers} stored</span>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900">
+              Answers to open questions
+              <InfoTip label="Answers to open questions">
+                Open questions are never generated. An answer saved here is typed only into a
+                field whose question matches it, and never into a sensitive field.
+              </InfoTip>
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Questions like &quot;Why do you want to work here?&quot; stay blank unless you
+              save an answer here, and the wording must match the form.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {snippetRows.map((row, index) => (
+                <li key={index} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                  <input
+                    type="text"
+                    aria-label={`Question ${index + 1}`}
+                    value={row.question}
+                    placeholder="Question as the form asks it"
+                    onChange={(event) =>
+                      setSnippetRows((current) =>
+                        current.map((entry, position) =>
+                          position === index
+                            ? { ...entry, question: event.target.value }
+                            : entry,
+                        ),
                       )
                     }
-                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Save interval
-                  </button>
-                  <button
-                    type="button"
+                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  />
+                  <textarea
+                    aria-label={`Answer ${index + 1}`}
+                    rows={2}
+                    value={row.answer}
+                    placeholder="Your answer"
+                    onChange={(event) =>
+                      setSnippetRows((current) =>
+                        current.map((entry, position) =>
+                          position === index
+                            ? { ...entry, answer: event.target.value }
+                            : entry,
+                        ),
+                      )
+                    }
+                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  />
+                  <Button
                     disabled={busy}
-                    onClick={() => void toggleSource(source)}
-                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    onClick={() =>
+                      setSnippetRows((current) =>
+                        current.filter((_, position) => position !== index),
+                      )
+                    }
                   >
-                    {source.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void deleteSource(source.source_id)}
-                    className="rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
-                  >
-                    Delete source
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900" aria-label={Copy.settings.plugins}>
-          {Copy.settings.plugins}
-          <InfoTip label={Copy.settings.plugins}>{Copy.tooltips.plugins}</InfoTip>
-        </h2>
-        {plugins.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">{Copy.settings.pluginNone}</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-2 py-2">{Copy.settings.pluginId}</th>
-                  <th className="px-2 py-2">{Copy.settings.pluginKind}</th>
-                  <th className="px-2 py-2">{Copy.settings.pluginVersion}</th>
-                  <th className="px-2 py-2">{Copy.settings.pluginHealth}</th>
-                  <th className="px-2 py-2">{Copy.settings.pluginHosts}</th>
-                  <th className="px-2 py-2">{Copy.settings.pluginEnabled}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plugins.map((plugin) => (
-                  <tr key={plugin.plugin_id} className="border-b border-slate-100">
-                    <td className="px-2 py-2 font-mono text-xs">{plugin.plugin_id}</td>
-                    <td className="px-2 py-2">{plugin.kind}</td>
-                    <td className="px-2 py-2">{plugin.version}</td>
-                    <td className="px-2 py-2">
-                      {PLUGIN_HEALTH_LABELS[
-                        String((plugin.health as { state?: string }).state ?? "")
-                      ] ?? "Unknown"}
-                    </td>
-                    <td className="px-2 py-2 font-mono text-xs">
-                      {plugin.network_hosts.length > 0 ? plugin.network_hosts.join(", ") : "-"}
-                    </td>
-                    <td className="px-2 py-2">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void toggle(plugin)}
-                        className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        {plugin.enabled ? Copy.settings.disable : Copy.settings.enable}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">
-          {Copy.settings.backup}
-          <InfoTip label={Copy.settings.backup}>{Copy.tooltips.backup}</InfoTip>
-        </h2>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void exportBackup()}
-            className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-          >
-            {Copy.settings.exportBackup}
-          </button>
-          {backupMessage ? (
-            <span className="text-xs text-slate-600">{backupMessage}</span>
-          ) : null}
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                disabled={busy}
+                onClick={() => setSnippetRows((current) => [...current, { question: "", answer: "" }])}
+              >
+                Add a question
+              </Button>
+              <Button variant="primary" disabled={busy} onClick={() => void saveSnippets()}>
+                Save open-question answers
+              </Button>
+              <span className="text-xs text-slate-500">{storedSnippets} saved</span>
+            </div>
+          </section>
         </div>
-        <div className="mt-4 flex flex-col gap-2">
-          <label className="text-xs text-slate-500" htmlFor="backup-import-path">
-            {Copy.settings.importPath}
-          </label>
-          <input
-            id="backup-import-path"
-            type="text"
-            value={importPath}
-            placeholder="backups/jobsignal-backup-20260101T000000Z.json"
-            onChange={(event) => setImportPath(event.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 font-mono text-sm"
-          />
-          <label className="flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              checked={importConfirmed}
-              onChange={(event) => setImportConfirmed(event.target.checked)}
-            />
-            {Copy.settings.importConfirm}
-          </label>
-          <button
-            type="button"
-            disabled={busy || !importConfirmed || importPath.trim() === ""}
-            onClick={() => void importBackup()}
-            className="self-start rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            {Copy.settings.importBackup}
-          </button>
+      ) : null}
+
+      {activeTab === "plugins" ? (
+        <div className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900" aria-label={Copy.settings.plugins}>
+              {Copy.settings.plugins}
+              <InfoTip label={Copy.settings.plugins}>{Copy.tooltips.plugins}</InfoTip>
+            </h2>
+            {plugins.length === 0 ? (
+              <p className="mt-2 text-sm text-slate-500">{Copy.settings.pluginNone}</p>
+            ) : (
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-2 py-2">{Copy.settings.pluginId}</th>
+                      <th className="px-2 py-2">{Copy.settings.pluginKind}</th>
+                      <th className="px-2 py-2">{Copy.settings.pluginVersion}</th>
+                      <th className="px-2 py-2">{Copy.settings.pluginHealth}</th>
+                      <th className="px-2 py-2">{Copy.settings.pluginHosts}</th>
+                      <th className="px-2 py-2">{Copy.settings.pluginEnabled}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plugins.map((plugin) => (
+                      <tr key={plugin.plugin_id} className="border-b border-slate-100">
+                        <td className="px-2 py-2 font-mono text-xs">{plugin.plugin_id}</td>
+                        <td className="px-2 py-2">{plugin.kind}</td>
+                        <td className="px-2 py-2">{plugin.version}</td>
+                        <td className="px-2 py-2">
+                          {PLUGIN_HEALTH_LABELS[
+                            String((plugin.health as { state?: string }).state ?? "")
+                          ] ?? "Unknown"}
+                        </td>
+                        <td className="px-2 py-2 font-mono text-xs">
+                          {plugin.network_hosts.length > 0 ? plugin.network_hosts.join(", ") : "-"}
+                        </td>
+                        <td className="px-2 py-2">
+                          <Button disabled={busy} onClick={() => void toggle(plugin)}>
+                            {plugin.enabled ? Copy.settings.disable : Copy.settings.enable}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900">{Copy.settings.featureFlags}</h2>
+            <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+              {Object.entries(featureFlags).map(([flag, enabled]) => (
+                <li
+                  key={flag}
+                  className="flex items-center justify-between rounded border border-slate-100 bg-slate-50 px-3 py-2"
+                >
+                  <span className="font-mono text-xs text-slate-700">{flag}</span>
+                  <span className={enabled ? "text-emerald-700" : "text-slate-500"}>
+                    {enabled ? "enabled" : "disabled"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-slate-500">
+              {Copy.settings.overrides}:{" "}
+              {Object.keys(overrides).length === 0
+                ? Copy.settings.noOverrides
+                : Object.keys(overrides).join(", ")}
+            </p>
+          </section>
         </div>
-        <h3 className="mt-4 text-sm font-semibold text-slate-900">
-          {Copy.settings.backupHistory}
-        </h3>
-        {backupRuns.length === 0 ? (
-          <p className="mt-2 text-xs text-slate-500">{Copy.settings.noBackups}</p>
-        ) : (
-          <ul className="mt-2 space-y-1 text-xs text-slate-600">
-            {backupRuns.map((run) => (
-              <li key={String(run.id)}>
-                {String(run.kind)} · {String(run.created_at)} · {String(run.path)}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      ) : null}
+
+      <p className="text-xs text-slate-500">
+        <Link to="/diagnostics" className={buttonClass("quiet")}>
+          Open Diagnostics
+        </Link>
+      </p>
     </div>
   );
 }

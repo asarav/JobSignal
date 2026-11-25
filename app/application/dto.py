@@ -218,9 +218,34 @@ class ApplicationOutcomeParams(DTO):
     note: str = ""
 
 
+class ApplicationListParams(DTO):
+    view: Literal[
+        "all", "active", "interviewing", "offers", "closed", "follow_up"
+    ] = "all"
+    query: str | None = None
+    sort: Literal["newest", "oldest", "updated"] = "newest"
+    limit: int = Field(default=25, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+
+
+class ApplicationSummary(DTO):
+    total: int = 0
+    applied: int = 0
+    active: int = 0
+    interviewing: int = 0
+    offers: int = 0
+    closed: int = 0
+    follow_up: int = 0
+    applied_last_7_days: int = 0
+    #: Applications with any confirmed response outcome, all time.
+    responded: int = 0
+    responded_last_7_days: int = 0
+
+
 class ApplicationInfo(DTO):
     application_id: str
     company_id: str
+    company_name: str = ""
     job_id: str
     job_title: str
     job_title_family: str | None = None
@@ -238,6 +263,7 @@ class ApplicationInfo(DTO):
 class ApplicationListResult(DTO):
     applications: list[ApplicationInfo]
     total: int = 0
+    summary: ApplicationSummary = Field(default_factory=ApplicationSummary)
 
 
 class CompanyHistoryParams(DTO):
@@ -440,6 +466,8 @@ class JobSummary(DTO):
     risk_label: str | None = None
     credibility: float | None = None
     saved: bool = False
+    #: True when a saved job already has an application (the apply queue hides it).
+    tracked: bool = False
     rank_score: float | None = None
     rank_reasons: list[str] = Field(default_factory=list)
     hidden_by_policy: bool = False
@@ -529,6 +557,9 @@ class RankedJobParams(DTO):
     include_hidden: bool = False
     #: Compute missing fit for the ranking window (bounded).
     ensure_fit: bool = False
+    #: Optional display filters applied after fit/risk are resolved.
+    min_fit: float | None = Field(default=None, ge=0, le=1)
+    risk_classes: list[str] = Field(default_factory=list)
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
     #: How many recent matches are considered before ranking.
@@ -548,6 +579,14 @@ class RankedJobListResult(DTO):
     #: Whole-corpus counts, not the paged/ranked slice (dashboard headline).
     needs_attention: int = 0
     new_since: int | None = None
+
+
+class JobsListSavedParams(DTO):
+    view: Literal["ready", "all"] = "ready"
+    query: str | None = None
+    sort: Literal["rank", "newest", "company"] = "rank"
+    limit: int = Field(default=25, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
 
 
 class JobFilter(DTO):
@@ -582,6 +621,10 @@ class ResumeImportResult(DTO):
     sections: list[str] = Field(default_factory=list)
     contact: dict[str, str] = Field(default_factory=dict)
     years_experience: float | None = None
+    experience: int = 0
+    education: int = 0
+    certifications: int = 0
+    projects: int = 0
 
 class ResumeVersionsResult(DTO):
     versions: list[dict[str, Any]] = Field(default_factory=list)
@@ -819,6 +862,26 @@ class CrawlRunSummary(DTO):
 
 class DiscoveryRunParams(DTO):
     source_id: str
+
+
+class DiscoveryRunResult(DTO):
+    discovered: int = 0
+    new: int = 0
+    updated: int = 0
+    skipped: int = 0
+    removed: int = 0
+    errors: int = 0
+    gone: int = 0
+    refs_total: int | None = None
+    truncated: bool = False
+    errors_by_code: dict[str, int] = Field(default_factory=dict)
+    error_samples: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = None
+
+
+class CrawlRunListParams(DTO):
+    source_id: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
 
 
 class CrawlRunListResult(DTO):

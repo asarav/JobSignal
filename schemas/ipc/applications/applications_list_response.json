@@ -10,6 +10,9 @@
     "total": {
       "default": 0,
       "type": "integer"
+    },
+    "summary": {
+      "$ref": "#/$defs/ApplicationsListResponseApplicationSummary"
     }
   },
   "required": [
@@ -25,6 +28,10 @@
           "type": "string"
         },
         "company_id": {
+          "type": "string"
+        },
+        "company_name": {
+          "default": "",
           "type": "string"
         },
         "job_id": {
@@ -124,6 +131,52 @@
         "job_title",
         "status"
       ],
+      "type": "object"
+    },
+    "ApplicationsListResponseApplicationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "default": 0,
+          "type": "integer"
+        },
+        "applied": {
+          "default": 0,
+          "type": "integer"
+        },
+        "active": {
+          "default": 0,
+          "type": "integer"
+        },
+        "interviewing": {
+          "default": 0,
+          "type": "integer"
+        },
+        "offers": {
+          "default": 0,
+          "type": "integer"
+        },
+        "closed": {
+          "default": 0,
+          "type": "integer"
+        },
+        "follow_up": {
+          "default": 0,
+          "type": "integer"
+        },
+        "applied_last_7_days": {
+          "default": 0,
+          "type": "integer"
+        },
+        "responded": {
+          "default": 0,
+          "type": "integer"
+        },
+        "responded_last_7_days": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     }
   }

@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { Copy } from "../copy/copy";
 import { ApplicationsRoute } from "../features/applications/ApplicationsRoute";
 import { CompaniesRoute } from "../features/companies/CompaniesRoute";
@@ -12,7 +12,6 @@ import { SavedRoute } from "../features/saved/SavedRoute";
 import { SeenRoute } from "../features/seen/SeenRoute";
 import { PlaceholderRoute } from "../features/placeholder/PlaceholderRoute";
 import { ResumeRoute } from "../features/resume/ResumeRoute";
-import { SearchRoute } from "../features/search/SearchRoute";
 import { SettingsRoute } from "../features/settings/SettingsRoute";
 
 export interface NavigationItem {
@@ -21,29 +20,61 @@ export interface NavigationItem {
   description: string;
 }
 
-export const navigationItems: NavigationItem[] = [
-  { to: "/", label: Copy.nav.dashboard, description: Copy.navDescriptions.dashboard },
-  { to: "/discover", label: Copy.nav.discover, description: Copy.navDescriptions.discover },
-  {
-    to: "/search-profiles",
-    label: Copy.nav.searchProfiles,
-    description: Copy.navDescriptions.searchProfiles,
-  },
-  { to: "/saved", label: Copy.nav.saved, description: Copy.navDescriptions.saved },
-  {
-    to: "/applications",
-    label: Copy.nav.applications,
-    description: Copy.navDescriptions.applications,
-  },
-  { to: "/companies", label: Copy.nav.companies, description: Copy.navDescriptions.companies },
-  {
-    to: "/posting-intelligence",
-    label: Copy.nav.postingIntelligence,
-    description: Copy.navDescriptions.postingIntelligence,
-  },
-  { to: "/keywords", label: Copy.nav.keywords, description: Copy.navDescriptions.keywords },
-  { to: "/resume", label: Copy.nav.resume, description: Copy.navDescriptions.resume },
-  { to: "/seen", label: Copy.nav.seen, description: Copy.navDescriptions.seen },
+export interface NavigationGroup {
+  label: string;
+  items: NavigationItem[];
+  collapsible?: boolean;
+}
+
+const searchGroup: NavigationGroup = {
+  label: "Search",
+  items: [
+    { to: "/", label: Copy.nav.today, description: Copy.navDescriptions.today },
+    {
+      to: "/discover",
+      label: Copy.nav.discover,
+      description: Copy.navDescriptions.discover,
+    },
+    { to: "/saved", label: Copy.nav.saved, description: Copy.navDescriptions.saved },
+    {
+      to: "/applications",
+      label: Copy.nav.applications,
+      description: Copy.navDescriptions.applications,
+    },
+  ],
+};
+
+const profileGroup: NavigationGroup = {
+  label: "You",
+  items: [{ to: "/resume", label: Copy.nav.resume, description: Copy.navDescriptions.resume }],
+};
+
+const insightsGroup: NavigationGroup = {
+  label: "Insights",
+  collapsible: true,
+  items: [
+    {
+      to: "/companies",
+      label: Copy.nav.companies,
+      description: Copy.navDescriptions.companies,
+    },
+    {
+      to: "/posting-intelligence",
+      label: Copy.nav.postingIntelligence,
+      description: Copy.navDescriptions.postingIntelligence,
+    },
+    { to: "/keywords", label: Copy.nav.keywords, description: Copy.navDescriptions.keywords },
+    { to: "/seen", label: Copy.nav.seen, description: Copy.navDescriptions.seen },
+  ],
+};
+
+export const navigationGroups: NavigationGroup[] = [
+  searchGroup,
+  profileGroup,
+  insightsGroup,
+];
+
+export const utilityNavigation: NavigationItem[] = [
   { to: "/settings", label: Copy.nav.settings, description: Copy.navDescriptions.settings },
   {
     to: "/diagnostics",
@@ -52,12 +83,17 @@ export const navigationItems: NavigationItem[] = [
   },
 ];
 
+export const navigationItems: NavigationItem[] = [
+  ...navigationGroups.flatMap((group) => group.items),
+  ...utilityNavigation,
+];
+
 export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<HomeRoute />} />
       <Route path="/discover" element={<DiscoverRoute />} />
-      <Route path="/search-profiles" element={<SearchRoute />} />
+      <Route path="/search-profiles" element={<Navigate to="/discover" replace />} />
       <Route path="/saved" element={<SavedRoute />} />
       <Route path="/applications" element={<ApplicationsRoute />} />
       <Route path="/companies" element={<CompaniesRoute />} />

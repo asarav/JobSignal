@@ -7,6 +7,7 @@ from app.application.dto import (
     AnalyticsParams,
     ApplicationCreateParams,
     ApplicationEventParams,
+    ApplicationListParams,
     ApplicationOutcomeParams,
     ApplicationStatusParams,
     CompanyHistoryParams,
@@ -36,8 +37,8 @@ class ApplicationsHandlers:
     async def record_outcome(self, params: ApplicationOutcomeParams) -> dict:
         return (await self._applications.record_outcome(params)).model_dump()
 
-    async def list(self, params: EmptyParams) -> dict:
-        return (await self._applications.list()).model_dump()
+    async def list(self, params: ApplicationListParams) -> dict:
+        return (await self._applications.list(params)).model_dump()
 
     async def get_company_history(self, params: CompanyHistoryParams) -> dict:
         return (await self._applications.get_company_history(params.company_id)).model_dump()

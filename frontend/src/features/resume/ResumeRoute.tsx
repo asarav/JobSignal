@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Tabs } from "../../components/Tabs";
 import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { Copy } from "../../copy/copy";
@@ -161,6 +162,7 @@ function parseMatchResults(rows: unknown[] | undefined): MatchResult[] {
 }
 
 export function ResumeRoute() {
+  const [tab, setTab] = useState("resume");
   const [filePath, setFilePath] = useState("");
   const [label, setLabel] = useState("Imported");
   const [error, setError] = useState<string | null>(null);
@@ -471,14 +473,27 @@ export function ResumeRoute() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Resume & matching"
-        description="Import a resume version, correct the parsed profile, and score stored jobs against it."
+        title="Profile"
+        description="Your resume and preferences power fit scores. Everything stays on this computer."
+      />
+
+      <Tabs
+        label="Profile sections"
+        active={tab}
+        onChange={setTab}
+        items={[
+          { id: "resume", label: "Resume" },
+          { id: "profile", label: "Profile details" },
+          { id: "preferences", label: "Preferences" },
+          { id: "matches", label: "Matches" },
+        ]}
       />
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
       ) : null}
 
+      <div className={tab === "resume" ? "space-y-6" : "hidden"}>
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900" aria-label="Import resume">
           Import resume
@@ -591,7 +606,9 @@ export function ResumeRoute() {
           ) : null}
         </ul>
       </section>
+      </div>
 
+      <div className={tab === "profile" ? "space-y-6" : "hidden"}>
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900" aria-label="Profile details">
           Profile details
@@ -780,6 +797,9 @@ export function ResumeRoute() {
         )}
       </section>
 
+      </div>
+
+      <div className={tab === "preferences" ? "space-y-6" : "hidden"}>
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900" aria-label="Job preferences">
           Job preferences
@@ -911,6 +931,9 @@ export function ResumeRoute() {
         </button>
       </section>
 
+      </div>
+
+      <div className={tab === "matches" ? "space-y-6" : "hidden"}>
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900" aria-label="Matching">
           Matching
@@ -1027,6 +1050,7 @@ export function ResumeRoute() {
           </p>
         )}
       </section>
+      </div>
     </div>
   );
 }

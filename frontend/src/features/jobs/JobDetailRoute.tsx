@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { InfoTip } from "../../components/InfoTip";
-import { PageHeader } from "../../components/PageHeader";
+import { Link, useParams } from "react-router-dom";
+import { Button, buttonClass } from "../../components/Button";
+import { Disclosure } from "../../components/Disclosure";
+import { Tabs } from "../../components/Tabs";
 import { Copy } from "../../copy/copy";
 import { AutofillPanel } from "./AutofillPanel";
 import { FitPanel } from "./FitPanel";
@@ -13,15 +14,21 @@ import type {
   JobsGetDetailResponse,
 } from "../../types/generated";
 
-const TRACKING_STATES: { status: string; label: string }[] = [
-  { status: "interested", label: "Interested" },
-  { status: "applied", label: "Applied" },
+const STATUSES = [
+  { value: "interested", label: "Interested" },
+  { value: "applied", label: "Applied" },
+  { value: "acknowledged", label: "Acknowledged" },
+  { value: "recruiter_contacted", label: "Recruiter contacted" },
+  { value: "interviewing", label: "Interviewing" },
+  { value: "rejected", label: "Rejected" },
+  { value: "withdrawn", label: "Withdrawn" },
+  { value: "offered", label: "Offer" },
+  { value: "accepted", label: "Accepted" },
 ];
 
-/** Saved jobs and application tracking are separate concepts. */
-const APPLICATION_STATUS_LABELS: Record<string, string> = {
-  saved: "Saved (tracking)",
-};
+const STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  STATUSES.map((status) => [status.value, status.label]),
+);
 
 function formatSalary(job: Record<string, unknown>): string | null {
   const min = typeof job.salary_min === "number" ? job.salary_min : null;
@@ -73,6 +80,8 @@ export function JobDetailRoute() {
   const [saved, setSaved] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [tab, setTab] = useState("job");
+  const [autofillOpen, setAutofillOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,10 +95,8 @@ export function JobDetailRoute() {
         ]);
         if (!cancelled) {
           setDetail(result);
-          setApplication(
-            tracked.applications.find((row) => row.job_id === id) ?? null,
-          );
-          // One saved concept: the same job_user_state list Saved Jobs reads.
+          setApplication(tracked.applications.find((row) => row.job_id === id) ?? null);
+          // One saved concept: the same job_user_state list Saved reads.
           setSaved(savedJobs.jobs.some((row) => row.job_id === id));
           setError(null);
         }
@@ -167,209 +174,292 @@ export function JobDetailRoute() {
   const relations = detail?.relations ?? [];
   const observations = detail?.observations ?? [];
   const snapshots = detail?.snapshots ?? [];
+  const applied = Boolean(application);
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={text(job.title, "Job detail")}
-        description={text(job.canonical_url, "Job history and duplicate relations.")}
-      />
+    <div className="space-y-5">
+      <Link to="/discover" className="inline-block text-sm text-slate-600 hover:underline">
+        ← Back to matches
+      </Link>
 
-      {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
-      ) : null}
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="sticky top-0 z-10 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-slate-900">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold text-slate-900">
+              {text(job.title, "Job detail")}
+            </h1>
+            <p className="mt-1 text-sm text-slate-700">
               {text(job.company_name, "Company not recorded")}
             </p>
-            <p className="mt-1 text-sm text-slate-600">{locationLine}</p>
-            <p className="mt-1 text-sm text-slate-600">
+            <p className="text-sm text-slate-600">{locationLine}</p>
+            <p className="text-sm text-slate-600">
               {salary ? `Salary ${salary}` : "Salary not listed"}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant={saved ? "secondary" : "primary"}
               onClick={() => void toggleSaved()}
               disabled={saving || saved === null}
-              className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
               {saved === null ? "Loading saved state…" : saved ? "Saved ✓" : "Save for later"}
-            </button>
+            </Button>
             {isHttpUrl(originalUrl) ? (
-              <button
-                type="button"
-                onClick={() => void openPosting()}
-                disabled={opening}
-                className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-              >
+              <Button variant="primary" onClick={() => void openPosting()} disabled={opening}>
                 {opening ? "Opening…" : "Open original"}
-              </button>
+              </Button>
             ) : (
               <span className="text-xs text-slate-400">No original link recorded</span>
             )}
+            <Button onClick={() => setAutofillOpen((open) => !open)} aria-expanded={autofillOpen}>
+              Prepare application
+            </Button>
           </div>
         </div>
-      </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Description</h2>
-        {description ? (
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-            {description}
-          </p>
-        ) : (
-          <p className="mt-2 text-sm text-slate-500">
-            No description was stored for this posting. Open the original to read it.
-          </p>
-        )}
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm text-sm text-slate-700">
-        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <div>
-            <dt className="text-xs text-slate-500">Posting status</dt>
-            <dd>{text(job.posting_status, "unknown")}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">First seen</dt>
-            <dd>{formatTimestamp(job.first_seen_at)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">Last seen</dt>
-            <dd>{formatTimestamp(job.last_seen_at)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">
-              Times observed
-              <InfoTip label="Times observed">{Copy.tooltips.observations}</InfoTip>
-            </dt>
-            <dd>{observations.length}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Application tracking</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          These buttons record application history only. Saving a job for later is the
-          bookmark above, and both it and Discover write the same Saved Jobs entry.
-          Marking “Applied” hides similar roles at this company for the cooldown;
-          saving or dismissing never does.
-        </p>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {TRACKING_STATES.map((state) => (
-            <button
-              key={state.status}
-              type="button"
-              disabled={busy}
-              onClick={() => void track(state.status)}
-              className={`rounded border px-2 py-1 text-xs font-medium disabled:opacity-50 ${
-                application?.status === state.status
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-300 text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              {state.label}
-            </button>
-          ))}
-          {application ? (
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+          {applied ? (
+            <>
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
+                {STATUS_LABELS[application?.status ?? ""] ?? application?.status} ✓
+              </span>
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                Update status
+                <select
+                  aria-label="Update application status"
+                  value={application?.status ?? "applied"}
+                  disabled={busy}
+                  onChange={(event) => void track(event.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs"
+                >
+                  {STATUSES.map((status) => (
+                    <option key={status.value} value={status.value}>
+                      {status.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Link to="/applications" className="text-xs text-slate-600 underline">
+                Track it in Applications
+              </Link>
+            </>
+          ) : saved ? (
+            <Button variant="primary" disabled={busy} onClick={() => void track("applied")}>
+              Mark as applied
+            </Button>
+          ) : (
             <span className="text-xs text-slate-500">
-              Current status:{" "}
-              {APPLICATION_STATUS_LABELS[application.status] ?? application.status}
+              Save this role to add it to your shortlist, then mark it applied when you have
+              sent your application.
             </span>
-          ) : null}
+          )}
         </div>
-      </section>
+      </div>
 
-      {id ? (
-        <FitPanel
-          jobId={id}
-          storedFit={typeof job?.fit_score === "number" ? job.fit_score : null}
-        />
+      {error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
       ) : null}
 
-      {id ? <RiskPanel jobId={id} /> : null}
+      {autofillOpen && id ? (
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-900">Prepare application</h2>
+            <p className="text-xs text-slate-500">
+              You review every value. Nothing is submitted or clicked for you.
+            </p>
+          </div>
+          <AutofillPanel jobId={id} />
+        </div>
+      ) : null}
 
-      {id ? <AutofillPanel jobId={id} /> : null}
+      <Tabs
+        label="Job sections"
+        active={tab}
+        onChange={setTab}
+        items={[
+          { id: "job", label: "Job" },
+          { id: "why", label: "Why this job" },
+          { id: "activity", label: "Activity" },
+        ]}
+      />
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900" aria-label="Repost history">
-          Repost history
-          <InfoTip label="Repost history">{Copy.tooltips.reposts}</InfoTip>
-        </h2>
-        {reposts.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">
-            No reposts detected. A repost appears when the same posting shows up at a new
-            URL or job-board id.
-          </p>
-        ) : (
-          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-            {reposts.map((event, index) => (
-              <li key={index}>
-                {REPOST_CLASS_LABELS[text(event.class)] ?? text(event.class, "Repost")} ·
-                confidence{" "}
-                <span title="How strongly the evidence supports this classification.">
-                  {typeof event.confidence === "number" ? event.confidence.toFixed(2) : "—"}
+      {tab === "job" ? (
+        <div className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-900">Description</h2>
+            {description ? (
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                {description}
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-slate-500">
+                No description was stored for this posting. Open the original to read it.
+              </p>
+            )}
+          </section>
+
+          <Disclosure summary="Posting facts" hint="Status, dates and observations.">
+            <dl className="grid grid-cols-2 gap-3 text-sm text-slate-700 sm:grid-cols-4">
+              <div>
+                <dt className="text-xs text-slate-500">Posting status</dt>
+                <dd>{text(job.posting_status, "unknown")}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">First seen</dt>
+                <dd>{formatTimestamp(job.first_seen_at)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Last seen</dt>
+                <dd>{formatTimestamp(job.last_seen_at)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Times observed</dt>
+                <dd>{observations.length}</dd>
+              </div>
+            </dl>
+          </Disclosure>
+
+          <Disclosure
+            summary="Posting history"
+            hint="Reposts, duplicates, snapshots and observations."
+          >
+            <div className="space-y-4 text-sm text-slate-700">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Repost history
+                  <span className="ml-1 text-xs font-normal text-slate-500">
+                    {Copy.tooltips.reposts}
+                  </span>
+                </h3>
+                {reposts.length === 0 ? (
+                  <p className="mt-1 text-slate-500">No reposts detected.</p>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {reposts.map((event, index) => (
+                      <li key={index}>
+                        {REPOST_CLASS_LABELS[text(event.class)] ?? text(event.class, "Repost")} ·
+                        confidence{" "}
+                        {typeof event.confidence === "number"
+                          ? event.confidence.toFixed(2)
+                          : "—"}
+                        {event.material ? " · material change" : ""}
+                        {event.posted_date_reset ? " · posted date reset" : ""}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Duplicates & relations</h3>
+                {relations.length === 0 ? (
+                  <p className="mt-1 text-slate-500">No related jobs.</p>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {relations.map((relation, index) => (
+                      <li key={index}>
+                        {RELATION_LABELS[text(relation.relation)] ??
+                          text(relation.relation, "Related")}{" "}
+                        · job {text(relation.related_job_id, text(relation.job_id, "—"))}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Snapshots ({snapshots.length})
+                </h3>
+                {snapshots.length === 0 ? (
+                  <p className="mt-1 text-slate-500">No content snapshots recorded yet.</p>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {snapshots.map((snapshot, index) => (
+                      <li key={index}>
+                        {formatTimestamp(snapshot.created_at)} · version{" "}
+                        {text(snapshot.content_hash, "").slice(0, 12)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Observations ({observations.length})
+                </h3>
+                <p className="mt-1 text-slate-500">{Copy.tooltips.observations}</p>
+              </div>
+            </div>
+          </Disclosure>
+        </div>
+      ) : null}
+
+      {tab === "why" ? (
+        <div className="space-y-4">
+          {id ? (
+            <FitPanel
+              jobId={id}
+              storedFit={typeof job.fit_score === "number" ? job.fit_score : null}
+            />
+          ) : null}
+          {id ? <RiskPanel jobId={id} /> : null}
+        </div>
+      ) : null}
+
+      {tab === "activity" ? (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="text-base font-semibold text-slate-900">Application activity</h2>
+          {applied ? (
+            <div className="mt-2 space-y-2 text-sm text-slate-700">
+              <p>
+                Current status:{" "}
+                <span className="font-medium">
+                  {STATUS_LABELS[application?.status ?? ""] ?? application?.status}
                 </span>
-                {event.material ? " · material change" : ""}
-                {event.posted_date_reset ? " · posted date reset" : ""}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2
-          className="text-lg font-semibold text-slate-900"
-          aria-label="Duplicates and relations"
-        >
-          Duplicates & relations
-          <InfoTip label="Duplicates and relations">{Copy.tooltips.relations}</InfoTip>
-        </h2>
-        {relations.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">
-            No related jobs. Relations appear when a posting is linked as a duplicate,
-            repost or similar role.
-          </p>
-        ) : (
-          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-            {relations.map((relation, index) => (
-              <li key={index}>
-                {RELATION_LABELS[text(relation.relation)] ?? text(relation.relation, "Related")}{" "}
-                · job{" "}
-                {text(relation.related_job_id, text(relation.job_id, "—"))}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2
-          className="text-lg font-semibold text-slate-900"
-          aria-label={`Snapshots (${snapshots.length})`}
-        >
-          Snapshots ({snapshots.length})
-          <InfoTip label="Snapshots">{Copy.tooltips.snapshots}</InfoTip>
-        </h2>
-        {snapshots.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">No content snapshots recorded yet.</p>
-        ) : (
-          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-            {snapshots.map((snapshot, index) => (
-              <li key={index}>
-                {formatTimestamp(snapshot.created_at)} · version{" "}
-                {text(snapshot.content_hash, "").slice(0, 12)}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+              </p>
+              <label className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                Change status
+                <select
+                  aria-label="Application status"
+                  value={application?.status ?? "applied"}
+                  disabled={busy}
+                  onChange={(event) => void track(event.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs"
+                >
+                  {STATUSES.map((status) => (
+                    <option key={status.value} value={status.value}>
+                      {status.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Link to="/applications" className={buttonClass("secondary")}>
+                Open Applications
+              </Link>
+            </div>
+          ) : (
+            <div className="mt-2 text-sm text-slate-600">
+              <p>No application recorded for this role yet.</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Marking it applied records history only. It never submits anything. It hides
+                similar roles at this company for the cooldown; saving never does.
+              </p>
+              <Button
+                variant="primary"
+                className="mt-2"
+                disabled={busy}
+                onClick={() => void track("applied")}
+              >
+                Mark as applied
+              </Button>
+            </div>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

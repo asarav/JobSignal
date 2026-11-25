@@ -159,6 +159,19 @@ class JobRepository(Protocol):
         first_seen_after: datetime | None = None,
     ) -> int: ...
 
+    async def saved_page(
+        self,
+        *,
+        view: str = "ready",
+        query: str | None = None,
+        sort: str = "rank",
+        limit: int = 25,
+        offset: int = 0,
+        profile_id: str = "default",
+    ) -> tuple[Sequence[Mapping[str, object]], int]:
+        """One bounded page of saved jobs plus the filtered total."""
+        ...
+
     async def mark_not_seen(
         self, source_id: str, seen_ids: Sequence[str], cutoff: datetime,
         threshold: int = 2, min_spacing_hours: int = 24,
@@ -388,6 +401,24 @@ class ApplicationRepository(Protocol):
     async def list(
         self, *, limit: int = 50, offset: int = 0
     ) -> Sequence[Application]: ...
+
+    async def page(
+        self,
+        *,
+        statuses: Sequence[str] | None = None,
+        query: str | None = None,
+        company_ids: Sequence[str] | None = None,
+        applied_before: datetime | None = None,
+        sort: str = "newest",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[Sequence[Application], int]:
+        """One page plus the true total for the same filters."""
+        ...
+
+    async def stats(self, *, now: datetime) -> Mapping[str, int]:
+        """Whole-history counts used by the Applications workspace."""
+        ...
 
     async def save(
         self,

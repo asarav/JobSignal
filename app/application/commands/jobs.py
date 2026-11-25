@@ -12,6 +12,7 @@ from app.application.dto import (
     JobFilter,
     JobListResult,
     JobSearchParams,
+    JobsListSavedParams,
     JobSummary,
     RankedJobListResult,
     RankedJobParams,
@@ -189,6 +190,16 @@ class JobsUseCase:
                     continue
             visible.append(item)
 
+        if params.min_fit is not None:
+            visible = [
+                item
+                for item in visible
+                if item.fit_score is not None and item.fit_score >= params.min_fit
+            ]
+        if params.risk_classes:
+            allowed_risk = set(params.risk_classes)
+            visible = [item for item in visible if item.risk_class in allowed_risk]
+
         if params.sort == "fit":
             visible.sort(key=lambda item: (-(item.fit_score or -1), item.title))
         elif params.sort == "credibility":
@@ -220,15 +231,25 @@ class JobsUseCase:
             new_since=new_since,
         )
 
-    async def list_saved(self) -> JobListResult:
+    async def list_saved(
+        self, params: JobsListSavedParams | None = None
+    ) -> JobListResult:
+        params = params or JobsListSavedParams()
         async with self._container.uow_factory() as uow:
-            states = list(await uow.job_user_state.list(state="saved"))
-            job_ids = [str(row["job_id"]) for row in states]
-            rows = await uow.jobs.list_by_ids(job_ids) if job_ids else []
-            summaries = [_summary(row) for row in rows]
-            await _enrich(uow, summaries)
+            rows, total = await uow.jobs.saved_page(
+                view=params.view,
+                query=params.query,
+                sort=params.sort,
+                limit=params.limit,
+                offset=params.offset,
+            )
+            page = [_summary(row) for row in rows]
+            for item, row in zip(page, rows, strict=True):
+                item.tracked = bool(row.get("tracked"))
+            await _enrich(uow, page)
+            await _attach_fit(uow, page, "default")
             await uow.commit()
-        return JobListResult(jobs=summaries, total=len(summaries))
+        return JobListResult(jobs=page, total=total)
 
     async def verify_now(self, job_id: str) -> dict[str, Any]:
         """One polite endpoint check on demand (spec §15.4)."""

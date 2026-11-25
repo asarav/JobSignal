@@ -1,9 +1,72 @@
 {
   "additionalProperties": false,
   "properties": {
-    "ok": {
-      "default": true,
+    "discovered": {
+      "default": 0,
+      "type": "integer"
+    },
+    "new": {
+      "default": 0,
+      "type": "integer"
+    },
+    "updated": {
+      "default": 0,
+      "type": "integer"
+    },
+    "skipped": {
+      "default": 0,
+      "type": "integer"
+    },
+    "removed": {
+      "default": 0,
+      "type": "integer"
+    },
+    "errors": {
+      "default": 0,
+      "type": "integer"
+    },
+    "gone": {
+      "default": 0,
+      "type": "integer"
+    },
+    "refs_total": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "truncated": {
+      "default": false,
       "type": "boolean"
+    },
+    "errors_by_code": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "error_samples": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "title": "DiscoveryRunResponse",

@@ -53,9 +53,11 @@ class DiscoveryUseCase:
             await uow.commit()
             return src
 
-    async def list_runs(self, source_id: str | None = None) -> CrawlRunListResult:
+    async def list_runs(
+        self, source_id: str | None = None, limit: int = 50
+    ) -> CrawlRunListResult:
         async with self._container.uow_factory() as uow:
-            rows = await uow.crawl_runs.list(source_id=source_id)
+            rows = await uow.crawl_runs.list(source_id=source_id, limit=limit)
             await uow.commit()
         return CrawlRunListResult(
             runs=[

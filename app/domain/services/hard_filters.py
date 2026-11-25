@@ -100,6 +100,13 @@ def _passes(job: Mapping[str, object], filters: Mapping[str, object]) -> bool:
             if not (set(str(c).lower() for c in jc) & rset):
                 return False
 
+    # Newly collected after a given date (the first-seen timestamp).
+    first_seen_after = filters.get("first_seen_after")
+    if first_seen_after:
+        first_seen = job.get("first_seen_at")
+        if first_seen is None or str(first_seen) <= str(first_seen_after):
+            return False
+
     # Posted after a given date.
     posted_after = filters.get("posted_after")
     if posted_after:

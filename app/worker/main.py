@@ -145,6 +145,7 @@ def _build_dispatcher(
         AnalyticsParams,
         ApplicationCreateParams,
         ApplicationEventParams,
+        ApplicationListParams,
         ApplicationOutcomeParams,
         ApplicationStatusParams,
         BackupExportParams,
@@ -161,6 +162,7 @@ def _build_dispatcher(
         CompanyHistoryParams,
         CompanyMergeHistoryParams,
         CompanyMergeParams,
+        CrawlRunListParams,
         DiscoveryRunParams,
         EmptyParams,
         FetchUrlParams,
@@ -169,6 +171,7 @@ def _build_dispatcher(
         JobIdParams,
         JobMergeParams,
         JobSearchParams,
+        JobsListSavedParams,
         JobUserStateParams,
         KeywordsBackfillParams,
         KeywordsCoverageParams,
@@ -287,7 +290,7 @@ def _build_dispatcher(
         "jobs.ranked", discovery.jobs.ranked, params_model=RankedJobParams
     )
     dispatcher.register(
-        "jobs.list_saved", discovery.jobs.list_saved, params_model=EmptyParams
+        "jobs.list_saved", discovery.jobs.list_saved, params_model=JobsListSavedParams
     )
     dispatcher.register(
         "companies.list",
@@ -321,7 +324,11 @@ def _build_dispatcher(
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)
-    dispatcher.register("crawl_runs.list", discovery.discovery.list_runs, params_model=EmptyParams)
+    dispatcher.register(
+        "crawl_runs.list",
+        discovery.discovery.list_runs,
+        params_model=CrawlRunListParams,
+    )
 
     from app.application.commands.matching import MatchingUseCase
     from app.application.commands.resume import ResumeUseCase
@@ -409,7 +416,7 @@ def _build_dispatcher(
         params_model=ApplicationOutcomeParams,
     )
     dispatcher.register(
-        "applications.list", applications.list, params_model=EmptyParams
+        "applications.list", applications.list, params_model=ApplicationListParams
     )
     dispatcher.register(
         "applications.get_company_history",

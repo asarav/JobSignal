@@ -358,11 +358,50 @@ default, reported in the response) so a large database stays responsive; the
 window is stated in the UI.
 
 The Discover screen is now the ranked shortlist with policy and sort controls,
-fill-in-your-profiles filters, per-row explanations and save toggles. Saved jobs
-have their own screen, and search profiles store both hard filters and a
-credibility policy.
+fill-in-your-profiles filters, per-row explanations and save toggles. It pages
+25 or 50 rows at a time, keeps a true filtered total, and offers quick presets
+for new matches, strong fit, needs-verification and remote roles. **Focus
+review** walks the current queue one job at a time with save, dismiss, open and
+skip actions (`s`, `d`, `o`, `j`/`→`, `k`/`←`). Saved jobs have their own screen,
+and search profiles store both hard filters and a credibility policy.
 
 See [docs/how-ranking-works.md](docs/how-ranking-works.md).
+
+## Daily cockpit and volume-safe lists
+
+Today adapts to the account. A new install still gets the full six-stage
+search plan; once a resume, a source and either a saved/applied role exist, it
+becomes a daily focus view: new matches, the ready-to-apply queue and roles
+waiting 14+ days, plus this week's applied/response/interview/offer counts. The
+ranked top three stay visible, and the sidebar badges reuse the same summary
+instead of loading the full application list again.
+
+The list contracts are honest at volume. `applications.list` takes
+`view`, `query`, `sort`, `limit` and `offset`, returns only the requested page,
+reports the filtered `total`, and includes a whole-history `summary`
+(`total`, `applied`, `active`, `interviewing`, `offers`, `closed`, `follow_up`,
+`applied_last_7_days`, `responded_last_7_days`). `follow_up` means applied,
+acknowledged or recruiter-contacted roles with an `applied_at` at least 14 days
+old; the UI calls that "waiting 14+ days", never "no response". Each row also
+carries the resolved `company_name`, joined in one batch. `jobs.list_saved`
+takes `view` (`ready` hides already-tracked roles), `query`, `sort`, `limit` and
+`offset`, and returns the filtered total. `jobs.ranked` accepts `min_fit` and
+`risk_classes` for display presets, and both stores plus the SQL filter builder
+support `first_seen_after` for "New since last visit". The previous visit
+timestamp stays in place while the session is open, so Today's link and Find
+jobs' preset use the same cutoff; a first run falls back to seven days, and the
+new baseline is recorded when the app is backgrounded or closed.
+
+Saved is an apply queue: strongest fit first, with mark-as-applied advancing to
+the next ready role and updating the shared counts. Applications is a workspace
+with a summary band, counted tabs (including Waiting 14+ days), URL-backed
+search/sort/paging, quick outcomes and expandable timelines; response analytics
+and hidden roles live in their own tabs. Leaving setup incomplete is still the
+first workflow priority, followed by the ready queue, new matches, follow-ups
+and application review.
+
+No ranking or scoring formula changed. The cockpit only exposes existing
+evidence and counts.
 
 ## Outcomes, analytics and calibration (M9)
 
@@ -481,6 +520,24 @@ These are **intentionally absent** so far, and the IPC allowlist rejects them
   (ADR-0012)
 
 No browser automation is installed by default; Playwright is an opt-in extra.
+
+### Verification limits in the current tree
+
+These are not product gaps, but they are not claimed as verified by the current
+headless pass either. See [`docs/ipc-parity.md`](docs/ipc-parity.md) for the
+method-by-method audit and the exact commands.
+
+- The packaged Tauri desktop shell was not launched. Rust allowlist and
+  supervisor tests ran, and the Python worker was run over its real NDJSON
+  protocol, but the native WebView handshake was not driven.
+- Headed Playwright autofill was not exercised; Playwright remains an optional
+  extra and the existing safety suite covers the fill-only boundary.
+- No live external job board was crawled in this pass. Database-backed source
+  list, crawl history and the workflow were exercised against a seeded SQLite
+  database; live collection still needs a real board and network access.
+- The browser preview remains sample-only: it does not implement `browser.*` or
+  a real backup restore, and it is not evidence that the desktop worker path
+  works. The desktop app always uses the real Tauri bridge.
 
 ## Repository layout
 
@@ -633,8 +690,9 @@ npm run dev
 ```
 
 A clearly labelled **Preview mode** banner appears and an explicit
-`PreviewBridge` returns placeholder data. The desktop app always uses the real
-Tauri bridge.
+`PreviewBridge` returns sample data for the full UI, including jobs, saved and
+tracked applications, and company history. It never fetches the network. The
+desktop app always uses the real Tauri bridge.
 
 ## Tests, lint, and generation
 

@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { PreviewBridge } from "./workerBridge";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PreviewBridge, TauriBridge, isTauriRuntime } from "./workerBridge";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 async function payload(
   bridge: PreviewBridge,
@@ -98,6 +102,160 @@ describe("PreviewBridge ranking", () => {
     expect(
       rows(withHidden).find((row) => row.job_id === "preview-job-3")?.hidden_by_policy,
     ).toBe(true);
+  });
+});
+
+describe("PreviewBridge search, sources and applications", () => {
+  it("honours the same text and hard filters as the worker", async () => {
+    const bridge = new PreviewBridge();
+    const byQuery = await payload(bridge, "jobs.list", { query: "Data" });
+    expect(rows(byQuery).map((row) => row.job_id)).toEqual(["preview-job-3"]);
+
+    const byFilter = await payload(bridge, "jobs.list", {
+      filters: { title_include: "Engineer", workplace_types: ["hybrid"] },
+    });
+    expect(rows(byFilter).every((row) => row.workplace_type === "hybrid")).toBe(true);
+  });
+
+  it("adds a source and reports a worker-shaped crawl result", async () => {
+    const bridge = new PreviewBridge();
+    const source = await payload(bridge, "sources.add", {
+      url: "https://boards.greenhouse.io/example",
+      interval_s: 3600,
+    });
+    expect(source.url).toBe("https://boards.greenhouse.io/example");
+    const sources = await payload(bridge, "sources.list");
+    expect((sources.sources as unknown[]).length).toBe(3);
+    expect(await payload(bridge, "discovery.run", { source_id: source.source_id })).toMatchObject({
+      discovered: 0,
+    });
+  });
+
+  it("persists an application created from Saved or job detail", async () => {
+    const bridge = new PreviewBridge();
+    await payload(bridge, "applications.create", {
+      job_id: "preview-job-3",
+      status: "applied",
+    });
+
+    const reloaded = new PreviewBridge();
+    const listed = await payload(reloaded, "applications.list");
+    const applications = listed.applications as Array<Record<string, unknown>>;
+    expect(applications).toHaveLength(1);
+    expect(applications[0]).toMatchObject({
+      job_id: "preview-job-3",
+      job_title: "Data Engineer",
+      status: "applied",
+    });
+
+    await payload(reloaded, "applications.update_status", {
+      application_id: applications[0].application_id,
+      status: "interviewing",
+    });
+    const updated = await payload(new PreviewBridge(), "applications.list");
+    expect(
+      (updated.applications as Array<Record<string, unknown>>)[0].status,
+    ).toBe("interviewing");
+  });
+});
+
+describe("PreviewBridge companies", () => {
+  it("lists sample companies with counts and opens a company detail", async () => {
+    const bridge = new PreviewBridge();
+    await payload(bridge, "applications.create", {
+      job_id: "preview-job-1",
+      status: "applied",
+    });
+
+    const listed = await payload(bridge, "companies.list");
+    const companies = listed.companies as Array<Record<string, unknown>>;
+    expect(listed.total).toBe(12);
+    const acme = companies.find((row) => row.company_id === "preview-co-acme");
+    expect(acme).toMatchObject({ name: "Acme", job_count: 1, application_count: 1 });
+
+    const detail = await payload(bridge, "companies.get_detail", {
+      company_id: "preview-co-gamma",
+    });
+    expect(detail).toMatchObject({ name: "Gamma", job_count: 1 });
+    expect((detail.jobs as unknown[]).length).toBe(1);
+  });
+
+  it("records a merge, resolves the merged id and can separate it again", async () => {
+    const bridge = new PreviewBridge();
+    const merged = await payload(bridge, "companies.merge", {
+      company_id: "preview-co-acme",
+      into_id: "preview-co-gamma",
+      reason: "Same employer",
+    });
+    expect(merged).toMatchObject({ changed: true, survivor_id: "preview-co-gamma" });
+
+    const listed = await payload(bridge, "companies.list");
+    expect(
+      (listed.companies as Array<Record<string, unknown>>).some(
+        (row) => row.company_id === "preview-co-acme",
+      ),
+    ).toBe(false);
+
+    const resolved = await payload(bridge, "companies.get_detail", {
+      company_id: "preview-co-acme",
+    });
+    expect(resolved).toMatchObject({
+      company_id: "preview-co-gamma",
+      requested_id: "preview-co-acme",
+    });
+    const history = await payload(bridge, "companies.get_merge_history", {
+      company_id: "preview-co-acme",
+    });
+    expect((history.records as unknown[]).length).toBe(1);
+    expect((history.records as Array<Record<string, unknown>>)[0]).toMatchObject({
+      merged_name: "Acme",
+      action: "merge",
+      survivor_id: "preview-co-gamma",
+    });
+
+    const separated = await payload(bridge, "companies.unmerge", {
+      company_id: "preview-co-acme",
+    });
+    expect(separated).toMatchObject({ changed: true, survivor_id: "preview-co-gamma" });
+    const restored = await payload(bridge, "companies.list");
+    expect(
+      (restored.companies as Array<Record<string, unknown>>).some(
+        (row) => row.company_id === "preview-co-acme",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("bridge selection and preview scoping", () => {
+  it("detects the packaged Tauri runtime instead of the browser preview", async () => {
+    expect(isTauriRuntime()).toBe(false);
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    expect(isTauriRuntime()).toBe(true);
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+
+    vi.resetModules();
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const desktop = await import("./workerBridge");
+    expect(desktop.defaultBridge.isPreview).toBe(false);
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    vi.resetModules();
+  });
+
+  it("forwards preview-only methods to the desktop worker without preview state", async () => {
+    invoke.mockResolvedValue({ ok: true });
+    await new TauriBridge().request("sources.add", { url: "https://example.test/jobs" });
+    await new TauriBridge().request("discovery.run", { source_id: "s1" });
+    await new TauriBridge().request("applications.create", { job_id: "j1" });
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "worker_request", {
+      method: "sources.add",
+      params: { url: "https://example.test/jobs" },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, "worker_request", {
+      method: "applications.create",
+      params: { job_id: "j1" },
+    });
+    expect(window.localStorage.length).toBe(0);
   });
 });
 

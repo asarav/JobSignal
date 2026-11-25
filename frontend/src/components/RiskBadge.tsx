@@ -18,6 +18,8 @@ export interface RiskBadgeProps {
   riskClass?: string | null;
   confidence?: number | null;
   label?: string | null;
+  /** List rows show the class only; confidence stays in the explanation. */
+  compact?: boolean;
 }
 
 /**
@@ -26,7 +28,7 @@ export interface RiskBadgeProps {
  * class, then the confidence in the evidence. Missing evidence renders nothing
  * rather than a negative signal.
  */
-export function RiskBadge({ riskClass, confidence, label }: RiskBadgeProps) {
+export function RiskBadge({ riskClass, confidence, label, compact = false }: RiskBadgeProps) {
   if (!riskClass) return null;
   const className = CLASS_LABELS[riskClass] ?? riskClass.replaceAll("_", " ");
   const conf = typeof confidence === "number" ? confidence : null;
@@ -41,7 +43,7 @@ export function RiskBadge({ riskClass, confidence, label }: RiskBadgeProps) {
         data-risk-class={riskClass}
       >
         <span>{className}</span>
-        <span className="font-normal opacity-80">{confidenceText}</span>
+        {compact ? null : <span className="font-normal opacity-80">{confidenceText}</span>}
       </summary>
       <div className="mt-1 w-64 rounded border border-slate-200 bg-white p-2 text-xs text-slate-600 shadow-sm">
         <p className="font-medium text-slate-800">{label ?? className}</p>

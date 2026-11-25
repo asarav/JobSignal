@@ -118,7 +118,7 @@ describe("hello/health path", () => {
     expect(state.health?.status).toBe("healthy");
   });
 
-  it("renders the health status and versions on the dashboard", async () => {
+  it("keeps worker internals off Today", async () => {
     await useWorkerStore.getState().refresh();
 
     render(
@@ -127,9 +127,11 @@ describe("hello/health path", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText("healthy")).toBeInTheDocument());
-    expect(screen.getByText("0.0.0")).toBeInTheDocument();
-    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /today/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("healthy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worker health")).not.toBeInTheDocument();
   });
 
   it("records a failed handshake instead of leaving the UI empty", async () => {

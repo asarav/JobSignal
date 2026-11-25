@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   listApplications: vi.fn(),
   listSavedJobs: vi.fn(),
   setJobUserState: vi.fn(),
+  createApplication: vi.fn(),
+  updateApplicationStatus: vi.fn(),
   getMatchingResults: vi.fn(),
   getPostingSignals: vi.fn(),
   getRiskHistory: vi.fn(),
@@ -72,6 +74,8 @@ beforeEach(() => {
     state: "saved",
     hidden: false,
   });
+  mocks.createApplication.mockResolvedValue({ application_id: "a1" });
+  mocks.updateApplicationStatus.mockResolvedValue({ application_id: "a1" });
   mocks.getMatchingResults.mockResolvedValue({ results: [], weights: {} });
   mocks.getPostingSignals.mockResolvedValue({
     job_id: "job_1",
@@ -92,7 +96,9 @@ describe("JobDetailRoute posting content", () => {
     expect(screen.getByText("Berlin, Germany · remote")).toBeTruthy();
     expect(screen.getByText(/^Salary EUR 90,000/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open original" })).toBeTruthy();
-    expect(screen.getByText(/Stored fit 0\.78/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Why this job" }));
+    expect(await screen.findByText(/Stored fit 0\.78/)).toBeTruthy();
   });
 
   it("says what is missing rather than showing zero or a blank", async () => {
@@ -117,9 +123,11 @@ describe("JobDetailRoute posting content", () => {
     expect(screen.getByText("Salary not listed")).toBeTruthy();
     expect(
       screen.getByText(/No description was stored for this posting/),
-    ).toBeTruthy();
+    ).toBeTruthy(    );
     expect(screen.getByText("No original link recorded")).toBeTruthy();
-    expect(screen.getByText(/No fit score yet for this job/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Why this job" }));
+    expect(await screen.findByText(/No fit score yet for this job/)).toBeTruthy();
     expect(document.body.textContent).not.toContain("0.00");
   });
 
@@ -148,5 +156,64 @@ describe("JobDetailRoute posting content", () => {
 
     expect(await screen.findByRole("button", { name: "Saved ✓" })).toBeTruthy();
     expect(mocks.setJobUserState).not.toHaveBeenCalled();
+  });
+
+  it("advances a saved job to applied and then to an updated status", async () => {
+    mocks.listSavedJobs.mockResolvedValue({
+      jobs: [{ job_id: "job_1", title: "Data Engineer" }],
+      total: 1,
+    });
+    mocks.listApplications
+      .mockResolvedValueOnce({ applications: [], total: 0 })
+      .mockResolvedValue({
+        applications: [
+          { application_id: "a1", job_id: "job_1", status: "applied" },
+        ],
+        total: 1,
+      });
+
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Mark as applied" }));
+
+    await waitFor(() =>
+      expect(mocks.createApplication).toHaveBeenCalledWith({
+        job_id: "job_1",
+        status: "applied",
+      }),
+    );
+    expect(await screen.findByLabelText("Update application status")).toBeTruthy();
+    expect(screen.getByText(/Track it in Applications/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Update application status"), {
+      target: { value: "interviewing" },
+    });
+    await waitFor(() =>
+      expect(mocks.updateApplicationStatus).toHaveBeenCalledWith({
+        application_id: "a1",
+        status: "interviewing",
+      }),
+    );
+  });
+
+  it("keeps Autofill and posting history behind explicit opens", async () => {
+    renderDetail();
+
+    await screen.findByRole("button", { name: "Save for later" });
+    expect(screen.queryByText("Prepare application", { selector: "h2" })).toBeNull();
+    expect(screen.queryByText("First seen")).toBeNull();
+    expect(screen.queryByText("Repost history")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Posting facts/ }));
+    expect(screen.getByText("First seen")).toBeTruthy();
+    expect(screen.getByText("Times observed")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare application" }));
+    expect(
+      await screen.findByRole("heading", { name: "Prepare application" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Posting history/ }));
+    expect(screen.getByText("Repost history")).toBeTruthy();
+    expect(screen.getByText(/No reposts detected/)).toBeTruthy();
   });
 });

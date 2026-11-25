@@ -55,6 +55,7 @@ describe("ResumeRoute missing fit data", () => {
 
     render(<ResumeRoute />);
 
+    expect(screen.getByRole("tab", { name: "Profile details" })).toBeTruthy();
     const badge = await screen.findByText("Not assessed yet");
     expect(screen.getByText("data coverage not recorded")).toBeTruthy();
     expect(screen.getByText("no data")).toBeTruthy();

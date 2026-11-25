@@ -9,6 +9,7 @@ from app.application.dto import (
     JobIdParams,
     JobMergeParams,
     JobSearchParams,
+    JobsListSavedParams,
     RankedJobParams,
 )
 
@@ -41,8 +42,8 @@ class JobsHandlers:
     async def ranked(self, params: RankedJobParams) -> dict:
         return (await self._jobs.ranked(params)).model_dump()
 
-    async def list_saved(self, params: EmptyParams) -> dict:
-        return (await self._jobs.list_saved()).model_dump()
+    async def list_saved(self, params: JobsListSavedParams) -> dict:
+        return (await self._jobs.list_saved(params)).model_dump()
 
     async def get_detail(self, params: JobIdParams) -> dict:
         return (await self._jobs.get_detail(params.job_id)).model_dump()

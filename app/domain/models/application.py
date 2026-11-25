@@ -29,6 +29,20 @@ APPLICATION_STATUSES: tuple[str, ...] = (
 #: cooldown (spec section 8.2 rule 1 -- test-enforced).
 PRE_APPLICATION_STATUSES: tuple[str, ...] = ("interested", "saved")
 
+#: Statuses that count as still open after an application was sent.
+IN_FLIGHT_STATUSES: tuple[str, ...] = (
+    "applied",
+    "acknowledged",
+    "recruiter_contacted",
+)
+CLOSED_STATUSES: tuple[str, ...] = ("rejected", "withdrawn")
+OFFER_STATUSES: tuple[str, ...] = ("offered", "accepted")
+
+#: Outcomes that count as a response. ``no_response`` is deliberately absent.
+RESPONSE_OUTCOME_KINDS: frozenset[str] = frozenset(
+    {"acknowledged", "recruiter_contact", "interview", "rejection", "offer", "accepted"}
+)
+
 OUTCOME_KINDS: tuple[str, ...] = (
     "no_response",
     "acknowledged",
@@ -39,6 +53,8 @@ OUTCOME_KINDS: tuple[str, ...] = (
     "withdrawn",
     "accepted",
 )
+
+FOLLOW_UP_AFTER_DAYS = 14
 
 SUPPRESSION_STATES: tuple[str, ...] = ("active", "expired", "restored")
 

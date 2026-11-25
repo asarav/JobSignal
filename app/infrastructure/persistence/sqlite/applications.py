@@ -11,12 +11,17 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiosqlite
 
 from app.domain.models.application import (
+    CLOSED_STATUSES,
+    FOLLOW_UP_AFTER_DAYS,
+    IN_FLIGHT_STATUSES,
+    OFFER_STATUSES,
+    RESPONSE_OUTCOME_KINDS,
     Application,
     ApplicationEvent,
     ApplicationOutcome,
@@ -136,6 +141,104 @@ class SqliteApplicationRepository:
             (limit, offset),
         )
         return [self._row(row) for row in await cur.fetchall()]
+
+    async def page(
+        self,
+        *,
+        statuses: Sequence[str] | None = None,
+        query: str | None = None,
+        company_ids: Sequence[str] | None = None,
+        applied_before: datetime | None = None,
+        sort: str = "newest",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[Sequence[Application], int]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if statuses:
+            clauses.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+            params.extend(statuses)
+        if applied_before is not None:
+            clauses.append("applied_at IS NOT NULL AND applied_at <= ?")
+            params.append(_iso(applied_before))
+        text = (query or "").strip().lower()
+        if text:
+            ors = ["instr(lower(job_title), ?) > 0"]
+            search_params: list[Any] = [text]
+            ids = [str(value) for value in (company_ids or []) if value]
+            if ids:
+                ors.append("company_id IN (" + ",".join("?" for _ in ids) + ")")
+                search_params.extend(ids)
+            clauses.append("(" + " OR ".join(ors) + ")")
+            params.extend(search_params)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        order = {
+            "oldest": "COALESCE(applied_at, created_at) ASC, id",
+            "updated": "updated_at DESC, id",
+        }.get(sort, "COALESCE(applied_at, created_at) DESC, id")
+        cur = await self._conn.execute(
+            f"SELECT * FROM applications{where} ORDER BY {order} LIMIT ? OFFSET ?",
+            tuple(params) + (limit, offset),
+        )
+        rows = [self._row(row) for row in await cur.fetchall()]
+        count_cur = await self._conn.execute(
+            f"SELECT COUNT(*) FROM applications{where}", tuple(params)
+        )
+        count_row = await count_cur.fetchone()
+        return rows, int(count_row[0]) if count_row is not None else 0
+
+    async def stats(self, *, now: datetime) -> Mapping[str, int]:
+        cur = await self._conn.execute("SELECT status, applied_at FROM applications")
+        rows = await cur.fetchall()
+        cutoff = now - timedelta(days=FOLLOW_UP_AFTER_DAYS)
+        recent = now - timedelta(days=7)
+        counts = {
+            "total": 0,
+            "applied": 0,
+            "active": 0,
+            "interviewing": 0,
+            "offers": 0,
+            "closed": 0,
+            "follow_up": 0,
+            "applied_last_7_days": 0,
+            "responded": 0,
+            "responded_last_7_days": 0,
+        }
+        for row in rows:
+            status = str(row["status"])
+            applied_at = _parse(row["applied_at"])
+            counts["total"] += 1
+            if applied_at is not None:
+                counts["applied"] += 1
+                if applied_at >= recent:
+                    counts["applied_last_7_days"] += 1
+            if status in IN_FLIGHT_STATUSES:
+                counts["active"] += 1
+                if applied_at is not None and applied_at <= cutoff:
+                    counts["follow_up"] += 1
+            elif status == "interviewing":
+                counts["interviewing"] += 1
+            elif status in OFFER_STATUSES:
+                counts["offers"] += 1
+            elif status in CLOSED_STATUSES:
+                counts["closed"] += 1
+        kinds = tuple(sorted(RESPONSE_OUTCOME_KINDS))
+        placeholders = ",".join("?" for _ in kinds)
+        outcome_cur = await self._conn.execute(
+            "SELECT COUNT(DISTINCT application_id) FROM application_outcomes "
+            f"WHERE confirmed = 1 AND kind IN ({placeholders}) AND occurred_at >= ?",
+            kinds + (_iso(recent),),
+        )
+        outcome_row = await outcome_cur.fetchone()
+        counts["responded_last_7_days"] = int(outcome_row[0]) if outcome_row else 0
+        total_cur = await self._conn.execute(
+            "SELECT COUNT(DISTINCT application_id) FROM application_outcomes "
+            f"WHERE confirmed = 1 AND kind IN ({placeholders})",
+            kinds,
+        )
+        total_row = await total_cur.fetchone()
+        counts["responded"] = int(total_row[0]) if total_row else 0
+        return counts
 
     async def save(
         self,

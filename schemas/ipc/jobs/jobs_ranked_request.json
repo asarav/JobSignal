@@ -60,6 +60,25 @@
       "default": false,
       "type": "boolean"
     },
+    "min_fit": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "risk_classes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "limit": {
       "default": 50,
       "maximum": 200,

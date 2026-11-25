@@ -1,6 +1,46 @@
 {
   "additionalProperties": false,
-  "properties": {},
+  "properties": {
+    "view": {
+      "default": "ready",
+      "enum": [
+        "ready",
+        "all"
+      ],
+      "type": "string"
+    },
+    "query": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "sort": {
+      "default": "rank",
+      "enum": [
+        "rank",
+        "newest",
+        "company"
+      ],
+      "type": "string"
+    },
+    "limit": {
+      "default": 25,
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
   "title": "JobsListSavedRequest",
   "type": "object"
 }

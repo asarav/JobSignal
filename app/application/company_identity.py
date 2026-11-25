@@ -136,10 +136,21 @@ class CompanyIdentityService:
                 else await uow.company_merges.list_all(limit=limit)
             )
             merged = await self.canonical_map(uow)
+            names = {
+                str(row.get("id")): str(row.get("canonical_name") or row.get("id"))
+                for row in await uow.companies.list()
+            }
             await uow.commit()
         return {
             "company_id": company_id,
-            "records": [dict(row) for row in rows],
+            "records": [
+                {
+                    **dict(row),
+                    "merged_name": names.get(str(row.get("merged_id"))),
+                    "survivor_name": names.get(str(row.get("survivor_id"))),
+                }
+                for row in rows
+            ],
             "currently_merged": merged,
             "total": len(rows),
         }

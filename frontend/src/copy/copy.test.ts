@@ -16,6 +16,10 @@ describe("copy module", () => {
     expect(strings.some((value) => /milestone/i.test(value))).toBe(false);
   });
 
+  it("ships no stale 'not available in this build' copy anywhere", () => {
+    expect(JSON.stringify(Copy)).not.toMatch(/not available in this build/i);
+  });
+
   it("explains every navigation destination", () => {
     for (const description of Object.values(Copy.navDescriptions)) {
       expect(description.trim().length).toBeGreaterThan(10);

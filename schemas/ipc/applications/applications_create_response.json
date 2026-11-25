@@ -7,6 +7,10 @@
     "company_id": {
       "type": "string"
     },
+    "company_name": {
+      "default": "",
+      "type": "string"
+    },
     "job_id": {
       "type": "string"
     },

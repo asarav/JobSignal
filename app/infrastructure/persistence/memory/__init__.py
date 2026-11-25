@@ -4,6 +4,7 @@ import copy
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
+from datetime import timedelta
 from typing import Any
 
 from app.domain.models.candidate import SearchProfile
@@ -233,10 +234,19 @@ class InMemoryJobRepository:
         self,
         store: dict[str, dict[str, object]],
         relations: list[dict[str, object]] | None = None,
+        *,
+        job_user_state: dict[str, dict[str, object]] | None = None,
+        applications: dict[str, Any] | None = None,
+        companies: dict[str, dict[str, object]] | None = None,
+        matches: Any = None,
     ) -> None:
         self._store = store
         # Shared across unit-of-work instances so relations survive a commit.
         self._relations = relations if relations is not None else []
+        self._job_user_state = job_user_state if job_user_state is not None else {}
+        self._applications = applications if applications is not None else {}
+        self._companies = companies if companies is not None else {}
+        self._matches = matches
 
     async def upsert(self, job_id, *, company_id, source_id, job, content_hash=None, updated_at_hint=None) -> None:
         provenance = []
@@ -268,6 +278,9 @@ class InMemoryJobRepository:
             "seniority": scalar("seniority"),
             "salary": getattr(job, "salary", None),
             "posted_at": getattr(job, "posted_at", None),
+            "first_seen_at": getattr(job, "fetched_at", None)
+            or updated_at_hint
+            or "2026-01-01T00:00:00Z",
             "posting_status": "active",
             "provenance": provenance,
         }
@@ -334,6 +347,84 @@ class InMemoryJobRepository:
     async def list_by_ids(self, job_ids):
         wanted = {str(job_id) for job_id in job_ids if job_id}
         return [j for jid, j in self._store.items() if jid in wanted]
+
+    async def saved_page(
+        self,
+        *,
+        view="ready",
+        query=None,
+        sort="rank",
+        limit=25,
+        offset=0,
+        profile_id="default",
+    ):
+        tracked = {
+            str(getattr(application, "job_id", ""))
+            for application in self._applications.values()
+        }
+        saved_ids = [
+            str(job_id)
+            for job_id, state in self._job_user_state.items()
+            if str(state.get("state")) == "saved"
+            and (view != "ready" or str(job_id) not in tracked)
+        ]
+        rows = [
+            dict(self._store[job_id])
+            for job_id in saved_ids
+            if job_id in self._store
+        ]
+        text = (query or "").strip().lower()
+        if text:
+            rows = [
+                row
+                for row in rows
+                if text in str(row.get("title") or "").lower()
+                or text
+                in str(
+                    self._companies.get(str(row.get("company_id")), {}).get(
+                        "canonical_name"
+                    )
+                    or ""
+                ).lower()
+            ]
+        fit: dict[str, float] = {}
+        if self._matches is not None and rows:
+            latest = await self._matches.latest_for_jobs(
+                [str(row.get("id")) for row in rows], profile_id
+            )
+            fit = {
+                job_id: float(result["fit_score"])
+                for job_id, result in latest.items()
+                if result.get("fit_score") is not None
+            }
+        for row in rows:
+            row["tracked"] = str(row.get("id")) in tracked
+            row["company_name"] = self._companies.get(
+                str(row.get("company_id")), {}
+            ).get("canonical_name")
+        if sort == "newest":
+            rows.sort(
+                key=lambda row: str(
+                    row.get("posted_at") or row.get("first_seen_at") or ""
+                ),
+                reverse=True,
+            )
+        elif sort == "company":
+            rows.sort(
+                key=lambda row: (
+                    str(row.get("company_name") or "").lower(),
+                    str(row.get("title") or ""),
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda row: (
+                    -(fit.get(str(row.get("id")), -1.0)),
+                    str(row.get("title") or ""),
+                )
+            )
+        total = len(rows)
+        return rows[offset : offset + limit], total
 
     async def touch(self, job_id, seen_at):
         job = self._store.get(job_id)
@@ -723,7 +814,13 @@ class InMemoryUnitOfWork:
         self._suppression_policy_store = suppression_policy if suppression_policy is not None else {}
         self._job_user_state_store = job_user_state if job_user_state is not None else {}
         self._search_profiles_store = search_profiles if search_profiles is not None else {}
-        self.jobs = InMemoryJobRepository(self._jobs_store, self._relations_store)
+        self.jobs = InMemoryJobRepository(
+            self._jobs_store,
+            self._relations_store,
+            job_user_state=self._job_user_state_store,
+            applications=self._applications_store,
+            companies=self._companies_store,
+        )
         self.companies = InMemoryCompanyRepository(self._companies_store)
         self.applications = InMemoryApplicationRepository(
             self._applications_store,
@@ -743,6 +840,7 @@ class InMemoryUnitOfWork:
         self.observations = InMemoryObservationRepository(self._observations_store)
         self.resumes = resumes if resumes is not None else InMemoryResumeRepository()
         self.matches = matches if matches is not None else InMemoryMatchRepository()
+        self.jobs._matches = self.matches
         self.company_merges = company_merges or InMemoryCompanyMergeRepository()
         self.keywords = keywords or InMemoryJobKeywordRepository()
         self.weight_versions = (
@@ -1073,6 +1171,102 @@ class InMemoryApplicationRepository:
             reverse=True,
         )
         return rows[offset : offset + limit]
+
+    async def page(
+        self,
+        *,
+        statuses: Sequence[str] | None = None,
+        query: str | None = None,
+        company_ids: Sequence[str] | None = None,
+        applied_before=None,
+        sort: str = "newest",
+        limit: int = 25,
+        offset: int = 0,
+    ):
+        rows = list(self._store.values())
+        if statuses:
+            allowed = set(statuses)
+            rows = [row for row in rows if row.status in allowed]
+        if applied_before is not None:
+            rows = [
+                row
+                for row in rows
+                if row.applied_at is not None and row.applied_at <= applied_before
+            ]
+        text = (query or "").strip().lower()
+        if text:
+            ids = {str(value) for value in (company_ids or []) if value}
+            rows = [
+                row
+                for row in rows
+                if text in row.job_title.lower() or row.company_id in ids
+            ]
+        if sort == "oldest":
+            rows.sort(key=lambda row: (row.applied_at or row.created_at, row.id))
+        elif sort == "updated":
+            rows.sort(key=lambda row: (row.updated_at, row.id), reverse=True)
+        else:
+            rows.sort(
+                key=lambda row: (row.applied_at or row.created_at, row.id),
+                reverse=True,
+            )
+        return rows[offset : offset + limit], len(rows)
+
+    async def stats(self, *, now):
+        from app.domain.models.application import (
+            CLOSED_STATUSES,
+            FOLLOW_UP_AFTER_DAYS,
+            IN_FLIGHT_STATUSES,
+            OFFER_STATUSES,
+            RESPONSE_OUTCOME_KINDS,
+        )
+
+        cutoff = now - timedelta(days=FOLLOW_UP_AFTER_DAYS)
+        recent = now - timedelta(days=7)
+        counts = {
+            "total": 0,
+            "applied": 0,
+            "active": 0,
+            "interviewing": 0,
+            "offers": 0,
+            "closed": 0,
+            "follow_up": 0,
+            "applied_last_7_days": 0,
+            "responded": 0,
+            "responded_last_7_days": 0,
+        }
+        for row in self._store.values():
+            counts["total"] += 1
+            if row.applied_at is not None:
+                counts["applied"] += 1
+                if row.applied_at >= recent:
+                    counts["applied_last_7_days"] += 1
+            if row.status in IN_FLIGHT_STATUSES:
+                counts["active"] += 1
+                if row.applied_at is not None and row.applied_at <= cutoff:
+                    counts["follow_up"] += 1
+            elif row.status == "interviewing":
+                counts["interviewing"] += 1
+            elif row.status in OFFER_STATUSES:
+                counts["offers"] += 1
+            elif row.status in CLOSED_STATUSES:
+                counts["closed"] += 1
+        responded = {
+            outcome.application_id
+            for outcome in self._outcomes
+            if outcome.confirmed
+            and outcome.kind in RESPONSE_OUTCOME_KINDS
+            and outcome.occurred_at >= recent
+        }
+        counts["responded_last_7_days"] = len(responded)
+        counts["responded"] = len(
+            {
+                outcome.application_id
+                for outcome in self._outcomes
+                if outcome.confirmed and outcome.kind in RESPONSE_OUTCOME_KINDS
+            }
+        )
+        return counts
 
     async def save(
         self,

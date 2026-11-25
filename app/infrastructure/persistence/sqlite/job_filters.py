@@ -125,6 +125,13 @@ def compile_hard_filters(
         conditions.append(f"instr({_TEXT}, lower(?)) = 0")
         params.append(term)
 
+    first_seen_after = filters.get("first_seen_after")
+    if first_seen_after:
+        conditions.append(
+            "(jobs.first_seen_at IS NOT NULL AND jobs.first_seen_at > ?)"
+        )
+        params.append(str(first_seen_after))
+
     posted_after = filters.get("posted_after")
     if posted_after:
         conditions.append("(jobs.posted_at IS NOT NULL AND jobs.posted_at >= ?)")

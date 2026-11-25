@@ -260,6 +260,10 @@
           "default": false,
           "type": "boolean"
         },
+        "tracked": {
+          "default": false,
+          "type": "boolean"
+        },
         "rank_score": {
           "anyOf": [
             {

@@ -35,6 +35,22 @@
         }
       ],
       "default": null
+    },
+    "experience": {
+      "default": 0,
+      "type": "integer"
+    },
+    "education": {
+      "default": 0,
+      "type": "integer"
+    },
+    "certifications": {
+      "default": 0,
+      "type": "integer"
+    },
+    "projects": {
+      "default": 0,
+      "type": "integer"
     }
   },
   "required": [

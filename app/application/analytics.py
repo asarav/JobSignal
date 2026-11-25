@@ -12,12 +12,11 @@ from datetime import datetime
 from typing import Any
 
 from app.application.intelligence import wilson_interval
+from app.domain.models.application import RESPONSE_OUTCOME_KINDS
 
 #: Outcomes that count as the employer responding. ``no_response`` is recorded by
 #: the user but is not evidence of anything about the posting.
-RESPONSE_KINDS = frozenset(
-    {"acknowledged", "recruiter_contact", "interview", "rejection", "offer", "accepted"}
-)
+RESPONSE_KINDS = RESPONSE_OUTCOME_KINDS
 INACTIVE_ENDPOINT_STATES = frozenset({"gone_404_410", "closed_message"})
 MIN_SAMPLE = 5
 CALIBRATION_MIN_SAMPLE = 30

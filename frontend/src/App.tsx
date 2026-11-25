@@ -1,36 +1,37 @@
+import { useEffect } from "react";
 import { BrowserRouter } from "react-router-dom";
-import { Navigation } from "./components/Navigation";
+import { AppShell } from "./components/AppShell";
+import { ToastProvider } from "./components/Toast";
 import { Copy } from "./copy/copy";
+import { recordVisitOnExit } from "./features/workflow/lastVisit";
 import { useWorkerBootstrap } from "./hooks/useWorkerBootstrap";
 import { AppRoutes } from "./routes/routes";
 import { useWorkerStore } from "./stores/workerStore";
 
 export default function App() {
   useWorkerBootstrap();
+  useEffect(() => recordVisitOnExit(), []);
   const isPreview = useWorkerStore((state) => state.isPreview);
   const error = useWorkerStore((state) => state.error);
 
   return (
     <BrowserRouter>
-      <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
-        <Navigation />
-        {isPreview ? (
-          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900">
-            {Copy.previewBanner}
-          </div>
-        ) : null}
-        {error ? (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-center text-xs text-red-800">
-            {error}
-          </div>
-        ) : null}
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
+      <ToastProvider>
+        <AppShell>
+          {isPreview ? (
+            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900">
+              {Copy.previewBanner}
+            </div>
+          ) : null}
+          {error ? (
+            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-center text-xs text-red-800">
+              {error}
+            </div>
+          ) : null}
           <AppRoutes />
-        </main>
-        <footer className="border-t border-slate-200 bg-white py-3 text-center text-xs text-slate-500">
-          {Copy.footer}
-        </footer>
-      </div>
+          <footer className="py-6 text-center text-xs text-slate-500">{Copy.footer}</footer>
+        </AppShell>
+      </ToastProvider>
     </BrowserRouter>
   );
 }

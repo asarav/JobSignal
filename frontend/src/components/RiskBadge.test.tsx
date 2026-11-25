@@ -20,6 +20,14 @@ describe("RiskBadge", () => {
     expect(screen.getByText(/missing signal never raises risk/i)).toBeTruthy();
   });
 
+  it("can show only the class in a list while keeping confidence in the explanation", () => {
+    const { container } = render(
+      <RiskBadge riskClass="likely_active" confidence={0.82} compact />,
+    );
+    expect(container.querySelector("summary")?.textContent).toBe("Recent activity");
+    expect(container.textContent).toContain("confidence 0.82");
+  });
+
   it("renders nothing when there is no evidence", () => {
     const { container } = render(<RiskBadge riskClass={null} confidence={null} />);
     expect(container.firstChild).toBeNull();

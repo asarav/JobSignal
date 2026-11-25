@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { Disclosure } from "../../components/Disclosure";
 import { PageHeader } from "../../components/PageHeader";
 import { RiskBadge } from "../../components/RiskBadge";
 import { workerClient, WorkerError } from "../../services/workerClient";
@@ -279,6 +280,7 @@ export function CompaniesRoute() {
                   riskClass={job.risk_class}
                   confidence={job.risk_confidence}
                   label={job.risk_label}
+                  compact
                 />
                 {job.reason ? <span className="text-xs text-slate-400">{job.reason}</span> : null}
               </li>
@@ -301,11 +303,12 @@ export function CompaniesRoute() {
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Merge audit trail</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Every merge and separation is recorded with its reason and time. Records are never
-          edited or deleted; a separation is a new decision on top.
+      <Disclosure
+        summary="Merge audit trail"
+        hint="Every merge and separation, with its reason and time."
+      >
+        <p className="text-xs text-slate-500">
+          Records are never edited or deleted; a separation is a new decision on top.
         </p>
         {records.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">No merge decisions recorded.</p>
@@ -327,8 +330,11 @@ export function CompaniesRoute() {
                 const mergedId = String(record.merged_id);
                 const survivorId = String(record.survivor_id);
                 const active = String(record.action) === "merge";
-                const mergedName =
-                  companies.find((company) => company.company_id === mergedId)?.name ?? mergedId;
+                const mergedName = String(
+                  record.merged_name ??
+                    companies.find((company) => company.company_id === mergedId)?.name ??
+                    mergedId,
+                );
                 const survivorName =
                   companies.find((company) => company.company_id === survivorId)?.name ??
                   survivorId;
@@ -390,7 +396,7 @@ export function CompaniesRoute() {
             </tbody>
           </table>
         )}
-      </section>
+      </Disclosure>
     </div>
   );
 }

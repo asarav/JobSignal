@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.domain.models.application import (
@@ -328,3 +328,95 @@ async def test_a_lapsed_cooldown_stops_hiding_its_job_without_a_sweep(kind, tmp_
         assert await uow.suppressions.active_job_ids(NOW) == []
         stored = await uow.suppressions.get("job_2", "app_1")
         assert stored is not None and stored.state == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_application_page_and_summary_follow_the_workspace_contract(kind, tmp_path):
+    factory = await _factory(kind, tmp_path)
+    old = NOW - timedelta(days=30)
+    async with factory() as uow:
+        await _seed_job(uow)
+        await _seed_job(uow, "job_2")
+        await _seed_job(uow, "job_3")
+        await uow.applications.add(_application("app_1"))
+        await uow.applications.add(
+            _application("app_2", job_id="job_2", status="applied", applied_at=old)
+        )
+        await uow.applications.add(
+            _application("app_3", status="interviewing", applied_at=old)
+        )
+        await uow.applications.add(
+            _application("app_4", status="offered", applied_at=old)
+        )
+        await uow.applications.add(
+            _application("app_5", status="rejected", applied_at=old)
+        )
+        await uow.applications.add_outcome(
+            ApplicationOutcome(
+                id="out_1",
+                application_id="app_2",
+                kind="acknowledged",
+                occurred_at=old,
+                note="",
+            )
+        )
+        await uow.commit()
+
+    async with factory() as uow:
+        page, total = await uow.applications.page(
+            statuses=["applied"], sort="oldest", limit=1, offset=0
+        )
+        assert total == 2
+        assert [row.id for row in page] == ["app_2"]
+        stats = await uow.applications.stats(now=NOW)
+        assert stats["total"] == 5
+        assert stats["applied"] == 5
+        assert stats["active"] == 2
+        assert stats["follow_up"] == 1
+        assert stats["interviewing"] == 1
+        assert stats["offers"] == 1
+        assert stats["closed"] == 1
+        assert stats["responded"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+async def test_saved_page_is_bounded_and_ready_excludes_tracked(kind, tmp_path):
+    factory = await _factory(kind, tmp_path)
+    async with factory() as uow:
+        await _seed_job(uow)
+        await _seed_job(uow, "job_2")
+        await _seed_job(uow, "job_3")
+        for job_id in ("job_1", "job_2", "job_3"):
+            await uow.job_user_state.set(job_id, "saved", note="", updated_at=NOW)
+        await uow.applications.add(_application("app_1", job_id="job_2"))
+        await uow.commit()
+
+    async with factory() as uow:
+        page, total = await uow.jobs.saved_page(view="ready", limit=1)
+        assert total == 2
+        assert len(page) == 1
+        assert page[0]["id"] in {"job_1", "job_3"}
+        assert page[0]["tracked"] is False
+
+        all_page, all_total = await uow.jobs.saved_page(view="all", limit=10)
+        assert all_total == 3
+        tracked = {row["id"]: row["tracked"] for row in all_page}
+        assert tracked["job_2"] is True
+
+        searched, searched_total = await uow.jobs.saved_page(
+            view="all", query="Acme", limit=10
+        )
+        assert searched_total == 3
+        assert all(row["company_name"] == "Acme" for row in searched)
+
+    async with factory() as uow:
+        page, total = await uow.jobs.filtered_page(
+            {"first_seen_after": "2026-02-01T00:00:00Z"}
+        )
+        assert total == 3
+        page, total = await uow.jobs.filtered_page(
+            {"first_seen_after": "2026-04-01T00:00:00Z"}
+        )
+        assert total == 0

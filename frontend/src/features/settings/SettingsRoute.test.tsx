@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsRoute } from "./SettingsRoute";
 
@@ -36,7 +37,11 @@ beforeEach(() => {
 describe("SettingsRoute open-question answers", () => {
   it("shows the questions the user saved and hides cleared ones", async () => {
     prime({ "Why us?": "Because I care about the product.", "Old question?": "" });
-    render(<SettingsRoute />);
+    render(
+      <MemoryRouter initialEntries={["/settings?tab=answers"]}>
+        <SettingsRoute />
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByDisplayValue("Why us?")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Because I care about the product.")).toBeInTheDocument();
@@ -45,7 +50,11 @@ describe("SettingsRoute open-question answers", () => {
 
   it("saves a new question and clears one the user removed", async () => {
     prime({ "Old question?": "Old answer." });
-    render(<SettingsRoute />);
+    render(
+      <MemoryRouter initialEntries={["/settings?tab=answers"]}>
+        <SettingsRoute />
+      </MemoryRouter>,
+    );
 
     await screen.findByDisplayValue("Old question?");
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));

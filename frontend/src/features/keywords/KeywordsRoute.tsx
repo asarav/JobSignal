@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
+import { Tabs } from "../../components/Tabs";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
   CompaniesListResponseCompanyInfo,
@@ -13,6 +14,13 @@ function message(exc: unknown): string {
 }
 
 type Row = Record<string, unknown>;
+type Tab = "demand" | "trends" | "coverage";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "demand", label: "Skill demand" },
+  { id: "trends", label: "Monthly trends" },
+  { id: "coverage", label: "Profile coverage" },
+];
 
 function keywordId(row: Row): string {
   return String(row.keyword_id ?? "");
@@ -25,6 +33,7 @@ function share(row: Row, insufficient: boolean): string {
 }
 
 export function KeywordsRoute() {
+  const [tab, setTab] = useState<Tab>("demand");
   const [companies, setCompanies] = useState<CompaniesListResponseCompanyInfo[]>([]);
   const [companyId, setCompanyId] = useState<string>("");
   const [prevalence, setPrevalence] = useState<KeywordsPrevalenceResponse | null>(null);
@@ -149,6 +158,9 @@ export function KeywordsRoute() {
 
       {status ? <p className="text-xs text-slate-500">{status}</p> : null}
 
+      <Tabs label="Skill insight views" items={TABS} active={tab} onChange={(next) => setTab(next as Tab)} />
+
+      {tab === "demand" ? (
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Skill prevalence</h2>
         {rows.length === 0 ? (
@@ -183,7 +195,9 @@ export function KeywordsRoute() {
           <p className="mt-2 text-xs text-slate-500">{prevalence.note}</p>
         ) : null}
       </section>
+      ) : null}
 
+      {tab === "trends" ? (
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Skill trends by month</h2>
         <p className="mt-1 text-xs text-slate-500">
@@ -301,7 +315,9 @@ export function KeywordsRoute() {
         )}
         {trends?.note ? <p className="mt-2 text-xs text-slate-500">{trends.note}</p> : null}
       </section>
+      ) : null}
 
+      {tab === "coverage" ? (
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Coverage of your profile</h2>
         {coverage && (coverage.candidate_skills ?? 0) > 0 ? (
@@ -339,6 +355,7 @@ export function KeywordsRoute() {
         )}
         {coverage?.note ? <p className="mt-2 text-xs text-slate-500">{coverage.note}</p> : null}
       </section>
+      ) : null}
     </div>
   );
 }

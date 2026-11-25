@@ -814,6 +814,69 @@ class SqliteJobRepository:
             out.extend(self._row(row) for row in await cur.fetchall())
         return out
 
+    async def saved_page(
+        self,
+        *,
+        view="ready",
+        query=None,
+        sort="rank",
+        limit=25,
+        offset=0,
+        profile_id="default",
+    ):
+        """Saved jobs with filters, ordering and counts applied in SQL."""
+        self._conn.row_factory = aiosqlite.Row
+        where = ["s.state = 'saved'"]
+        values: list[object] = []
+        if view == "ready":
+            where.append("NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id)")
+        text = (query or "").strip().lower()
+        if text:
+            where.append(
+                "(lower(j.title) LIKE ? OR lower(COALESCE(c.canonical_name, '')) LIKE ?)"
+            )
+            like = f"%{text}%"
+            values.extend([like, like])
+        clause = " AND ".join(where)
+        if sort == "newest":
+            order = "COALESCE(j.posted_at, j.first_seen_at, '') DESC, j.title"
+            order_values: list[object] = []
+        elif sort == "company":
+            order = "lower(COALESCE(c.canonical_name, '')), j.title"
+            order_values = []
+        else:
+            order = (
+                "COALESCE((SELECT m.fit_score FROM matching_results m "
+                "WHERE m.job_id = j.id AND m.candidate_profile_id = ? "
+                "ORDER BY m.evaluated_at DESC LIMIT 1), -1) DESC, j.title"
+            )
+            order_values = [profile_id]
+        base = (
+            "FROM jobs j "
+            "JOIN job_user_state s ON s.job_id = j.id "
+            "LEFT JOIN companies c ON c.id = j.company_id "
+            f"WHERE {clause}"
+        )
+        cur = await self._conn.execute(
+            "SELECT COUNT(*) " + base, tuple(values)
+        )
+        total_row = await cur.fetchone()
+        total = int(total_row[0]) if total_row is not None else 0
+        cur = await self._conn.execute(
+            "SELECT j.*, c.canonical_name AS company_name, "
+            "EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id) AS tracked "
+            + base
+            + f" ORDER BY {order} LIMIT ? OFFSET ?",
+            tuple(values + order_values + [int(limit), int(offset)]),
+        )
+        rows: list[dict[str, object]] = []
+        for row in await cur.fetchall():
+            data = self._row(row)
+            data["tracked"] = bool(row["tracked"])
+            data["company_name"] = row["company_name"]
+            rows.append(data)
+        return rows, total
+
     async def touch(self, job_id, seen_at):
         """Refresh ``last_seen_at`` for a repost/alias hit."""
         await self._conn.execute(
