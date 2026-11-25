@@ -33,6 +33,10 @@ dev = [
 render = [
   "playwright>=1.48",
 ]
+# Frozen worker sidecar for native Tauri bundles.
+build = [
+  "pyinstaller>=6.11",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

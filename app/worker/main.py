@@ -788,7 +788,11 @@ async def main() -> int:
             # wait a full interval rather than crawl again immediately.
             method = envelope.get("method")
             if isinstance(method, str) and _response_succeeded(response):
-                if method in SCHEDULER_RESYNC_METHODS:
+                if method == "sources.add":
+                    # The add-source UI runs the first crawl itself. Scheduling
+                    # an immediate one too raced it for the same company rows.
+                    await wiring.sync_scheduler(run_immediately=False)
+                elif method in SCHEDULER_RESYNC_METHODS:
                     await wiring.sync_scheduler()
                 elif method == "settings.update":
                     # The pass loop, its budgets and the tier intervals all read

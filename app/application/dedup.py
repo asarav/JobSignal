@@ -23,6 +23,7 @@ from app.domain.models.job import NormalizedJob
 from app.domain.services.fingerprints import (
     ats_key,
     desc_exact_hash,
+    from_signed64,
     location_key,
     minhash_signature,
     simhash64,
@@ -104,7 +105,7 @@ def fingerprint_from_row(row: Mapping[str, Any]) -> JobFingerprintSet:
         title_family=_optional_str(row.get("title_family")),
         location_key=_optional_str(row.get("location_key")),
         desc_exact_hash=str(row.get("desc_exact_hash") or ""),
-        desc_simhash64=_optional_int(row.get("desc_simhash64")),
+        desc_simhash64=from_signed64(_optional_int(row.get("desc_simhash64"))),
         desc_minhash=_minhash(row.get("desc_minhash")),
         department=_optional_str(row.get("department")),
         salary_min=salary_min,

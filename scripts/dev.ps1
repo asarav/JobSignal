@@ -13,7 +13,7 @@ if (Test-Path $cargoBin) {
     $env:PATH = "$cargoBin;$env:PATH"
 }
 
-$devDbDir = Join-Path $env:APPDATA "com.jobsignal.app\worker"
+$devDbDir = Join-Path $env:APPDATA "com.jobsignal.desktop\worker"
 $devDb = Join-Path $devDbDir "lodestar.sqlite"
 $devDbHash = "$devDb.schema-hash"
 $migrationsDir = Join-Path $PSScriptRoot "..\app\infrastructure\persistence\sqlite\migrations"

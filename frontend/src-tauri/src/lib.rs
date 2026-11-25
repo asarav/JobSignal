@@ -444,7 +444,82 @@ pub fn repo_root() -> Option<PathBuf> {
     root.join("app").is_dir().then_some(root)
 }
 
+#[cfg(windows)]
+const SIDECAR_NAME: &str = "lodestar-worker.exe";
+#[cfg(not(windows))]
+const SIDECAR_NAME: &str = "lodestar-worker";
+
+/// Find the sidecar that Tauri copied next to the application binary.
+///
+/// The bundler normally strips the target triple, but accepting a suffixed
+/// name as well keeps release builds from depending on that detail.
+fn find_sidecar_in(directory: &Path) -> Option<PathBuf> {
+    let exact = directory.join(SIDECAR_NAME);
+    if exact.is_file() {
+        return Some(exact);
+    }
+    let mut matches: Vec<PathBuf> = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("lodestar-worker-"))
+        })
+        .collect();
+    matches.sort();
+    matches.into_iter().next()
+}
+
+fn sidecar_path() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    find_sidecar_in(executable.parent()?)
+}
+
+fn spawn_sidecar(path: &Path, data_dir: &Path) -> std::io::Result<Child> {
+    log::info!(
+        "spawning bundled worker: {} --data-dir {} (cwd {})",
+        path.display(),
+        data_dir.display(),
+        data_dir.display()
+    );
+    Command::new(path)
+        .arg("--data-dir")
+        .arg(data_dir)
+        .current_dir(data_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+}
+
 fn spawn_worker(data_dir: &Path) -> std::io::Result<Child> {
+    // `tauri dev` may copy the external binary next to the debug executable.
+    // Prefer live Python there so worker edits take effect; release bundles
+    // always prefer the frozen sidecar and never fall back to the host PATH.
+    let force_sidecar = std::env::var("LODESTAR_USE_SIDECAR").is_ok_and(|value| value == "1");
+    if let Some(sidecar) = sidecar_path() {
+        if !cfg!(debug_assertions) || force_sidecar {
+            return spawn_sidecar(&sidecar, data_dir);
+        }
+    }
+
+    // Development and explicitly configured source runs use the interpreter.
+    // A release bundle without its sidecar must fail loudly instead of
+    // silently finding an unrelated Python installation on the user's PATH.
+    let explicit = std::env::var_os("LODESTAR_PYTHON").is_some()
+        || std::env::var_os("LODESTAR_REPO_ROOT").is_some();
+    if !cfg!(debug_assertions) && !explicit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "bundled worker lodestar-worker is missing next to the application binary",
+        ));
+    }
+
     let python = std::env::var("LODESTAR_PYTHON").unwrap_or_else(|_| "python".to_string());
     let mut command = Command::new(&python);
     command
@@ -469,13 +544,13 @@ fn spawn_worker(data_dir: &Path) -> std::io::Result<Child> {
         }
         command.current_dir(&root);
         log::info!(
-            "spawning worker: {python} -m app.worker.main --data-dir {} (cwd {})",
+            "spawning source worker: {python} -m app.worker.main --data-dir {} (cwd {})",
             data_dir.display(),
             root.display()
         );
     } else {
         log::info!(
-            "spawning worker: {python} -m app.worker.main --data-dir {}",
+            "spawning source worker: {python} -m app.worker.main --data-dir {}",
             data_dir.display()
         );
     }
@@ -583,6 +658,45 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_the_worker_sidecar_next_to_the_binary() {
+        let root = std::env::temp_dir().join(format!(
+            "lodestar-sidecar-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let sidecar = root.join("lodestar-worker-x86_64-test");
+        std::fs::write(&sidecar, b"test").unwrap();
+
+        assert_eq!(find_sidecar_in(&root), Some(sidecar));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prefers_the_exact_bundled_worker_name_over_a_triple_suffixed_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "lodestar-sidecar-exact-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let exact = root.join(SIDECAR_NAME);
+        std::fs::write(&exact, b"exact").unwrap();
+        std::fs::write(root.join("lodestar-worker-x86_64-test"), b"suffixed").unwrap();
+
+        assert_eq!(find_sidecar_in(&root), Some(exact));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn external_urls_are_limited_to_http_and_https() {

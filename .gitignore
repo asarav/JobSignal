@@ -48,3 +48,9 @@ Thumbs.db
 
 # Local scratch: manual probe screenshots and throwaway test data
 lodestar-test-data/
+
+# Cross-platform dev launcher data (scripts/run.py)
+.lodestar-data/
+
+# PyInstaller worker sidecars generated for Tauri (scripts/build_worker.py)
+frontend/src-tauri/binaries/

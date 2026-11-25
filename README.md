@@ -552,7 +552,7 @@ frontend/
   src/                 # React 19 + TypeScript routes, stores, services, copy
   src-tauri/           # Tauri 2 shell + Python supervisor + generated allowlist
 schemas/ipc/           # generated JSON Schemas; methods.json is the allowlist
-scripts/               # gen_schemas.py, gen-ts-types.mjs, dev.ps1
+scripts/               # run.py, gen_schemas.py, gen-ts-types.mjs, dev.ps1
 tests/
   unit/ contract/ integration/ safety/ swapability/ support/
 docs/adr/              # architecture decision records
@@ -606,8 +606,9 @@ supervises, sizes, and forwards envelopes.
 - Rust stable (`rustup`) — after installing, add `%USERPROFILE%\.cargo\bin` to
   your `PATH` (restart the terminal) so `cargo` is discoverable by npm/Tauri.
 - Tauri 2 system dependencies (Linux: `libwebkit2gtk-4.1-dev`,
-  `libappindicator3-dev`, `librsvg2-dev`, `patchelf`; macOS: Xcode command line
-  tools; Windows: WebView2, preinstalled on current Windows)
+  `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
+  `patchelf`; macOS: Xcode command line tools; Windows: WebView2, preinstalled
+  on current Windows)
 - No external SQLite install is required (`aiosqlite` bundles nothing extra and
   uses the platform SQLite).
 
@@ -621,6 +622,69 @@ python -m pip install -e ".[dev]"
 cd frontend
 npm ci
 ```
+
+### Run on Windows, Linux, or macOS
+
+`scripts/run.py` is the portable entry point. It finds Python, Node, npm, and
+Cargo; installs the worker into `.venv` only when the current interpreter is
+missing dependencies; installs frontend packages only when `node_modules` is
+missing; and launches the Tauri shell with the right interpreter and repository
+root. Dev data lives in `.lodestar-data/`, so the same commands work on every
+OS.
+
+```powershell
+# Windows PowerShell
+.\run.ps1
+
+# Windows CMD
+run.cmd
+```
+
+```bash
+# macOS / Linux
+chmod +x run.sh   # once
+./run.sh
+```
+
+Or call the launcher directly anywhere:
+
+```bash
+python scripts/run.py desktop
+```
+
+The modes are:
+
+| Mode | What it does | Requires |
+|---|---|---|
+| `desktop` | Launch the Tauri desktop app and its Python worker | Python 3.12+, Node 18+, Rust |
+| `web` | Launch the browser UI in sample-data preview mode at `http://127.0.0.1:5173` | Node 18+ |
+| `build` | Freeze the worker and build the native Tauri bundle for the **current** OS | Python 3.12+, Node 18+, Rust + platform Tauri deps |
+| `doctor` | Report the detected toolchain and missing prerequisites | Python only |
+
+Useful options: `--no-install`, `--reset-data`, `--data-dir PATH`, and
+`--dry-run`. For example, `python scripts/run.py web --no-install` starts the
+preview without touching Python, and `python scripts/run.py doctor` diagnoses a
+fresh machine.
+
+Native bundles cannot be cross-compiled: run `build` on Windows, Linux, and
+macOS separately to get that platform's installer. To build every supported
+target from one place, run the **Desktop builds** GitHub Actions workflow; it
+uploads one installer artifact per target. macOS is built per architecture
+(Apple silicon and Intel), not as a universal bundle, because each runner
+freezes its own worker sidecar.
+
+The workflow only runs when dispatched manually. To publish the built installers
+as a GitHub Release, enable `publish_release`, provide a `release_tag` such as
+`v0.1.0`, and leave `draft_release` enabled until you have inspected the
+assets. No push or tag triggers this workflow.
+
+Build mode first freezes the worker with PyInstaller into
+`frontend/src-tauri/binaries/lodestar-worker-<target-triple>` and then lets
+Tauri bundle it as an `externalBin` sidecar. The installed app launches that
+sidecar directly, so the target machine does **not** need a project checkout,
+Python, or a virtualenv. Linux additionally needs the Tauri system libraries
+listed in the repository CI workflow; macOS needs Xcode Command Line Tools;
+Windows uses the preinstalled WebView2 runtime.
 
 ### Run the worker directly
 
@@ -636,21 +700,23 @@ The database is `<data-dir>/lodestar.sqlite`; rotating logs live in
 
 ### Run the desktop app
 
-```powershell
-# Windows: make sure the Rust toolchain is on PATH first
-$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-cd frontend
-npm run tauri dev
+The portable launcher above is recommended on every OS:
+
+```bash
+python scripts/run.py desktop
 ```
 
-Or use the helper script:
+On Windows, the older helper remains available. It resets the per-user dev
+database when migrations change:
 
 ```powershell
 .\scripts\dev.ps1
 ```
 
-The Tauri supervisor spawns `python -m app.worker.main --data-dir
-<app_data_dir>/worker`. In a dev build it also adds the repository root to
+Development builds spawn `python -m app.worker.main --data-dir
+<app_data_dir>/worker`; release builds spawn the bundled `lodestar-worker`
+sidecar from the same directory as the application binary. In a dev build Tauri
+also adds the repository root to
 `PYTHONPATH` and runs the worker from there, so no `pip install` is required to
 try the desktop app. Override with environment variables when needed:
 
@@ -671,14 +737,14 @@ and the worker refuses to start, crash-looping until the restart budget is
 exhausted.
 
 The dev script `.\scripts\dev.ps1` handles this automatically: it removes the
-ephemeral dev database at `%APPDATA%\com.jobsignal.app\worker\lodestar.sqlite`
+ephemeral dev database at `%APPDATA%\com.jobsignal.desktop\worker\lodestar.sqlite`
 before launching Tauri, so the worker applies the current schema and emits
 `worker.ready`. This only touches local dev data; never production data.
 
 To reset the database manually:
 
 ```powershell
-Remove-Item "$env:APPDATA\com.jobsignal.app\worker\lodestar.sqlite*" -ErrorAction SilentlyContinue
+Remove-Item "$env:APPDATA\com.jobsignal.desktop\worker\lodestar.sqlite*" -ErrorAction SilentlyContinue
 ```
 
 

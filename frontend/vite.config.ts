@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    host: true,
+    host: "127.0.0.1",
     watch: {
       // Cargo rewrites `src-tauri/target` while Tauri compiles; watching it
       // crashes Vite with EBUSY on Windows. Match both separator styles.

@@ -14,6 +14,7 @@ from app.domain.models.enums import TaskStatus
 from app.domain.models.identity import JobFingerprintSet
 from app.domain.models.source import SourceConfig
 from app.domain.models.tasks import BackgroundTask
+from app.domain.services.fingerprints import to_signed64
 from app.domain.services.hard_filters import apply_hard_filters
 from app.domain.services.normalizer import normalize_title
 from app.infrastructure.persistence.sqlite.job_filters import compile_hard_filters
@@ -286,17 +287,35 @@ class SqliteCompanyRepository:
         aliases = fields.get("aliases", [])
         notes = fields.get("notes")
         website = fields.get("website")
-        cur = await self._conn.execute("SELECT id FROM companies WHERE id = ?", (company_id,))
-        if await cur.fetchone() is None:
-            await self._conn.execute(
-                "INSERT INTO companies(id, canonical_name, normalized_name, domains_json, ats_tenants_json, aliases_json, notes, website, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (company_id, canonical_name, normalized, json.dumps(list(domains) if isinstance(domains, (list, tuple)) else []), json.dumps(list(ats_tenants) if isinstance(ats_tenants, (list, tuple)) else []), json.dumps(list(aliases) if isinstance(aliases, (list, tuple)) else []), notes, website, self._ts()),
-            )
-        else:
-            await self._conn.execute(
-                "UPDATE companies SET canonical_name=?, normalized_name=?, domains_json=?, ats_tenants_json=?, aliases_json=?, notes=?, website=? WHERE id=?",
-                (canonical_name, normalized, json.dumps(list(domains) if isinstance(domains, (list, tuple)) else []), json.dumps(list(ats_tenants) if isinstance(ats_tenants, (list, tuple)) else []), json.dumps(list(aliases) if isinstance(aliases, (list, tuple)) else []), notes, website, company_id),
-            )
+        # A crawl can race the scheduler for the same company. Do the upsert
+        # in one statement so the loser updates instead of failing UNIQUE.
+        await self._conn.execute(
+            """
+            INSERT INTO companies(
+              id, canonical_name, normalized_name, domains_json,
+              ats_tenants_json, aliases_json, notes, website, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+              canonical_name = excluded.canonical_name,
+              normalized_name = excluded.normalized_name,
+              domains_json = excluded.domains_json,
+              ats_tenants_json = excluded.ats_tenants_json,
+              aliases_json = excluded.aliases_json,
+              notes = excluded.notes,
+              website = excluded.website
+            """,
+            (
+                company_id,
+                canonical_name,
+                normalized,
+                json.dumps(list(domains) if isinstance(domains, (list, tuple)) else []),
+                json.dumps(list(ats_tenants) if isinstance(ats_tenants, (list, tuple)) else []),
+                json.dumps(list(aliases) if isinstance(aliases, (list, tuple)) else []),
+                notes,
+                website,
+                self._ts(),
+            ),
+        )
 
     async def get(self, company_id):
         self._conn.row_factory = aiosqlite.Row
@@ -1146,7 +1165,7 @@ class SqliteDedupRepository:
                 job_id,
                 snapshot_id,
                 fingerprint.desc_exact_hash,
-                fingerprint.desc_simhash64,
+                to_signed64(fingerprint.desc_simhash64),
                 json.dumps(list(fingerprint.desc_minhash)).encode("utf-8"),
                 fingerprint.title_key,
                 fingerprint.location_key,

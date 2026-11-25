@@ -236,10 +236,27 @@ def _as_int(value: Any) -> int | None:
 def parse_posted_at(payload: Mapping[str, Any] | None) -> datetime | None:
     if not payload:
         return None
-    for key in ("posted_at", "postedAt", "updated_at", "updatedAt", "publishedAt"):
+    for key in (
+        "posted_at",
+        "postedAt",
+        "created_at",
+        "createdAt",
+        "updated_at",
+        "updatedAt",
+        "publishedAt",
+    ):
         value = payload.get(key)
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(float(value), tz=UTC)
+            timestamp = float(value)
+            # ATS feeds differ: Lever sends epoch milliseconds, while most
+            # others send seconds. Treat values beyond year-5138 in seconds
+            # as milliseconds instead of letting Windows raise OSError.
+            if abs(timestamp) >= 100_000_000_000:
+                timestamp /= 1000
+            try:
+                return datetime.fromtimestamp(timestamp, tz=UTC)
+            except (OSError, OverflowError, ValueError):
+                continue
         if isinstance(value, str) and value:
             try:
                 return datetime.fromisoformat(value.replace("Z", "+00:00"))

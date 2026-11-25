@@ -111,6 +111,14 @@ def test_normalize_job_extracts_supported_fields():
     assert job.provenance[0].source_id == "s1"
 
 
+def test_normalize_job_accepts_epoch_millisecond_posted_at():
+    # Lever's createdAt is epoch milliseconds. Feeding it to fromtimestamp as
+    # seconds raises OSError on Windows instead of producing a year-57000 date.
+    payload = {"createdAt": 1767225600000}
+    job = normalize_job(_raw(payload), _source(), company_name="acme", now=NOW)
+    assert job.posted_at == datetime(2026, 1, 1, tzinfo=UTC)
+
+
 def test_workplace_inferred_from_merged_locations_field():
     # Extraction merges fields into a new payload, so the normalizer sees the
     # plural ``locations`` rather than the connector's singular ``location``.

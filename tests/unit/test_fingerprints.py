@@ -5,12 +5,14 @@ from app.domain.services.fingerprints import (
     ats_key,
     canonical_url,
     desc_exact_hash,
+    from_signed64,
     hamming,
     jaccard_est,
     location_key,
     minhash_signature,
     simhash64,
     title_key,
+    to_signed64,
     url_key,
 )
 
@@ -45,6 +47,14 @@ def test_simhash_hamming():
     a = simhash64("python developer with django experience")
     b = simhash64("python developer with flask experience")
     assert hamming(a, b) < 64
+
+
+def test_signed64_round_trip_for_sqlite():
+    unsigned = (1 << 64) - 12345
+    stored = to_signed64(unsigned)
+    assert stored is not None and stored < 0
+    assert from_signed64(stored) == unsigned
+    assert to_signed64(42) == 42
 
 
 def test_minhash_jaccard():

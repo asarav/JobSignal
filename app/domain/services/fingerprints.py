@@ -88,6 +88,20 @@ def simhash64(text: str, k: int = 3) -> int:
     return result
 
 
+def to_signed64(value: int | None) -> int | None:
+    """Map an unsigned 64-bit hash into SQLite's signed INTEGER range."""
+    if value is None:
+        return None
+    return value - (1 << 64) if value >= (1 << 63) else value
+
+
+def from_signed64(value: int | None) -> int | None:
+    """Restore the unsigned 64-bit form used by fingerprint comparisons."""
+    if value is None:
+        return None
+    return value + (1 << 64) if value < 0 else value
+
+
 def hamming(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
 
