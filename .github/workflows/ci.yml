@@ -94,6 +94,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+    # The Rust job compiles the Tauri crate without the PyInstaller worker
+    # sidecar that `bundle.externalBin` points at; that sidecar is only built by
+    # the Desktop builds workflow. tauri-build validates bundle resources at
+    # compile time, so drop externalBin for cargo test and clippy here.
+    env:
+      TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
     steps:
       - uses: actions/checkout@v4
 
