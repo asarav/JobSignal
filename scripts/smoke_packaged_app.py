@@ -48,9 +48,18 @@ def schema_version(database: Path) -> int:
 
 
 def sidecar_beside(executable: Path) -> Path | None:
-    for candidate in executable.parent.iterdir():
-        if candidate.is_file() and candidate.name.startswith("lodestar-worker"):
-            return candidate
+    """The worker shipped with the app, beside the binary or in an AppImage.
+
+    An AppImage launcher (``AppRun``) sits at the bundle root while both it and
+    the binaries it launches live in ``usr/bin``.
+    """
+    directories = [executable.parent, executable.parent / "usr" / "bin"]
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for candidate in directory.iterdir():
+            if candidate.is_file() and candidate.name.startswith("lodestar-worker"):
+                return candidate
     return None
 
 
