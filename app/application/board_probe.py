@@ -55,6 +55,9 @@ ZERO_CONFIDENT: frozenset[str] = frozenset(
         "ats.oracle_recruiting",
         "ats.paylocity",
         "ats.jazzhr",
+        "ats.rippling",
+        "ats.personio",
+        "ats.breezy",
     }
 )
 
@@ -127,6 +130,9 @@ class BoardProbe:
             "ats.jazzhr": self._jazzhr,
             "ats.icims": self._icims,
             "ats.taleo": self._taleo,
+            "ats.rippling": self._rippling,
+            "ats.personio": self._personio,
+            "ats.breezy": self._breezy,
         }.get(connector)
         if handler is None:
             return ProbeResult("unknown", detail="no probe for this connector")
@@ -312,7 +318,53 @@ class BoardProbe:
             return self._from_count(len(rows), "ats.oracle_recruiting")
         return ProbeResult("unknown", detail="finder has no count")
 
+    async def _rippling(self, target: ProbeTarget) -> ProbeResult:
+        slug = target.tenant_key or _first_segment(target.url)
+        if not slug:
+            return ProbeResult("unknown", detail="no slug")
+        return await self._json_count(
+            f"https://ats.rippling.com/api/v2/board/{slug}/jobs",
+            lambda data: (
+                len(data.get("items", []))
+                if isinstance(data, dict) and isinstance(data.get("items"), list)
+                else None
+            ),
+        )
+
     # ------------------------------------------------------ server-rendered pages
+
+    async def _personio(self, target: ProbeTarget) -> ProbeResult:
+        host = _host(target.url)
+        response = await self._get(f"https://{host}/xml")
+        if response is None:
+            return ProbeResult("unknown", detail="no answer")
+        if response.status in (404, 410):
+            return ProbeResult("dead", detail="board gone")
+        if response.status != 200:
+            return ProbeResult("unknown", detail=f"http {response.status}")
+        if _host(response.url) != host:
+            return ProbeResult("dead", detail="redirected off the tenant host")
+        body = response.body
+        if b"workzag-jobs" not in body:
+            # A 200 that is not the feed is an error page, not an empty board.
+            return ProbeResult("unknown", detail="listing is not the XML feed")
+        return self._from_count(body.count(b"<position>"), "ats.personio")
+
+    async def _breezy(self, target: ProbeTarget) -> ProbeResult:
+        host = _host(target.url)
+        response = await self._get(f"https://{host}/json")
+        if response is None:
+            return ProbeResult("unknown", detail="no answer")
+        if response.status in (404, 410):
+            return ProbeResult("dead", detail="board gone")
+        if response.status != 200:
+            return ProbeResult("unknown", detail=f"http {response.status}")
+        if _host(response.url) != host:
+            return ProbeResult("dead", detail="redirected off the tenant host")
+        data = _json(response.body)
+        if not isinstance(data, list):
+            return ProbeResult("unknown", detail="listing shape changed")
+        return self._from_count(len(data), "ats.breezy")
 
     async def _paylocity(self, target: ProbeTarget) -> ProbeResult:
         response = await self._get(target.url)
@@ -456,6 +508,8 @@ def _connector_of(url: str) -> str:
         return "ats.smartrecruiters"
     if "workable" in host:
         return "ats.workable"
+    if host == "ats.rippling.com":
+        return "ats.rippling"
     return ""
 
 

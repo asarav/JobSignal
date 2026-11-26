@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from app.plugins.ats.amazon import AmazonConnector
 from app.plugins.ats.ashby import AshbyConnector
 from app.plugins.ats.bamboohr import BambooHrConnector
+from app.plugins.ats.breezy import BreezyConnector
 from app.plugins.ats.career_site import CareerSiteConnector
 from app.plugins.ats.eightfold import EightfoldConnector
 from app.plugins.ats.greenhouse import GreenhouseConnector
@@ -20,7 +21,9 @@ from app.plugins.ats.jazzhr import JazzHrConnector
 from app.plugins.ats.lever import LeverConnector
 from app.plugins.ats.oracle_recruiting import OracleRecruitingConnector
 from app.plugins.ats.paylocity import PaylocityConnector
+from app.plugins.ats.personio import PersonioConnector
 from app.plugins.ats.phenom import PhenomConnector
+from app.plugins.ats.rippling import RipplingConnector
 from app.plugins.ats.smartrecruiters import SmartRecruitersConnector
 from app.plugins.ats.taleo import TaleoConnector
 from app.plugins.ats.ultipro import UltiproConnector
@@ -42,11 +45,14 @@ CONNECTOR_CLASSES = (
     UltiproConnector,
     WorkableConnector,
     BambooHrConnector,
+    BreezyConnector,
     JazzHrConnector,
     PaylocityConnector,
+    PersonioConnector,
     OracleRecruitingConnector,
     EightfoldConnector,
     PhenomConnector,
+    RipplingConnector,
     TaleoConnector,
     CareerSiteConnector,
 )
@@ -61,6 +67,9 @@ DESCRIPTIONS = {
     "ats.ultipro": "UKG Pro / UltiPro job boards (recruiting.ultipro.com).",
     "ats.workable": "Workable job boards (apply.workable.com).",
     "ats.bamboohr": "BambooHR careers sites ({company}.bamboohr.com).",
+    "ats.breezy": "Breezy HR boards ({tenant}.breezy.hr).",
+    "ats.personio": "Personio career sites ({tenant}.jobs.personio.de and .com).",
+    "ats.rippling": "Rippling job boards (ats.rippling.com).",
     "ats.oracle_recruiting": "Oracle Recruiting Cloud career sites (oraclecloud.com).",
     "ats.eightfold": "Eightfold AI career sites (eightfold.ai and custom hosts).",
     "ats.phenom": "Phenom widget career sites, configurable per tenant.",

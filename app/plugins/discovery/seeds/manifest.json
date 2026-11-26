@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated_at": "2026-11-26T18:40:29Z",
+  "generated_at": "2026-11-26T21:26:10Z",
   "ordering": "hiring_first",
   "fields": {
     "u": "board url",
@@ -15,8 +15,8 @@
     "ats.workday"
   ],
   "totals": {
-    "boards": 54655,
-    "hiring": 28862
+    "boards": 58870,
+    "hiring": 31892
   },
   "connectors": {
     "ats.bamboohr": {
@@ -75,12 +75,33 @@
       "with_postings": 1084,
       "sha256": "c385ea21226b9c4f8d86398053a9cea27f90ada3e8f2c92a959e7a8a4d5b34d0"
     },
+    "ats.personio": {
+      "file": "boards/ats-personio.ndjson",
+      "boards": 1234,
+      "hiring": 1083,
+      "with_postings": 1083,
+      "sha256": "ae224bc0bed88acb789248adfcc36a6b15a6c154d7bfcf685065bc9f0683fd32"
+    },
     "ats.oracle_recruiting": {
       "file": "boards/ats-oracle_recruiting.ndjson",
       "boards": 1192,
       "hiring": 1072,
       "with_postings": 1072,
       "sha256": "9a3bd8dbb31d675849a406ddaf51ee1b45b92093cd26d50664eb1ff8fa80c704"
+    },
+    "ats.breezy": {
+      "file": "boards/ats-breezy.ndjson",
+      "boards": 1821,
+      "hiring": 1034,
+      "with_postings": 1034,
+      "sha256": "01119efe65d9ebf71413b6c165dd9778b3369b745a9018a63fa4505be5118900"
+    },
+    "ats.rippling": {
+      "file": "boards/ats-rippling.ndjson",
+      "boards": 1160,
+      "hiring": 913,
+      "with_postings": 913,
+      "sha256": "4aeb99808dd023e1d62ba4d254ebc6ce473707905daefeb07709cca99a22cea2"
     },
     "ats.workable": {
       "file": "boards/ats-workable.ndjson",

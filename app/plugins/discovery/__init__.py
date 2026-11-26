@@ -119,8 +119,8 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
             network_hosts=("web.archive.org",),
             description=(
                 "Enumerates subdomain and path-addressed ATS tenants (Workday, "
-                "iCIMS, BambooHR, Eightfold, JazzHR, Taleo, UKG, Workable, "
-                "Paylocity) from a public web index."
+                "iCIMS, BambooHR, Eightfold, Personio, Breezy HR, JazzHR, Taleo, "
+                "UKG, Workable, Paylocity) from a public web index."
             ),
         ),
         DomainIndexProvider(),

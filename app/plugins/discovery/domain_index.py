@@ -77,6 +77,18 @@ DENSE_FILTERS: dict[str, tuple[str, ...]] = {
         r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
     ),
     "applytojob.com": ("!original:.*/apply/jobs/details/.*",),
+    "jobs.personio.de": (
+        "!original:.*/job/[0-9]+.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
+    "jobs.personio.com": (
+        "!original:.*/job/[0-9]+.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
+    "breezy.hr": (
+        r"!original:.*\.breezy\.hr/p/.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
     "taleo.net": (
         "!original:.*/jobdetail.ftl.*",
         r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
@@ -98,6 +110,10 @@ _ICIMS_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.icims\.com$")
 _BAMBOO_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.bamboohr\.com$")
 _EIGHTFOLD_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.eightfold\.ai$")
 _JAZZHR_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.applytojob\.com$")
+_BREEZY_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.breezy\.hr$")
+_PERSONIO_HOST_RE = re.compile(
+    r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.jobs\.personio\.(?:de|com)$"
+)
 _TALEO_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.taleo\.net$")
 _TALEO_SECTION_RE = re.compile(r"^/careersection/(?P<section>[A-Za-z0-9_]+)(?:/|$)", re.IGNORECASE)
 _PAYLOCITY_PATH_RE = re.compile(
@@ -145,6 +161,9 @@ DEFAULT_TARGETS: tuple[IndexTarget, ...] = (
     IndexTarget("bamboohr.com", "ats.bamboohr", "domain"),
     IndexTarget("eightfold.ai", "ats.eightfold", "domain"),
     IndexTarget("applytojob.com", "ats.jazzhr", "domain"),
+    IndexTarget("jobs.personio.de", "ats.personio", "domain"),
+    IndexTarget("jobs.personio.com", "ats.personio", "domain"),
+    IndexTarget("breezy.hr", "ats.breezy", "domain"),
     IndexTarget("taleo.net", "ats.taleo", "domain"),
     IndexTarget("recruiting.ultipro.com", "ats.ultipro", "prefix"),
     IndexTarget("apply.workable.com", "ats.workable", "prefix"),
@@ -437,6 +456,20 @@ def _candidate(connector_id: str, url: str) -> Candidate | None:
             host,
             _JAZZHR_HOST_RE,
             lambda board_host: f"https://{board_host}",
+        )
+    if connector_id == "ats.breezy":
+        return _subdomain_board(
+            connector_id,
+            host,
+            _BREEZY_HOST_RE,
+            lambda board_host: f"https://{board_host}",
+        )
+    if connector_id == "ats.personio":
+        return _subdomain_board(
+            connector_id,
+            host,
+            _PERSONIO_HOST_RE,
+            lambda board_host: f"https://{board_host}/",
         )
     if connector_id == "ats.taleo":
         return _taleo(host, parts.path)

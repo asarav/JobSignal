@@ -67,7 +67,13 @@ DEFAULT_ATS_HOSTS: tuple[tuple[str, str], ...] = (
     ("jobs.ashbyhq.com", "ats.ashby"),
     ("jobs.lever.co", "ats.lever"),
     ("jobs.smartrecruiters.com", "ats.smartrecruiters"),
+    ("ats.rippling.com", "ats.rippling"),
 )
+
+#: Hosts whose board URL carries a path suffix after the tenant slug.
+BOARD_PATH_SUFFIX: dict[str, str] = {
+    "ats.rippling.com": "/jobs",
+}
 
 #: How many index queries run concurrently inside one pass. The archive
 #: gateways throttle bursts, so this stays low and slice starts are staggered.
@@ -235,7 +241,7 @@ class WebIndexProvider:
                 seen.add(key)
                 yield DiscoveredSource(
                     kind="ats",
-                    url=f"https://{host}/{tenant}",
+                    url=f"https://{host}/{tenant}{BOARD_PATH_SUFFIX.get(host, '')}",
                     company_hint=tenant.replace("-", " ").title(),
                     ats_hint=connector_id,
                     confidence=0.6,

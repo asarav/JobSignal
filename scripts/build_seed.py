@@ -286,6 +286,7 @@ API_TEMPLATES: dict[str, str] = {
         "https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=1"
     ),
     "ats.workable": "https://apply.workable.com/api/v1/widget/accounts/{tenant}",
+    "ats.rippling": "https://ats.rippling.com/api/v2/board/{tenant}/jobs",
 }
 
 #: Fixed hosts the seed builder walks.  Workable is path-addressed like the
@@ -294,6 +295,7 @@ API_TEMPLATES: dict[str, str] = {
 SEED_ATS_HOSTS: tuple[tuple[str, str], ...] = (
     *DEFAULT_ATS_HOSTS,
     ("apply.workable.com", "ats.workable"),
+    ("ats.rippling.com", "ats.rippling"),
 )
 
 
@@ -402,6 +404,29 @@ SUBDOMAIN_ATS: dict[str, _SubdomainCfg] = {
             # www is iCIMS' own marketing site, not a customer board.
             "!original:.*://www[0-9]*\\.icims\\.com.*",
             "!original:.*/jobs/.*",
+        ),
+    },
+    "ats.personio": {
+        # Personio splits its career sites over two domains (.de and .com); a
+        # tenant lives on exactly one, so both are walked.
+        "domain": "jobs.personio.de",
+        "roots": ("jobs.personio.de", "jobs.personio.com"),
+        "filters": (
+            # A board is the tenant root; posting pages (/job/{id}) and the XML
+            # feed are rows that spend a chunk without naming a new employer.
+            "!original:.*/job/[0-9]+.*",
+            r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+            r"!original:.*\.well-known.*",
+        ),
+    },
+    "ats.breezy": {
+        "domain": "breezy.hr",
+        "roots": ("breezy.hr",),
+        "filters": (
+            # /p/{id} is a posting and /json is the feed; neither is a board.
+            r"!original:.*\.breezy\.hr/p/.*",
+            r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+            r"!original:.*\.well-known.*",
         ),
     },
     "ats.jazzhr": {
@@ -570,7 +595,9 @@ def _host_for(connector_id: str) -> str | None:
 
 def _board_url(connector_id: str, tenant: str) -> str:
     host = _host_for(connector_id) or SEED_ATS_HOSTS[0][0]
-    return f"https://{host}/{tenant}"
+    # Rippling's board is the slug plus ``/jobs``; the bare slug is not a page.
+    suffix = "/jobs" if connector_id == "ats.rippling" else ""
+    return f"https://{host}/{tenant}{suffix}"
 
 
 def _count_jobs(connector_id: str, data: object) -> int:
@@ -597,6 +624,15 @@ def _count_jobs(connector_id: str, data: object) -> int:
         return int(data.get("totalFound", 0)) if isinstance(data, dict) else 0
     if connector_id == "ats.workable":
         return len(data.get("jobs", [])) if isinstance(data, dict) else 0
+    if connector_id == "ats.rippling":
+        # One page is 20 rows, so the total is the count that ranks a board.
+        if not isinstance(data, dict):
+            return 0
+        total = data.get("totalItems")
+        if isinstance(total, int):
+            return total
+        items = data.get("items")
+        return len(items) if isinstance(items, list) else 0
     return 0
 
 
@@ -998,9 +1034,17 @@ def _subdomain_board(connector_id: str, url: str) -> Board | None:
     # host fails the ``.{domain}`` suffix test and silently loses the tenant.
     host = MANGLED_HOST_RE.sub("", (parts.hostname or "").lower())
     cfg = SUBDOMAIN_ATS[connector_id]
-    suffix = "." + cfg["domain"]
-    if not host.endswith(suffix):
+    domain = next(
+        (
+            candidate
+            for candidate in (cfg["domain"], *SUBDOMAIN_ALIAS_DOMAINS.get(connector_id, ()))
+            if host.endswith("." + candidate)
+        ),
+        None,
+    )
+    if domain is None:
         return None
+    suffix = "." + domain
     sub = host[: -len(suffix)]
     labels = sub.split(".")
     if connector_id == "ats.workday":
@@ -1073,6 +1117,18 @@ def _subdomain_board(connector_id: str, url: str) -> Board | None:
             f"https://{host}/careersection/{section}/jobsearch.ftl?lang=en",
             tenant_key=f"{sub}|{section.lower()}",
         )
+    if connector_id == "ats.personio":
+        if len(labels) != 1 or "." in sub or sub in RESERVED_SUBDOMAINS:
+            return None
+        if not TENANT_RE.match(sub):
+            return None
+        return Board(connector_id, sub, f"https://{host}/", tenant_key=sub)
+    if connector_id == "ats.breezy":
+        if len(labels) != 1 or "." in sub or sub in RESERVED_SUBDOMAINS:
+            return None
+        if not TENANT_RE.match(sub):
+            return None
+        return Board(connector_id, sub, f"https://{host}", tenant_key=sub)
     return None
 
 
@@ -1338,6 +1394,13 @@ def _oracle_site(board: Board) -> str | None:
     return match.group("site") if match else None
 
 
+#: Extra career-site domains a subdomain ATS publishes the same board shape
+#: on.  Personio tenants are split across ``.jobs.personio.de`` and
+#: ``.jobs.personio.com``; the suffix parser has to accept either.
+SUBDOMAIN_ALIAS_DOMAINS: dict[str, tuple[str, ...]] = {
+    "ats.personio": ("jobs.personio.com",),
+}
+
 #: Path-addressed ATSs: one host, the board's identity inside the path.
 PATH_BOARDS: dict[str, _PathCfg] = {
     "ats.ultipro": {
@@ -1356,8 +1419,41 @@ PAYLOCITY_SLICES = tuple(
     for initial in "0123456789abcdef"
 )
 
+RIPPLING_PATH_RE = re.compile(
+    r"^/(?P<tenant>[a-z0-9][a-z0-9-]{1,62})(?:/|$)", re.IGNORECASE
+)
+#: One prefix query per slug initial: Rippling boards share one host and the
+#: slug is the first path segment, so a bucket query names a whole alphabet.
+RIPPLING_SLICES = tuple(f"ats.rippling.com/{initial}" for initial in BUCKETS)
+
+
+def _rippling_board(url: str) -> Board | None:
+    """A Rippling board from one indexed URL, or ``None`` for site chrome.
+
+    The slug is the first path segment and the same slug is indexed under job
+    pages (``/{slug}/jobs/{id}``) and the board itself, so both collapse onto
+    the board URL.
+    """
+    parts = urlsplit(url)
+    if parts.netloc.lower() != "ats.rippling.com":
+        return None
+    match = RIPPLING_PATH_RE.match(parts.path)
+    if match is None:
+        return None
+    tenant = match.group("tenant").lower()
+    if tenant in RESERVED_SUBDOMAINS or tenant in {"api", "jobs", "job", "careers"}:
+        return None
+    return Board(
+        "ats.rippling",
+        tenant,
+        f"https://ats.rippling.com/{tenant}/jobs",
+        tenant_key=tenant,
+    )
+
+
 PREFIX_BOARDS: dict[str, _PrefixCfg] = {
     "ats.paylocity": {"slices": PAYLOCITY_SLICES, "parse": _paylocity_board},
+    "ats.rippling": {"slices": RIPPLING_SLICES, "parse": _rippling_board},
 }
 
 
@@ -2096,9 +2192,18 @@ async def _ct_entries(
 
 def _certificate_tenant(connector_id: str, host: str) -> str | None:
     """The board tenant named by a certificate hostname, if any."""
-    suffix = "." + SUBDOMAIN_ATS[connector_id]["domain"]
-    if not host.endswith(suffix):
+    cfg = SUBDOMAIN_ATS[connector_id]
+    domain = next(
+        (
+            candidate
+            for candidate in (cfg["domain"], *SUBDOMAIN_ALIAS_DOMAINS.get(connector_id, ()))
+            if host.endswith("." + candidate)
+        ),
+        None,
+    )
+    if domain is None:
         return None
+    suffix = "." + domain
     labels = host[: -len(suffix)].split(".")
     if connector_id == "ats.workday":
         if len(labels) == 1:
@@ -2664,6 +2769,75 @@ async def _verify_taleo(
     return _UNREACHABLE
 
 
+async def _verify_personio(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Posting count from a Personio board's own XML feed.
+
+    A tenant that does not exist answers 404, and an unknown label on a
+    customer host redirects to Personio's marketing site; both are dead.
+    """
+    host = urlsplit(board.url).netloc.lower()
+    async with sem:
+        await asyncio.sleep(0.05)
+        for attempt in range(VERIFY_ATTEMPTS):
+            await _pace(host)
+            try:
+                response = await client.get(
+                    f"https://{host}/xml", timeout=20.0, follow_redirects=True
+                )
+            except httpx.HTTPError:
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if response.status_code == 200:
+                if urlsplit(str(response.url)).netloc.lower() != host:
+                    return None
+                # An error page can wear a 200; only the feed proves a board.
+                if "workzag-jobs" not in response.text:
+                    return None
+                return response.text.count("<position>")
+            if response.status_code in (429, 500, 502, 503, 504):
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+    return _UNREACHABLE
+
+
+async def _verify_breezy(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Posting count from a Breezy board's public ``/json`` document."""
+    host = urlsplit(board.url).netloc.lower()
+    async with sem:
+        await asyncio.sleep(0.05)
+        for attempt in range(VERIFY_ATTEMPTS):
+            await _pace(host)
+            try:
+                response = await client.get(
+                    f"https://{host}/json", timeout=20.0, follow_redirects=True
+                )
+            except httpx.HTTPError:
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if response.status_code == 200:
+                if urlsplit(str(response.url)).netloc.lower() != host:
+                    return None
+                try:
+                    data = response.json()
+                except ValueError:
+                    return None
+                return len(data) if isinstance(data, list) else None
+            if response.status_code in (429, 500, 502, 503, 504):
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+    return _UNREACHABLE
+
+
 async def verify_board(
     client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
 ) -> int | None:
@@ -2684,6 +2858,10 @@ async def verify_board(
         return await _verify_eightfold(client, board, sem)
     if board.connector_id == "ats.taleo":
         return await _verify_taleo(client, board, sem)
+    if board.connector_id == "ats.personio":
+        return await _verify_personio(client, board, sem)
+    if board.connector_id == "ats.breezy":
+        return await _verify_breezy(client, board, sem)
     if board.connector_id == "ats.paylocity":
         return await _verify_paylocity(client, board, sem)
     template = API_TEMPLATES.get(board.connector_id)
@@ -3425,6 +3603,24 @@ async def main() -> None:
         help="10,000-row CDX chunks to walk for JazzHR (0 disables)",
     )
     parser.add_argument(
+        "--personio-chunks",
+        type=int,
+        default=0,
+        help="10,000-row CDX chunks to walk for Personio (0 disables)",
+    )
+    parser.add_argument(
+        "--breezy-chunks",
+        type=int,
+        default=0,
+        help="10,000-row CDX chunks to walk for Breezy HR (0 disables)",
+    )
+    parser.add_argument(
+        "--rippling-chunks",
+        type=int,
+        default=0,
+        help="archive prefix queries to spend on Rippling's slug slices (0 disables)",
+    )
+    parser.add_argument(
         "--paylocity-chunks",
         type=int,
         default=0,
@@ -3557,6 +3753,9 @@ async def main() -> None:
                 or bool(args.bucket_sweep)
                 or args.oracle_chunks > 0
                 or args.jazzhr_chunks > 0
+                or args.personio_chunks > 0
+                or args.breezy_chunks > 0
+                or args.rippling_chunks > 0
                 or args.eightfold_chunks > 0
                 or args.taleo_chunks > 0
                 or args.workday_buckets
@@ -3617,6 +3816,8 @@ async def main() -> None:
                 ("ats.bamboohr", args.bamboohr_chunks),
                 ("ats.oracle_recruiting", args.oracle_chunks),
                 ("ats.jazzhr", args.jazzhr_chunks),
+                ("ats.personio", args.personio_chunks),
+                ("ats.breezy", args.breezy_chunks),
                 ("ats.eightfold", args.eightfold_chunks),
                 ("ats.taleo", args.taleo_chunks),
             ):
@@ -3665,6 +3866,12 @@ async def main() -> None:
                 )
                 _log("subdomain_candidates", connector="ats.paylocity", candidates=len(paylocity))
                 subdomains.update(paylocity)
+            if args.rippling_chunks > 0:
+                rippling = await harvest_prefix_boards(
+                    client, "ats.rippling", args.rippling_chunks, args.resume
+                )
+                _log("subdomain_candidates", connector="ats.rippling", candidates=len(rippling))
+                subdomains.update(rippling)
             shipped = _load_candidates()
             candidates = _merge(shipped, fixed, subdomains)
             if args.recheck_dead:

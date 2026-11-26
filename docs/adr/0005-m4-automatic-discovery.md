@@ -57,7 +57,7 @@ on the user, who would have to add sources whenever the list missed an employer.
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine. As shipped, the
    seed file is a **warm start**: 35,572 boards across eleven ATSs at the time
-   of this decision (the current manifest records 54,655 boards across fourteen
+   of this decision (the current manifest records 58,870 boards across seventeen
    connectors) — the five
    fixed-host ATSs whose boards live at `host/{tenant}` (Greenhouse, Lever,
    Ashby, SmartRecruiters and Workable), the subdomain-addressed Workday, iCIMS
@@ -209,3 +209,45 @@ were live but listing nothing.
   target keeping an exploration floor. `discovery.web_index` sweeps several
   Common Crawl pages per slice and spends its CDX fallbacks against a per-pass
   budget (`web_index_cdx_per_pass`) instead of a fixed four.
+
+## Addendum (2026-11-26): Rippling, Personio and Breezy, and what stays out
+
+The seed's gaps are concentrated in platforms whose tenant space is addressable
+and whose listing is public. Three more clear that bar and are now connectors
+*and* seed shards:
+
+- **Rippling** (`ats.rippling`): one fixed host, the employer slug is the first
+  path segment, and `GET /api/v2/board/{slug}/jobs?page=N` answers every posting
+  with `totalPages`. It needs no new discovery shape:   `discovery.web_index`
+  already walks `host/{bucket}`, so the entry there is enough. The board URL is
+  `/{slug}/jobs`, which is why the provider carries a per-host path suffix.
+  First shard: 1,160 boards, 913 hiring.
+- **Personio** (`ats.personio`): `GET {tenant}.jobs.personio.de/xml` (or the
+  `.com` domain) returns every published position with its HTML description, so
+  one request is the whole board and no detail fetch is needed. Both career
+  domains are `discovery.domain_index` targets and seed roots, because a tenant
+  lives on exactly one of them. First shard: 1,234 boards, 1,083 hiring (a
+  further ~4,500 candidates were left unreachable and are retried by the next
+  `--incremental --resume` run). **Measured:** after roughly 6,000 verifications
+  Personio answers 429 for every tenant host, so a Personio walk is bounded and
+  resumed, and the connector must expect 429s during a large crawl.
+- **Breezy** (`ats.breezy`): `GET {tenant}.breezy.hr/json` is a bare, unpaginated
+  array with no descriptions, so the listing is cheap and the detail costs one
+  fetch per posting. Tenants are subdomains and are walked by
+  `discovery.domain_index`. First shard: 1,821 boards, 1,034 hiring.
+
+Measured the same day, and deliberately still out:
+
+| Platform | What a public fetch returns | Why it is not a connector |
+|---|---|---|
+| SuccessFactors CSB | `career10.successfactors.com/career?company=SAP` → 3.4 KB `verp-client` shell, 7 scripts, **0** job titles | the listing is client-rendered and the tenant is a `?company=` query value |
+| SuccessFactors RMK | `jobs.sap.com/search/` → 695 KB, **0** job links, **0** `JobPosting` JSON-LD | server-rendered shell around a JS search, and RMK sites live on customer-owned domains, so there is no host to enumerate |
+| ADP | `myjobs.adp.com` → 2.6 KB Angular shell loading `runtime.js` from `myjobs.cf.adp.com`, no posting links | private listing API, client-rendered |
+| Paycom | a board without its key → "Job board does not exist or is unavailable"; archived rows read `paycomonline.net/.../0B984331AD5FA.../jobs/28141` | the board is an opaque `clientkey` GUID, and the index elides the key, so a board cannot be rebuilt from it |
+| UKG Ready | `secure4.saashr.com/ta/{id}.careers` → 7 KB shell | per-tenant ta-id and a JS app; UKG Pro/UltiPro is already covered by `ats.ultipro` |
+| Dayforce | listing page 543 KB with no posting links, no `totalCount`, no API path (the only `jobTitle` hits are chat-widget copy); a posting page is 390 KB with **138** characters of readable text; `/api/...` guesses answer 400/404 | spike found no unauthenticated listing, and tenant, site and locale all sit in the path on `www` |
+| Long-tail vendors (Hirelane-style) | nothing enumerable | no index-addressable host; `ats.career_site` already reads one when the user adds its URL |
+
+No browser-rendered connector was added for these: Playwright is limited to
+rendering and autofill, and a board that needs a render spends the shared crawl
+gate on a handful of postings.

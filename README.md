@@ -130,13 +130,15 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   (the rotation cursor is held). Design and trade-offs:
   [ADR 0005](docs/adr/0005-m4-automatic-discovery.md).
 - **Subdomain and path ATS discovery** (`app/plugins/discovery/domain_index.py`):
-  `discovery.domain_index` walks Workday, iCIMS, BambooHR and Eightfold tenants
+  `discovery.domain_index` walks Workday, iCIMS, BambooHR, Eightfold, Personio
+  (both `.jobs.personio.de` and `.jobs.personio.com`) and Breezy HR tenants
   with domain index queries and UKG Pro/Workable boards with prefix queries,
   rebuilding each board URL from the captured URL — including Workday's
   `{locale}/{site}`, which the hostname alone does not carry. Domain scans are
   slow (40–90 s each), so a pass walks three rotating slices; a slice the
   archive throttles is logged and re-walked when the rotation wraps. A new
-  tenant no longer waits for a seed refresh.
+  tenant no longer waits for a seed refresh. Rippling boards are path-addressed
+  on one host, so `discovery.web_index` already covers them.
 - **UKG Pro (UltiPro) boards** (`app/plugins/ats/ultipro.py`): a board is
   addressed as `recruiting.ultipro.com/{employer}/JobBoard/{id}`. The connector
   reads the board's own unauthenticated `LoadSearchResults` listing (50-row
@@ -170,10 +172,10 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   pods (a pod-scoped index query answers in 17–38 s) and rebuilds each
   `{host}/hcmUI/CandidateExperience/{lang}/sites/{site}` board from the URL.
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships 54,655 boards across fourteen ATSs
+  `discovery.ats_directory` ships 58,870 boards across seventeen ATSs
   (Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday,
-  iCIMS, Oracle Recruiting Cloud, UKG Pro/UltiPro, Paylocity, JazzHR, Taleo and
-  Eightfold), each
+  iCIMS, Oracle Recruiting Cloud, UKG Pro/UltiPro, Paylocity, JazzHR, Taleo,
+  Eightfold, Rippling, Personio and Breezy HR), each
   confirmed live through its own public ATS API and ordered largest-first by
   open postings (refreshed via `scripts/build_seed.py`), so a cold install has
   something to crawl within minutes while the web-index rotation fills in
@@ -182,8 +184,8 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   rather than a single JSON array, so a refresh rewrites one reviewable file
   and a pass reads only a bounded window from it. Each record carries the
   postings observed at build time (`p`) and the date (`v`): hiring boards sort
-  first and live-but-empty ones last. The manifest currently records 54,655
-  boards, 28,862 of them hiring, generated 2026-11-26. Deleting the seed does
+  first and live-but-empty ones last. The manifest currently records 58,870
+  boards, 31,892 of them hiring, generated 2026-11-26. Deleting the seed does
   not stop discovery.
 - **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
   every enabled provider for candidates, dedupes by **board identity** (not the

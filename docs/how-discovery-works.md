@@ -14,10 +14,11 @@ re-checked as its interval comes due. One pass:
 
 1. **Ask every enabled discovery provider for candidate career sites.**
    `discovery.web_index` queries a public web URL index for fixed-host ATS
-   boards (`host/{tenant}`). `discovery.domain_index` covers the shapes a
-   prefix query cannot reach: Workday, iCIMS, BambooHR and Eightfold tenants on
-   their own subdomains, and UKG Pro/Workable boards whose employer sits in the
-   path.
+   boards (`host/{tenant}`), including Rippling's `ats.rippling.com/{slug}` and
+   `{slug}/jobs`. `discovery.domain_index` covers the shapes a prefix query
+   cannot reach: Workday, iCIMS, BambooHR, Eightfold, Personio and Breezy HR
+   tenants on their own subdomains, and UKG Pro/Workable boards whose employer
+   sits in the path.
    Neither uses a fixed list of employers. Each web-index query asks for a
    large block of rows (up to 10,000 from the archive fallback) so one answer
    covers a whole slice of the tenant space.
@@ -79,17 +80,17 @@ source schedule are stored in the app database.
 
 ## Sources, not seeds
 
-`discovery.ats_directory` ships an offline seed list of 54,655 boards across
-fourteen connectors: Greenhouse, Lever, Ashby, SmartRecruiters, Workable,
+`discovery.ats_directory` ships an offline seed list of 58,870 boards across
+seventeen connectors: Greenhouse, Lever, Ashby, SmartRecruiters, Workable,
 BambooHR, Workday, iCIMS, Oracle Recruiting Cloud, UKG Pro (UltiPro),
-Paylocity, JazzHR, Taleo and Eightfold, each confirmed live through the board's
-own public ATS API. It is stored as one NDJSON shard per
+Paylocity, JazzHR, Taleo, Eightfold, Rippling, Personio and Breezy HR, each
+confirmed live through the board's own public ATS API. It is stored as one NDJSON shard per
 connector (`seeds/boards/*.ndjson`) plus `seeds/manifest.json`, which records
 each shard's board/posting counts, its checksum and the connectors whose zero
 is not trustworthy. A shard is verified against that checksum on read, over
 its LF bytes: `.gitattributes` pins the shards to LF so a Windows checkout
 cannot turn a healthy file into a checksum mismatch, and the reader normalises
-CRLF anyway. The current manifest reports 54,655 boards and 28,862
+CRLF anyway. The current manifest reports 58,870 boards and 31,892
 hiring boards, generated 2026-11-26. A record carries the URL, the
 postings observed at build time, the verification date and the tenant key;
 hiring boards are written before empty ones. It exists so a brand new install
@@ -181,7 +182,7 @@ be:
   up, and one that just disappeared may still show up as a source until its
   crawl fails.
 - **Subdomain and path discovery is slower.** Workday, iCIMS, BambooHR,
-  Eightfold, UKG Pro and Workable boards are enumerated by
+  Eightfold, Personio, Breezy HR, UKG Pro and Workable boards are enumerated by
   `discovery.domain_index`, but a
   domain-wide index query takes 40–90 s, so one pass walks only three slices
   (three leading-character buckets) instead of the twelve fixed-host slices.

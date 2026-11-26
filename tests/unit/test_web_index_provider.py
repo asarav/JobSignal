@@ -11,6 +11,7 @@ from app.domain.models.discovery import DiscoveryQuery
 from app.domain.models.http import HttpRequest, HttpResponse
 from app.plugins.discovery.web_index import (
     BUCKETS,
+    DEFAULT_ATS_HOSTS,
     MAX_CDX_FALLBACKS,
     WebIndexProvider,
 )
@@ -204,7 +205,7 @@ async def test_empty_index_slice_yields_nothing():
 
 def test_cursor_walks_hosts_then_buckets():
     provider = _provider()
-    host_count = 5
+    host_count = len(DEFAULT_ATS_HOSTS)
 
     first_host, first_ats, first_bucket = provider.slice_for(0)
     assert first_host == "boards.greenhouse.io"

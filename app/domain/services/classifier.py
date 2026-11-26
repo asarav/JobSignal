@@ -20,8 +20,10 @@ KNOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("recruiting3.ultipro.com", "ats.ultipro"),
     ("recruiting.ultipro.ca", "ats.ultipro"),
     ("apply.workable.com", "ats.workable"),
+    ("ats.rippling.com", "ats.rippling"),
     ("workable.com", "ats.workable"),
     ("bamboohr.com", "ats.bamboohr"),
+    ("breezy.hr", "ats.breezy"),
     ("oraclecloud.com/hcmui/candidateexperience", "ats.oracle_recruiting"),
     ("oraclecloud.com/hcmrestapi", "ats.oracle_recruiting"),
     ("eightfold.ai", "ats.eightfold"),
@@ -30,6 +32,8 @@ KNOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("taleo.net/careersection", "ats.taleo"),
     ("applytojob.com", "ats.jazzhr"),
     ("recruiting.paylocity.com/recruiting/jobs/all/", "ats.paylocity"),
+    ("jobs.personio.de", "ats.personio"),
+    ("jobs.personio.com", "ats.personio"),
 )
 
 

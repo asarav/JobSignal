@@ -35,6 +35,9 @@ _SUBDOMAIN_SUFFIXES: tuple[str, ...] = (
     ".eightfold.ai",
     ".applytojob.com",
     ".taleo.net",
+    ".jobs.personio.de",
+    ".jobs.personio.com",
+    ".breezy.hr",
 )
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[A-Za-z]{2,4})?$")
@@ -123,6 +126,24 @@ def board_identity(
             match.group("board").lower() if match else ""
         )
         return (connector, board) if board else ()
+    if connector == "ats.breezy":
+        # The tenant is the subdomain and the path starts with ``/p/`` or
+        # ``/json``, so the generic first-segment reading would key the board
+        # on "p" and collapse every Breezy employer into one.
+        key = (tenant_key or "").strip()
+        if key:
+            return (connector, key.lower())
+        tenant = _subdomain(host, ".breezy.hr")
+        return (connector, tenant) if tenant else ()
+    if connector == "ats.personio":
+        key = (tenant_key or "").strip()
+        if key:
+            return (connector, key.lower())
+        for suffix in (".jobs.personio.de", ".jobs.personio.com"):
+            tenant = _subdomain(host, suffix)
+            if tenant:
+                return (connector, tenant)
+        return ()
     if connector == "ats.taleo":
         key = (tenant_key or "").strip()
         if "|" in key:
