@@ -140,4 +140,15 @@ jobs:
           name: Job Signal ${{ inputs.release_tag }}
           draft: ${{ inputs.draft_release }}
           generate_release_notes: true
-          files: release-assets/**/*
+          # Bundle directories also contain the AppImage's unpacked runtime
+          # (shared libraries, Gio typelibs, AppRun, the worker sidecar).
+          # Uploading the whole tree turned one release into 260+ assets, so
+          # ship only the files a user installs.
+          files: |
+            release-assets/**/*.exe
+            release-assets/**/*.msi
+            release-assets/**/*.dmg
+            release-assets/**/*.deb
+            release-assets/**/*.rpm
+            release-assets/**/*.AppImage
+          fail_on_unmatched_files: true
