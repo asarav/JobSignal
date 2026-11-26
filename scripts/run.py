@@ -50,6 +50,18 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(1)
 
 
+def pip_env() -> dict[str, str]:
+    """Environment for ``pip install`` calls made by the launcher.
+
+    PyMuPDF 2.x publishes no macOS Intel wheel, and its sdist builds MuPDF from
+    source, which takes so long the launcher appears to hang.  Refuse the sdist
+    so the failure is immediate and readable on any platform without a wheel.
+    """
+    env = dict(os.environ)
+    env.setdefault("PIP_ONLY_BINARY", "pymupdf")
+    return env
+
+
 def format_command(command: list[str]) -> str:
     if os.name == "nt":
         return subprocess.list2cmdline(command)
@@ -188,7 +200,7 @@ def ensure_python(*, dry_run: bool, no_install: bool) -> str:
         if dry_run:
             log("would run: .venv python -m pip install -e .")
             return str(candidate)
-        run([str(candidate), "-m", "pip", "install", "-e", "."], cwd=ROOT)
+        run([str(candidate), "-m", "pip", "install", "-e", "."], cwd=ROOT, env=pip_env())
         if not has_worker_dependencies(str(candidate)):
             fail("worker dependencies are still missing after pip install.")
         return str(candidate)
@@ -212,7 +224,7 @@ def ensure_python(*, dry_run: bool, no_install: bool) -> str:
         log("would run: .venv python -m pip install -e .")
         return str(candidate)
     run([sys.executable, "-m", "venv", str(VENV)], cwd=ROOT)
-    run([str(candidate), "-m", "pip", "install", "-e", "."], cwd=ROOT)
+    run([str(candidate), "-m", "pip", "install", "-e", "."], cwd=ROOT, env=pip_env())
     if not has_worker_dependencies(str(candidate)):
         fail("worker dependencies are missing after creating .venv.")
     return str(candidate)

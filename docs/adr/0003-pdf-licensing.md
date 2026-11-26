@@ -56,6 +56,13 @@ PyMuPDF is a licence violation.
 ## Consequences
 
 - The repository can keep using PyMuPDF for local development and testing.
+- The required dependency is capped at `pymupdf>=1.24,<2`. PyMuPDF 2.x ships no
+  macOS Intel wheel, so an unpinned requirement made pip build MuPDF from the
+  sdist on Intel macOS runners — minutes to hours of C compilation that looks
+  like a stalled job. 1.28.2 is the last release with a `macosx_*_x86_64`
+  wheel; every workflow and the `scripts/run.py` launcher install with
+  `PIP_ONLY_BINARY=pymupdf` so a missing wheel fails fast instead. Raising the
+  cap requires either a macOS Intel wheel or the `pypdf` swap below.
 - Any packaging/release checklist must include this ADR; CI cannot detect the
   licence conflict because it is a distribution question, not a build failure.
 - Until the gate is cleared, README and release notes must not present binary
