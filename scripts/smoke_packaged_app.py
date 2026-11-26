@@ -72,6 +72,9 @@ def terminate(process: subprocess.Popen) -> None:
 
 
 def run_app(executable: Path, data_dir: Path, *, timeout: float) -> dict:
+    # ``Popen`` runs with ``cwd=executable.parent``, so the program must be
+    # absolute; the workflow finds bundles with relative paths.
+    executable = executable.resolve()
     env = dict(os.environ)
     env["LODESTAR_DATA_DIR"] = str(data_dir)
     homes = data_dir.parent / "home"
@@ -168,16 +171,37 @@ def appimage(image: Path, timeout: float) -> dict:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def macos_app(app: Path, timeout: float) -> dict:
+def macos_executable(app: Path) -> Path:
+    """The bundle's own binary, never the worker sidecar beside it."""
     binaries = app / "Contents" / "MacOS"
-    candidates = [path for path in binaries.iterdir() if path.is_file()]
+    if not binaries.is_dir():
+        raise SystemExit(f"{app} has no Contents/MacOS directory")
+    candidates = [
+        path
+        for path in binaries.iterdir()
+        if path.is_file() and "worker" not in path.name.lower()
+    ]
     if not candidates:
-        raise SystemExit(f"no executable inside {binaries}")
+        raise SystemExit(f"no application executable inside {binaries}")
+    # ``Job Signal.app`` holds ``Job Signal``; fall back to the largest file.
+    preferred = [path for path in candidates if path.name == app.stem]
+    return preferred[0] if preferred else max(candidates, key=lambda path: path.stat().st_size)
+
+
+def macos_app(app: Path, timeout: float) -> dict:
+    executable = macos_executable(app)
     data_dir = Path(tempfile.mkdtemp(prefix="job-signal-macos-data-"))
     try:
-        return run_app(candidates[0], data_dir, timeout=timeout)
+        return run_app(executable, data_dir, timeout=timeout)
     finally:
         shutil.rmtree(data_dir, ignore_errors=True)
+
+
+def artifact(path: Path, what: str) -> Path:
+    resolved = path.resolve()
+    if not resolved.exists():
+        raise SystemExit(f"{what} not found: {path}")
+    return resolved
 
 
 def main() -> int:
@@ -189,15 +213,17 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
 
+    # Resolve every artifact up front: the workflow passes paths from ``find``,
+    # and each mode changes directory before launching it.
     if args.msi:
-        result = windows_msi(args.msi, args.timeout)
+        result = windows_msi(artifact(args.msi, "MSI"), args.timeout)
     elif args.appimage:
-        result = appimage(args.appimage, args.timeout)
+        result = appimage(artifact(args.appimage, "AppImage"), args.timeout)
     elif args.macos_app:
-        result = macos_app(args.macos_app, args.timeout)
+        result = macos_app(artifact(args.macos_app, ".app bundle"), args.timeout)
     elif args.exe:
         data_dir = Path(tempfile.mkdtemp(prefix="job-signal-exe-data-"))
-        result = run_app(args.exe, data_dir, timeout=args.timeout)
+        result = run_app(artifact(args.exe, "executable"), data_dir, timeout=args.timeout)
     else:
         print("pass one of --msi, --appimage, --macos-app or --exe")
         return 2
