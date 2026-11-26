@@ -144,9 +144,11 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          # The bundled app opens a window, and a hosted runner has no display.
+          sudo apt-get update && sudo apt-get install -y xvfb
           IMG=$(find "frontend/src-tauri/target/${{ matrix.target }}/release/bundle/appimage" -name '*.AppImage' | head -1)
           chmod +x "$IMG"
-          python scripts/smoke_packaged_app.py --appimage "$IMG"
+          xvfb-run -a python scripts/smoke_packaged_app.py --appimage "$IMG"
 
       - name: Packaged app smoke (macOS, unsigned)
         if: runner.os == 'macOS'

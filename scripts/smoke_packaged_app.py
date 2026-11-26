@@ -71,6 +71,16 @@ def terminate(process: subprocess.Popen) -> None:
             process.kill()
 
 
+def startup_output(process: subprocess.Popen) -> str:
+    """Whatever the app printed before it was stopped, for a readable failure."""
+    try:
+        stdout, stderr = process.communicate(timeout=15)
+    except (subprocess.TimeoutExpired, ValueError):
+        return ""
+    text = "\n".join(part for part in (stderr, stdout) if part)
+    return "\n".join(text.strip().splitlines()[-15:])
+
+
 def run_app(executable: Path, data_dir: Path, *, timeout: float) -> dict:
     # ``Popen`` runs with ``cwd=executable.parent``, so the program must be
     # absolute; the workflow finds bundles with relative paths.
@@ -81,6 +91,9 @@ def run_app(executable: Path, data_dir: Path, *, timeout: float) -> dict:
     homes.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(homes)
     env["XDG_DATA_HOME"] = str(homes / ".local" / "share")
+    if sys.platform.startswith("linux"):
+        # WebKitGTK cannot composite without a GPU on a headless runner.
+        env.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
     process = subprocess.Popen(
         [str(executable)],
         cwd=str(executable.parent),
@@ -90,7 +103,12 @@ def run_app(executable: Path, data_dir: Path, *, timeout: float) -> dict:
         text=True,
     )
     try:
-        database = wait_for_database(data_dir, timeout=timeout)
+        try:
+            database = wait_for_database(data_dir, timeout=timeout)
+        except SystemExit as exc:
+            terminate(process)
+            output = startup_output(process)
+            raise SystemExit(f"{exc}\n--- app output ---\n{output or '(none)'}") from None
         sidecar = sidecar_beside(executable)
         result = {
             "ok": sidecar is not None,
