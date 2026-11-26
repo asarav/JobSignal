@@ -34,12 +34,18 @@ How it works
    (which registers at most ``discovery.max_new_sources_per_run`` per pass)
    reaches the biggest employers first.
 
-Progress is checkpointed after every slice and every subdomain chunk, so an
-interrupted run resumes where it left off.  With ``--incremental`` every
-settled board is also remembered (``.seed_build_verified.json``), so a later
-expansion pass verifies only boards no earlier pass has seen.  The archive gateway throttles
-heavy scans with 503s; the harvester backs off for minutes rather than
-abandoning a chunk.
+Progress is checkpointed after every slice and every subdomain chunk, and the
+verification cache is written every 1,000 settled boards (not only at the end),
+so an interrupted run — hours in — resumes where it left off instead of
+re-verifying the archive backlog.  Every checkpoint goes to a temp file and is
+renamed into place, so a kill mid-write leaves the previous complete file
+rather than a truncated one.  With ``--incremental`` every settled board is
+remembered (``.seed_build_verified.json``), so a later expansion pass verifies
+only boards no earlier pass has seen; live results settled in the last
+``RESUME_LIVE_DAYS`` are written without being probed again.  The archive
+gateway throttles heavy
+scans with 503s; the harvester backs off for minutes rather than abandoning a
+chunk.
 
 Run it (network required):
 
@@ -71,7 +77,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,12 +92,30 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.domain.services.board_identity import board_identity  # noqa: E402
 from app.plugins.ats.icims import _job_links  # noqa: E402
 from app.plugins.ats.jazzhr import _DETAIL_RE as JAZZHR_DETAIL_RE  # noqa: E402
 from app.plugins.ats.paylocity import _DETAIL_RE as PAYLOCITY_DETAIL_RE  # noqa: E402
+from app.plugins.discovery.seed_shards import (  # noqa: E402
+    SeedRecord,
+    read_all_records,
+    records_from_legacy_rows,
+    write_seed_shards,
+)
 from app.plugins.discovery.web_index import DEFAULT_ATS_HOSTS, _tenant_of  # noqa: E402
 
-SEEDS_PATH = ROOT / "app" / "plugins" / "discovery" / "seeds" / "ats_tenants.json"
+SEEDS_DIR = ROOT / "app" / "plugins" / "discovery" / "seeds"
+#: The legacy single-file layout, still read when the shards are absent.
+SEEDS_PATH = SEEDS_DIR / "ats_tenants.json"
+
+#: How long a board settled as dead stays out of a new verification run.  A
+#: retired tenant can come back, and the old cache remembered ``-1`` forever.
+RECHECK_DEAD_DAYS = 90
+
+#: Connectors whose public listing is rendered client-side (iframe/JS), so a
+#: verified zero there means "no postings observed", not "no postings".  Only
+#: a confident zero is allowed to demote a board into the empty tier.
+ZERO_UNCONFIDENT = frozenset({"ats.icims", "ats.taleo", "ats.workday"})
 CACHE_PATH = ROOT / ".seed_build_cache.json"
 SUBDOMAIN_CACHE_PATH = ROOT / ".seed_build_subdomains.json"
 CT_CACHE_PATH = ROOT / ".seed_build_ct.json"
@@ -118,12 +142,32 @@ VERIFY_ATTEMPTS = 3
 #: re-checked between batches.
 VERIFY_BATCH = 256
 
+#: Settled verifications between checkpoint writes.  Verifying tens of
+#: thousands of boards takes hours; losing at most this many on an
+#: interruption costs seconds, while writing after every board would spend the
+#: run rewriting the cache.
+VERIFY_CHECKPOINT_EVERY = 1_000
+
+#: How long a settled *live* verification may be reused on `--incremental`.
+#: This is what makes an interrupted run resumable without re-checking boards
+#: it already verified: within this window the settled result is written to the
+#: shards as if this run had verified it; older entries are checked again so a
+#: stale cache cannot pin an old posting count forever.
+RESUME_LIVE_DAYS = 7
+
 #: Measured per-host request pacing.  Paylocity answers 20/20 at one request a
 #: second, 5/20 at two and 0/20 at four, with a ``Retry-After`` on every 429 --
 #: the budget is per client IP, so concurrency cannot buy anything and every
 #: extra request just spends a candidate on a refusal instead.
 HOST_PACE_S: dict[str, float] = {
     "recruiting.paylocity.com": 1.05,
+    # Measured: Workable's widget API refuses a burst (429 to 20 requests at
+    # 0.6 s apart) and a sweep at seven requests a second blocks the caller
+    # outright -- the whole pool then answers 429 with no ``Retry-After``, and
+    # the block outlives an hour of waiting.  Pacing cannot rescue a caller
+    # that is already blocked, so a dead-pool reclaim waits for the block to
+    # clear and then keeps to this rate.
+    "apply.workable.com": 1.0,
 }
 VERIFY_CONCURRENCY = min(32, max(8, (os.cpu_count() or 4) * 4))
 #: Index queries in flight at once.  The gateway rejects bursts, so this stays
@@ -150,6 +194,9 @@ BUCKET_PAUSE_S = 60.0
 #: Default wall clock a bucket sweep may spend before it stops and writes what
 #: it has.  An unanswered bucket stays checkpointed for the next run.
 BUCKET_BUDGET_S = 1800.0
+#: Longest tenant prefix a bucket may be partitioned into: ``a`` falls back to
+#: ``aa``..``a9``, and those to three characters, when the index refuses it.
+BUCKET_SPLIT_DEPTH = 3
 
 #: Oracle Fusion HCM pods that host Candidate Experience sites.  Oracle is
 #: enumerated per pod because the whole ``oraclecloud.com`` domain is far too
@@ -199,6 +246,18 @@ ORACLE_PATH_RE = re.compile(
     r"/sites/(?P<site>[A-Za-z0-9_]+)(?:/|$)",
     re.IGNORECASE,
 )
+#: A Taleo career section: ``{tenant}.taleo.net/careersection/{section}/...``.
+TALEO_PATH_RE = re.compile(r"^/careersection/(?P<section>[A-Za-z0-9_]+)(?:/|$)", re.IGNORECASE)
+#: Posting links on a Taleo search page (the retired server-rendered shape).
+TALEO_DETAIL_RE = re.compile(r"jobdetail\.ftl\?job=([A-Za-z0-9_-]+)", re.IGNORECASE)
+#: Taleo's current career sections render their listing client-side and post
+#: the query to this endpoint, so the page's HTML holds no posting links at all
+#: (measured: a live section with 88 postings links zero ``jobdetail.ftl``
+#: pages).  The section's portal number is in the page it serves.
+TALEO_PORTAL_RE = re.compile(r"portal=(\d+)")
+TALEO_SEARCH_PATH = "/careersection/rest/jobboard/searchjobs?lang=en&portal={portal}"
+#: Eightfold's board page names the employer web domain its API expects.
+EIGHTFOLD_DOMAIN_RE = re.compile(r'"domain"\s*:\s*"([A-Za-z0-9.-]+)"')
 
 #: Job-detail URL shapes, which repeat a tenant the bucket already names.
 UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -237,6 +296,7 @@ SEED_ATS_HOSTS: tuple[tuple[str, str], ...] = (
     ("apply.workable.com", "ats.workable"),
 )
 
+
 #: Hosts whose tenant is a subdomain; each is walked with a domain query.
 #: ``filters`` keep board roots only: a tenant can own tens of thousands of
 #: asset, job-detail and API URLs, and every one of them used to crowd a chunk
@@ -271,8 +331,25 @@ class _SubdomainCfg(TypedDict):
 #: Every shard number Workday hands out.  Tenants are spread across them, so
 #: each shard is walked in turn instead of exhausting the first one.
 WORKDAY_SHARDS = (
-    "wd1", "wd2", "wd3", "wd4", "wd5",
-    "wd6", "wd7", "wd8", "wd9", "wd10", "wd11", "wd12", "wd13", "wd14", "wd15",
+    "wd1",
+    "wd2",
+    "wd3",
+    "wd4",
+    "wd5",
+    "wd6",
+    "wd7",
+    "wd8",
+    "wd9",
+    "wd10",
+    "wd11",
+    "wd12",
+    "wd13",
+    "wd14",
+    "wd15",
+    # Measured after the first fifteen were exhausted: wd103 answers with 4,750
+    # rows naming 186 tenants in one chunk, while wd16-wd20 answer an empty
+    # table (those shard numbers are not in use).
+    "wd103",
 )
 
 
@@ -336,6 +413,41 @@ SUBDOMAIN_ATS: dict[str, _SubdomainCfg] = {
             # 10,000-row chunk on a handful of employers.
             "!original:.*/apply/jobs/details/.*",
             "!original:.*/apply/[A-Za-z0-9]{6,}/.*",
+        ),
+    },
+    "ats.eightfold": {
+        # Eightfold puts the employer in the subdomain and serves the same
+        # public listing API its own board calls.  Custom employer hosts
+        # (Netflix-style) are not enumerable from this domain, so they stay a
+        # manual/runtime-discovery path.
+        "domain": "eightfold.ai",
+        "roots": ("eightfold.ai",),
+        "filters": (
+            "!original:.*/careers/job/.*",
+            "!original:.*/api/.*",
+            r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+        ),
+    },
+    "ats.taleo": {
+        # Taleo career sections are server-rendered at
+        # ``{tenant}.taleo.net/careersection/{section}``; the section is part of
+        # the board's identity because one tenant can publish several.
+        "domain": "taleo.net",
+        "roots": ("taleo.net",),
+        "filters": (
+            # The domain walk starts in the apex marketing site (its urlkey
+            # ``net,taleo)`` sorts before every tenant's ``net,taleo,{tenant})``)
+            # and spent three 10,000-row chunks there naming three boards.
+            # ``urlkey`` is the index's own sort key, so requiring a label
+            # after the domain keeps every row that can name a tenant.
+            "urlkey:net,taleo,.*",
+            # Tenant-space rows are overwhelmingly the retired
+            # ``/servlets/CareerSection`` shape, which names no career section
+            # and so cannot be a board.  Keeping only ``/careersection/`` rows
+            # makes each chunk spend on tenants that can.
+            "original:.*/careersection/.*",
+            "!original:.*/jobdetail.ftl.*",
+            r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
         ),
     },
     "ats.oracle_recruiting": {
@@ -445,10 +557,10 @@ class Board:
         same site mirrored on two shards) are one board.  This is the same key
         runtime discovery uses: ``workday:{tenant}:{site}``.
         """
-        if self.connector_id == "ats.workday":
-            site = _workday_site(self.url) or ""
-            return (self.connector_id, (self.tenant_key or self.tenant).lower(), site.lower())
-        return (self.connector_id, self.tenant_key or self.tenant)
+        return board_identity(self.connector_id, self.url, self.tenant_key or self.tenant) or (
+            self.connector_id,
+            self.tenant_key or self.tenant,
+        )
 
 
 def _host_for(connector_id: str) -> str | None:
@@ -710,19 +822,49 @@ def _read_harvest_cache() -> tuple[set[tuple[str, str]], dict[Board, int]]:
     return completed, dict(boards)
 
 
+def _replace_file(tmp: Path, path: Path) -> None:
+    """Swap a completed temp file into place (a seam so tests can break it)."""
+    os.replace(tmp, path)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write a checkpoint so an interruption cannot corrupt the previous one.
+
+    The builder runs for hours (archive sweeps plus tens of thousands of
+    verifications) and can be stopped at any moment.  Writing straight to the
+    checkpoint would leave a truncated JSON file after a kill mid-write, and
+    the next run would silently discard hours of work because it cannot parse
+    the file.  A sibling temp file plus an atomic rename means a reader sees
+    either the old complete checkpoint or the new complete one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_file(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def _checkpoint(completed: set[tuple[str, str]], boards: dict[Board, int]) -> None:
-    CACHE_PATH.write_text(
+    _atomic_write(
+        CACHE_PATH,
         json.dumps(
             {
                 "completed": [[host, bucket] for host, bucket in sorted(completed)],
                 "results": {
-                    f"{board.connector_id}|{board.tenant}": count
-                    for board, count in boards.items()
+                    f"{board.connector_id}|{board.tenant}": count for board, count in boards.items()
                 },
             },
             indent=1,
         ),
-        encoding="utf-8",
     )
 
 
@@ -752,9 +894,7 @@ async def harvest_all(client: httpx.AsyncClient) -> dict[Board, int]:
     started = time.monotonic()
     semaphore = asyncio.Semaphore(SLICE_CONCURRENCY)
 
-    async def run_one(
-        host: str, bucket: str, attempts: int
-    ) -> tuple[str, str, int, bool]:
+    async def run_one(host: str, bucket: str, attempts: int) -> tuple[str, str, int, bool]:
         connector_id = next(connector for h, connector in SEED_ATS_HOSTS if h == host)
         result = await harvest_slice(client, host, bucket, semaphore, attempts)
         if result is None:
@@ -853,7 +993,10 @@ def _subdomain_board(connector_id: str, url: str) -> Board | None:
         # through the ``{tenant}.{domain}`` reading below.
         return _oracle_board(url)
     parts = urlsplit(url)
-    host = MANGLED_HOST_RE.sub("", parts.netloc.lower())
+    # ``hostname`` drops the userinfo and the port: the index carries rows like
+    # ``http://aa.taleo.net:80/servlets/CareerSection``, and a port left in the
+    # host fails the ``.{domain}`` suffix test and silently loses the tenant.
+    host = MANGLED_HOST_RE.sub("", (parts.hostname or "").lower())
     cfg = SUBDOMAIN_ATS[connector_id]
     suffix = "." + cfg["domain"]
     if not host.endswith(suffix):
@@ -909,6 +1052,27 @@ def _subdomain_board(connector_id: str, url: str) -> Board | None:
         if sub in RESERVED_SUBDOMAINS or not TENANT_RE.match(sub):
             return None
         return Board(connector_id, sub, f"https://{host}/apply", tenant_key=sub)
+    if connector_id == "ats.eightfold":
+        if len(labels) != 1 or "." in sub:
+            return None
+        if sub in RESERVED_SUBDOMAINS or sub == "www" or not TENANT_RE.match(sub):
+            return None
+        return Board(connector_id, sub, f"https://{host}/careers", tenant_key=sub)
+    if connector_id == "ats.taleo":
+        if len(labels) != 1 or "." in sub:
+            return None
+        if sub in RESERVED_SUBDOMAINS or not TENANT_RE.match(sub):
+            return None
+        match = TALEO_PATH_RE.match(parts.path)
+        if match is None:
+            return None
+        section = match.group("section")
+        return Board(
+            connector_id,
+            sub,
+            f"https://{host}/careersection/{section}/jobsearch.ftl?lang=en",
+            tenant_key=f"{sub}|{section.lower()}",
+        )
     return None
 
 
@@ -1040,7 +1204,7 @@ async def harvest_subdomains(
                 for b, n in boards.items()
             },
         }
-        SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+        _atomic_write(SUBDOMAIN_CACHE_PATH, json.dumps(cache, indent=1))
 
     started = time.monotonic()
     idle_since: float | None = None
@@ -1306,7 +1470,7 @@ async def harvest_path_boards(
                 for b, n in boards.items()
             },
         }
-        SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+        _atomic_write(SUBDOMAIN_CACHE_PATH, json.dumps(cache, indent=1))
         _log(
             "chunk_done",
             connector=connector_id,
@@ -1418,7 +1582,7 @@ async def harvest_prefix_boards(
                     for b, n in boards.items()
                 },
             }
-            SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+            _atomic_write(SUBDOMAIN_CACHE_PATH, json.dumps(cache, indent=1))
             _log(
                 "slice_done",
                 connector=connector_id,
@@ -1443,6 +1607,27 @@ async def harvest_prefix_boards(
             )
             break
     return dict(boards)
+
+
+def bucket_children(prefix: str) -> tuple[str, ...]:
+    """Every one-character refinement of a bucket prefix, in sweep order."""
+    return tuple(f"{prefix}{char}" for char in BUCKETS)
+
+
+def bucket_is_complete(prefix: str, done: set[str]) -> bool:
+    """Whether a bucket is harvested whole, or completely through its parts."""
+    if prefix in done:
+        return True
+    if len(prefix) >= BUCKET_SPLIT_DEPTH:
+        return False
+    return all(bucket_is_complete(child, done) for child in bucket_children(prefix))
+
+
+def bucket_split_started(prefix: str, done: set[str]) -> bool:
+    """Whether an earlier pass already fell back to sub-ranges of a bucket."""
+    return prefix not in done and any(
+        bucket_is_complete(child, done) for child in bucket_children(prefix)
+    )
 
 
 async def harvest_initial_buckets(
@@ -1474,43 +1659,62 @@ async def harvest_initial_buckets(
     state: dict[str, object] = stored if isinstance(stored, dict) else {}
     boards: dict[Board, int] = defaultdict(int, _ct_cached_boards(state))
     done = {str(item) for item in (state.get("buckets") or [])}
-    if resume and len(done) >= len(BUCKETS):
+    if resume and all(bucket_is_complete(initial, done) for initial in BUCKETS):
         _log("resume_cached", connector=connector_id, buckets=len(done), candidates=len(boards))
         return dict(boards)
 
     started = time.monotonic()
     stalled = 0
-    for initial in BUCKETS:
-        if initial in done:
-            continue
-        if time.monotonic() - started >= budget_s:
-            _log(
-                "bucket_sweep_budget_exhausted",
-                connector=connector_id,
-                buckets=len(done),
-                candidates=len(boards),
-                budget_s=budget_s,
-                unanswered=stalled,
-            )
-            break
-        # While the gateway is failing every bucket, probe each shape once
-        # instead of twice: the point is to meet the next healthy window
-        # sooner, not to insist on a query that has been timing out.
-        attempts = 1 if stalled else 2
+
+    def save() -> None:
+        cache[slot] = {
+            "buckets": sorted(done),
+            "boards": {
+                f"{b.connector_id}|{b.tenant}|{b.url}|{b.tenant_key or ''}": n
+                for b, n in boards.items()
+            },
+        }
+        _atomic_write(SUBDOMAIN_CACHE_PATH, json.dumps(cache, indent=1))
+
+    def record(prefix: str, urls: list[str], shape_used: str) -> None:
+        before = len(boards)
+        for url in urls:
+            candidate = _subdomain_board(connector_id, url)
+            if candidate is not None:
+                boards[candidate] += 1
+        done.add(prefix)
+        save()
+        _log(
+            "bucket_done",
+            connector=connector_id,
+            bucket=prefix,
+            shape=shape_used,
+            rows=len(urls),
+            # A full allowance means the bucket was cut off mid-alphabet: its
+            # tenants are real but incomplete, and its sub-ranges are read too.
+            truncated=len(urls) >= CDX_LIMIT,
+            added=len(boards) - before,
+            candidates=len(boards),
+            elapsed_s=round(time.monotonic() - started),
+        )
+
+    async def query(prefix: str, attempts: int) -> tuple[list[str], bool, str]:
+        """Ask the index for one bucket prefix, densest shape first."""
         # Positive clause: one tenant initial only, so the gateway never has to
         # page and a crowded tenant's job pages cannot crowd out the names
         # behind them.
-        positive = f"original:https?://{initial}[a-z0-9-]*[.]{cfg['domain']}.*"
-        # Two shapes for the same bucket.  The dense one also applies the
-        # connector's own clauses, which drop job pages and marketing hosts so
-        # the 10,000-row allowance names far more tenants (measured on
-        # BambooHR: 4x); the extra scan is likelier to time out on a loaded
-        # gateway, so the plain clause stays as the fallback instead of being
-        # replaced.
-        shapes = (("dense", (positive, *cfg["filters"])), ("plain", (positive,)))
-        urls: list[str] = []
-        parsed = False
-        shape_used = ""
+        positive = f"original:https?://{prefix}[a-z0-9-]*[.]{cfg['domain']}.*"
+        # Two shapes for the same bucket.  The cheap one asks for the tenant
+        # initial alone; the dense one also applies the connector's own
+        # clauses, which drop job pages and marketing hosts so a full
+        # 10,000-row allowance names far more tenants (measured on BambooHR:
+        # 4x).  The cheap shape goes first because it is the one that answers
+        # while the gateway is refusing scans, and a full answer is now split
+        # into sub-ranges instead of being trusted -- which reads more tenants
+        # than the dense clause ever squeezed in.
+        dense = ("dense", (positive, *cfg["filters"]))
+        plain = ("plain", (positive,))
+        shapes = (plain,) if len(prefix) > 1 else (plain, dense)
         for shape, clauses in shapes:
             params: list[tuple[str, str]] = [
                 ("url", cfg["domain"]),
@@ -1525,16 +1729,16 @@ async def harvest_initial_buckets(
             response = await _cdx_get(
                 client,
                 params,
-                purpose=f"{connector_id} bucket {initial} {shape}",
+                purpose=f"{connector_id} bucket {prefix} {shape}",
                 attempts=attempts,
             )
             if response is None:
                 _log(
                     "bucket_unanswered",
                     connector=connector_id,
-                    bucket=initial,
+                    bucket=prefix,
                     shape=shape,
-                    retry="fallback" if shape != shapes[-1][0] else "next run",
+                    retry="fallback" if shape != shapes[-1][0] else "split",
                 )
                 continue
             urls, _key, parsed = _chunk_urls(response.text)
@@ -1542,28 +1746,139 @@ async def harvest_initial_buckets(
                 _log(
                     "bucket_unparsed",
                     connector=connector_id,
-                    bucket=initial,
+                    bucket=prefix,
                     shape=shape,
                     bytes=len(response.content),
                     body=_preview(response.text),
                 )
                 continue
-            shape_used = shape
-            break
+            return urls, True, shape
+        return [], False, ""
+
+    async def sweep_children(prefix: str) -> bool:
+        """Read a refused or truncated bucket as its mutually exclusive parts."""
+        complete = True
+        for child in bucket_children(prefix):
+            if not await walk(child):
+                complete = False
+            if time.monotonic() - started >= budget_s:
+                return False
+        if complete:
+            done.add(prefix)
+            save()
+            _log(
+                "bucket_split_done",
+                connector=connector_id,
+                bucket=prefix,
+                children=len(bucket_children(prefix)),
+                candidates=len(boards),
+            )
+        return complete
+
+    async def walk(prefix: str) -> bool:
+        """Harvest one bucket; partition it rather than give up when refused."""
+        nonlocal stalled
+        if prefix in done:
+            return True
+        if time.monotonic() - started >= budget_s:
+            return False
+        if bucket_split_started(prefix, done):
+            # An earlier pass already fell back to this bucket's sub-ranges:
+            # finish those instead of re-issuing the query it refused.
+            _log("bucket_split_resume", connector=connector_id, bucket=prefix)
+            return await sweep_children(prefix)
+        # While the gateway is failing every bucket, probe each shape once
+        # instead of twice: the point is to meet the next healthy window
+        # sooner, not to insist on a query that has been timing out.
+        # A sub-range is one of many probes, so it never spends a retry the
+        # whole bucket would get.
+        attempts = 1 if stalled or len(prefix) > 1 else 2
+        urls, parsed, shape_used = await query(prefix, attempts)
         if not parsed:
-            # Neither shape answered.  The bucket stays undone and the sweep
-            # waits before probing the next one, so a throttled gateway costs
-            # it a pause rather than the rest of the alphabet.
+            if len(prefix) < BUCKET_SPLIT_DEPTH:
+                # The gateway refused the whole bucket.  Partitioning it is the
+                # degradation that keeps a sweep alive: every sub-range is its
+                # own cheaper query, and each one that answers is checkpointed
+                # now, so a killed run resumes from there.
+                _log(
+                    "bucket_split",
+                    connector=connector_id,
+                    bucket=prefix,
+                    reason="refused",
+                    children=len(bucket_children(prefix)),
+                )
+                complete = await sweep_children(prefix)
+                if not complete:
+                    stalled += 1
+                    await asyncio.sleep(BUCKET_PAUSE_S)
+                return complete
+            # At the deepest split the bucket stays undone and the sweep waits
+            # before probing the next one, so a throttled gateway costs it a
+            # pause rather than the rest of the alphabet.
             stalled += 1
             await asyncio.sleep(BUCKET_PAUSE_S)
-            continue
+            return False
         stalled = 0
-        before = len(boards)
-        for url in urls:
-            candidate = _subdomain_board(connector_id, url)
-            if candidate is not None:
-                boards[candidate] += 1
-        done.add(initial)
+        record(prefix, urls, shape_used)
+        if len(urls) >= CDX_LIMIT and len(prefix) < BUCKET_SPLIT_DEPTH:
+            _log(
+                "bucket_truncated_split",
+                connector=connector_id,
+                bucket=prefix,
+                rows=len(urls),
+            )
+            await sweep_children(prefix)
+        return True
+
+    for initial in BUCKETS:
+        await walk(initial)
+        if time.monotonic() - started >= budget_s:
+            _log(
+                "bucket_sweep_budget_exhausted",
+                connector=connector_id,
+                buckets=len(done),
+                candidates=len(boards),
+                budget_s=budget_s,
+                unanswered=stalled,
+            )
+            break
+    _log("bucket_sweep_done", connector=connector_id, buckets=len(done), candidates=len(boards))
+    return dict(boards)
+
+
+async def harvest_shard_buckets(
+    client: httpx.AsyncClient,
+    connector_id: str,
+    budget_s: float = BUCKET_BUDGET_S,
+) -> dict[Board, int]:
+    """Walk a sharded subdomain ATS one tenant initial at a time.
+
+    Workday spreads tenants over ``wd1``..``wd15`` and a filtered domain chunk
+    cannot page past its first rows, so each shard is walked by leading
+    character instead.  A bucket that comes back completely full is split into
+    two-character buckets and walked again, which is how the fixed-host walker
+    already avoids stopping at whatever the index lists first.
+    """
+    cfg = SUBDOMAIN_ATS[connector_id]
+    cache: dict[str, object] = {}
+    if SUBDOMAIN_CACHE_PATH.exists():
+        try:
+            raw = json.loads(SUBDOMAIN_CACHE_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cache = raw
+        except (OSError, ValueError):
+            cache = {}
+    slot = f"{connector_id}|shards"
+    stored = cache.get(slot)
+    state: dict[str, object] = stored if isinstance(stored, dict) else {}
+    boards: dict[Board, int] = defaultdict(int)
+    for key, count in (state.get("boards") or {}).items():
+        parts = str(key).split("|", 3)
+        if len(parts) == 4:
+            boards[Board(parts[0], parts[1], parts[2], parts[3] or None)] += int(count)
+    done = {str(item) for item in (state.get("buckets") or [])}
+
+    def save() -> None:
         cache[slot] = {
             "buckets": sorted(done),
             "boards": {
@@ -1571,21 +1886,126 @@ async def harvest_initial_buckets(
                 for b, n in boards.items()
             },
         }
-        SUBDOMAIN_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+        _atomic_write(SUBDOMAIN_CACHE_PATH, json.dumps(cache, indent=1))
+
+    started = time.monotonic()
+    stalled = 0
+
+    def prefixes_of(root: str) -> set[str]:
+        marker = f"{root}|"
+        return {entry[len(marker) :] for entry in done if entry.startswith(marker)}
+
+    async def sweep_children(root: str, prefix: str, depth: int) -> None:
+        """Read a refused or truncated shard bucket as its exclusive parts."""
+        for char in BUCKETS:
+            await walk(root, prefix + char, depth + 1)
+            if time.monotonic() - started >= budget_s:
+                return
+        if all(f"{root}|{prefix}{char}" in done for char in BUCKETS):
+            done.add(f"{root}|{prefix}")
+            save()
+            _log(
+                "shard_bucket_split_done",
+                connector=connector_id,
+                root=root,
+                bucket=prefix,
+                candidates=len(boards),
+            )
+
+    async def walk(root: str, prefix: str, depth: int) -> None:
+        nonlocal stalled
+        key = f"{root}|{prefix}"
+        if key in done or time.monotonic() - started >= budget_s:
+            return
+        if bucket_split_started(prefix, prefixes_of(root)):
+            # An earlier pass already fell back to this bucket's sub-ranges:
+            # finish those instead of re-issuing the query it refused.
+            _log("shard_bucket_split_resume", connector=connector_id, root=root, bucket=prefix)
+            await sweep_children(root, prefix, depth)
+            return
+        positive = f"original:https?://{prefix}[a-z0-9-]*[.]{root}.*"
+        # Same ladder as the single-domain sweep: the cheap shape first, and a
+        # sub-range probes once because it is one of many.
+        dense = ("dense", (positive, *cfg["filters"]))
+        plain = ("plain", (positive,))
+        shapes = (plain,) if len(prefix) > 1 else (plain, dense)
+        attempts = 1 if stalled or len(prefix) > 1 else 2
+        urls: list[str] = []
+        parsed = False
+        shape_used = ""
+        for shape, clauses in shapes:
+            params: list[tuple[str, str]] = [
+                ("url", root),
+                ("matchType", "domain"),
+                ("fl", "original"),
+                ("collapse", "urlkey"),
+                ("limit", str(CDX_LIMIT)),
+                ("output", "json"),
+            ]
+            params.extend(("filter", clause) for clause in clauses)
+            await asyncio.sleep(REQUEST_GAP_S)
+            response = await _cdx_get(
+                client, params, purpose=f"{connector_id} shard {key} {shape}", attempts=attempts
+            )
+            if response is None:
+                continue
+            urls, _next_key, parsed = _chunk_urls(response.text)
+            if not parsed:
+                continue
+            shape_used = shape
+            break
+        if not parsed:
+            if len(prefix) < BUCKET_SPLIT_DEPTH:
+                # The gateway refused the whole shard bucket: partition it so
+                # every sub-range that answers is checkpointed now.
+                _log(
+                    "shard_bucket_split",
+                    connector=connector_id,
+                    root=root,
+                    bucket=prefix,
+                    reason="refused",
+                )
+                await sweep_children(root, prefix, depth)
+                return
+            stalled += 1
+            await asyncio.sleep(BUCKET_PAUSE_S)
+            return
+        stalled = 0
+        if len(urls) >= CDX_LIMIT and depth < 2:
+            await sweep_children(root, prefix, depth)
+        before = len(boards)
+        for url in urls:
+            candidate = _subdomain_board(connector_id, url)
+            if candidate is not None:
+                boards[candidate] += 1
+        done.add(key)
+        save()
         _log(
-            "bucket_done",
+            "shard_bucket_done",
             connector=connector_id,
-            bucket=initial,
+            root=root,
+            bucket=prefix,
             shape=shape_used,
             rows=len(urls),
-            # A full allowance means the bucket was cut off mid-alphabet: its
-            # tenants are real but incomplete, and a later pass can read more.
-            truncated=len(urls) >= CDX_LIMIT,
             added=len(boards) - before,
             candidates=len(boards),
-            elapsed_s=round(time.monotonic() - started),
         )
-    _log("bucket_sweep_done", connector=connector_id, buckets=len(done), candidates=len(boards))
+
+    for root in cfg["roots"]:
+        for initial in BUCKETS:
+            await walk(root, initial, 0)
+            if time.monotonic() - started >= budget_s:
+                break
+        if time.monotonic() - started >= budget_s:
+            break
+    save()
+    _log(
+        "shard_buckets_done",
+        connector=connector_id,
+        buckets=len(done),
+        candidates=len(boards),
+        elapsed_s=round(time.monotonic() - started),
+    )
     return dict(boards)
 
 
@@ -1748,7 +2168,7 @@ async def harvest_certificates(
         if not hosts:
             return {}
         cache[connector_id] = {"hosts": sorted(hosts)}
-        CT_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+        _atomic_write(CT_CACHE_PATH, json.dumps(cache, indent=1))
 
     tenants: dict[str, str] = {}
     for host in sorted(hosts):
@@ -1765,7 +2185,7 @@ async def harvest_certificates(
             for b, n in boards.items()
         },
     }
-    CT_CACHE_PATH.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+    _atomic_write(CT_CACHE_PATH, json.dumps(cache, indent=1))
     return boards
 
 
@@ -2105,6 +2525,145 @@ async def _verify_ultipro(
     return _UNREACHABLE
 
 
+async def _verify_eightfold(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Live Eightfold board: the public ``apply/v2/jobs`` listing.
+
+    The endpoint needs the employer's web domain, which is not the tenant
+    label: the board page declares it (``"domain": "acme.com"``), and only
+    then is ``{tenant}.com`` guessed.  A board the API does not know answers
+    without a ``count``, which is not proof either way, so it is retried by a
+    later run rather than dropped.
+    """
+    parts = urlsplit(board.url)
+    host = parts.netloc.lower()
+    tenant = (board.tenant_key or board.tenant).lower()
+    edge = "/careers" if "://" not in board.url else parts.path or "/careers"
+    async with sem:
+        await asyncio.sleep(0.05)
+        domain: str | None = None
+        try:
+            page = await client.get(f"https://{host}{edge}", timeout=20.0, follow_redirects=True)
+        except httpx.HTTPError:
+            page = None
+        if page is not None and page.status_code == 200:
+            match = EIGHTFOLD_DOMAIN_RE.search(page.text)
+            if match:
+                domain = match.group(1)
+        for candidate_domain in ([domain] if domain else []) + [f"{tenant}.com"]:
+            url = (
+                f"https://{host}/api/apply/v2/jobs?"
+                f"{urlencode({'domain': candidate_domain, 'start': 0, 'num': 1})}"
+            )
+            for attempt in range(VERIFY_ATTEMPTS):
+                try:
+                    response = await client.get(url, timeout=20.0, follow_redirects=True)
+                except httpx.HTTPError:
+                    if attempt + 1 < VERIFY_ATTEMPTS:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        break
+                    if isinstance(data, dict):
+                        total = data.get("count")
+                        if isinstance(total, int):
+                            return total
+                        positions = data.get("positions")
+                        if isinstance(positions, list):
+                            return len(positions)
+                    break
+                if response.status_code in (403, 429, 500, 502, 503, 504):
+                    if attempt + 1 < VERIFY_ATTEMPTS:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+    return _UNREACHABLE
+
+
+async def _taleo_postings_of(
+    client: httpx.AsyncClient, host: str, portal: str, referer: str
+) -> int | None:
+    """A Taleo section's own posting count, from its faceted-search endpoint.
+
+    The endpoint needs the caller's time zone headers and the section's portal
+    number; without them it answers an empty frame or a bare error, so a
+    missing count is reported as unknown rather than as zero.
+    """
+    url = f"https://{host}{TALEO_SEARCH_PATH.format(portal=portal)}"
+    try:
+        response = await client.post(
+            url,
+            json={"fieldData": {}, "multilineEnabled": False, "pageNo": 1},
+            headers={
+                "content-type": "application/json",
+                "tz": "UTC",
+                "tzname": "UTC",
+                "referer": referer,
+            },
+            timeout=20.0,
+        )
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("careerSectionUnAvailable"):
+        return None
+    paging = data.get("pagingData")
+    if isinstance(paging, dict):
+        total = paging.get("totalCount")
+        if isinstance(total, int):
+            return total
+    rows = data.get("requisitionList")
+    return len(rows) if isinstance(rows, list) else None
+
+
+async def _verify_taleo(
+    client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
+) -> int | None:
+    """Live Taleo section: its own job search, counted the way it counts.
+
+    A retired section redirects to a generic Taleo page, so only an answer that
+    stays on the tenant's own host counts.  Current sections render their
+    listing client-side and name a portal id in the page; older ones still
+    serve ``jobdetail.ftl`` links, which stay the fallback count.
+    """
+    host = urlsplit(board.url).netloc.lower()
+    async with sem:
+        await asyncio.sleep(0.05)
+        for attempt in range(VERIFY_ATTEMPTS):
+            try:
+                response = await client.get(board.url, timeout=20.0, follow_redirects=True)
+            except httpx.HTTPError:
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if response.status_code == 200:
+                if urlsplit(str(response.url)).netloc.lower() != host:
+                    return None
+                portal = TALEO_PORTAL_RE.search(response.text)
+                if portal is not None:
+                    total = await _taleo_postings_of(
+                        client, host, portal.group(1), str(response.url)
+                    )
+                    if total is not None:
+                        return total
+                return len(set(TALEO_DETAIL_RE.findall(response.text)))
+            if response.status_code in (429, 500, 502, 503, 504):
+                if attempt + 1 < VERIFY_ATTEMPTS:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+    return _UNREACHABLE
+
+
 async def verify_board(
     client: httpx.AsyncClient, board: Board, sem: asyncio.Semaphore
 ) -> int | None:
@@ -2121,13 +2680,19 @@ async def verify_board(
         return await _verify_oracle(client, board, sem)
     if board.connector_id == "ats.jazzhr":
         return await _verify_jazzhr(client, board, sem)
+    if board.connector_id == "ats.eightfold":
+        return await _verify_eightfold(client, board, sem)
+    if board.connector_id == "ats.taleo":
+        return await _verify_taleo(client, board, sem)
     if board.connector_id == "ats.paylocity":
         return await _verify_paylocity(client, board, sem)
     template = API_TEMPLATES.get(board.connector_id)
     async with sem:
         await asyncio.sleep(0.05)
         if template:
+            host = urlsplit(template).netloc.lower()
             for attempt in range(VERIFY_ATTEMPTS):
+                await _pace(host)
                 try:
                     response = await client.get(
                         template.format(tenant=board.tenant),
@@ -2158,7 +2723,12 @@ async def verify_board(
 
 
 async def verify_all(
-    client: httpx.AsyncClient, boards: dict[Board, int], budget_s: float = 0.0
+    client: httpx.AsyncClient,
+    boards: dict[Board, int],
+    budget_s: float = 0.0,
+    *,
+    checkpoint: bool = True,
+    already: Sequence[tuple[Board, int]] = (),
 ) -> tuple[list[tuple[Board, int]], dict[str, int]]:
     """Verify candidates, strongest first, for at most ``budget_s`` seconds.
 
@@ -2167,15 +2737,38 @@ async def verify_all(
     does not know) so the next run can skip it.  A board the time budget
     leaves unvisited is settled neither way: it stays a candidate for the next
     run instead of being remembered as dead.
+
+    Every ``VERIFY_CHECKPOINT_EVERY`` settled boards the outcomes are merged
+    into the verified cache, so a run interrupted after hours of verifying
+    keeps everything it settled instead of starting over.  ``checkpoint=False``
+    is for ``--dry-run``, which promises not to write the cache.
+
+    ``already`` are live results a previous run settled (see ``_resume_live``):
+    they are kept in the returned list and skipped here, so an interruption
+    does not cost a second verification of every live board.
     """
     sem = asyncio.Semaphore(VERIFY_CONCURRENCY)
-    verified: list[tuple[Board, int]] = []
+    verified: list[tuple[Board, int]] = list(already)
+    skip = {_cache_key(board) for board, _count in already}
     outcomes: dict[str, int] = {}
     live_by: dict[str, int] = defaultdict(int)
     dead_by: dict[str, int] = defaultdict(int)
     unreachable_by: dict[str, int] = defaultdict(int)
     done = 0
     started = time.monotonic()
+    pending: dict[str, int] = {}
+    stored: dict[str, dict[str, object]] | None = _read_verified() if checkpoint else None
+    since_checkpoint = 0
+    board_by_key = {_cache_key(board): board for board in boards}
+
+    def flush() -> None:
+        nonlocal pending, since_checkpoint
+        if not checkpoint or not pending:
+            return
+        _checkpoint_verified(pending, stored, board_by_key)
+        _log("verify_checkpoint", settled=len(pending), total_settled=len(outcomes))
+        pending = {}
+        since_checkpoint = len(outcomes)
 
     async def check(board: Board) -> None:
         nonlocal done
@@ -2186,14 +2779,18 @@ async def verify_all(
         done += 1
         if count is None:
             outcomes[_cache_key(board)] = -1
+            pending[_cache_key(board)] = -1
             dead_by[board.connector_id] += 1
         elif count >= 0:
             verified.append((board, count))
             outcomes[_cache_key(board)] = count
+            pending[_cache_key(board)] = count
             live_by[board.connector_id] += 1
         else:
             # Neither live nor known-dead: never remembered, always retried.
             unreachable_by[board.connector_id] += 1
+        if len(outcomes) - since_checkpoint >= VERIFY_CHECKPOINT_EVERY:
+            flush()
         if done % 100 == 0 or done == len(boards):
             _log(
                 "verify_progress",
@@ -2208,7 +2805,11 @@ async def verify_all(
     # Highest-captured first: a board the archive kept meeting is likelier to
     # still be hiring than one captured once, so a budgeted run spends its
     # requests on the boards most likely to end up in the seed.
-    ordered = sorted(boards, key=lambda board: boards[board], reverse=True)
+    ordered = sorted(
+        (board for board in boards if _cache_key(board) not in skip),
+        key=lambda board: boards[board],
+        reverse=True,
+    )
     # Launch in bounded batches: creating every task at once would evaluate the
     # time budget at the only instant it is still unspent, and a paced host
     # would then keep the run going for hours regardless of it.
@@ -2223,9 +2824,11 @@ async def verify_all(
             )
             break
         await asyncio.gather(*(check(board) for board in ordered[start : start + VERIFY_BATCH]))
+    flush()
     _log(
         "verify_done",
         total=len(boards),
+        resumed=len(already),
         live=len(verified),
         dead=sum(dead_by.values()),
         unreachable=sum(unreachable_by.values()),
@@ -2240,21 +2843,25 @@ async def verify_all(
 # -------------------------------------------------------------------- output
 
 
-def _seed_entry(board: Board, jobs: int) -> dict[str, object]:
-    hint = _company_hint(board.tenant)
-    if board.connector_id == "ats.ultipro" and any(char.isdigit() for char in board.tenant):
-        # UKG Pro employers are addressed by opaque codes (``ACME1002``),
-        # which are not readable company names.
-        hint = None
-    entry: dict[str, object] = {
-        "url": board.url,
-        "company_hint": hint,
-        "ats_hint": board.connector_id,
-        "confidence": 0.9 if jobs else 0.6,
-    }
-    if board.tenant_key:
-        entry["tenant_key"] = board.tenant_key
-    return entry
+def _record_for(board: Board, jobs: int, verified_at: str) -> SeedRecord:
+    """One shard record: the board, its observed posting count and the date.
+
+    The count is what makes the ranking real: a board with openings sorts
+    above a live-but-empty one, and an empty board keeps its dated zero instead
+    of being dropped (it is future supply).
+    """
+    tenant = board.tenant
+    if board.connector_id == "ats.ultipro" and any(char.isdigit() for char in tenant):
+        # UKG Pro employers are addressed by opaque codes (``ACME1002``).
+        tenant = ""
+    return SeedRecord(
+        connector_id=board.connector_id,
+        url=board.url,
+        postings=max(0, jobs),
+        verified_at=verified_at,
+        tenant=tenant or None,
+        tenant_key=board.tenant_key,
+    )
 
 
 def _company_hint(tenant: str) -> str | None:
@@ -2277,62 +2884,84 @@ def _is_uuid(value: str) -> bool:
     )
 
 
-def _shipped_rows() -> list[dict[str, object]]:
-    """The seed file as it is right now, for merging a fresh ranking into it."""
+def _existing_records() -> list[SeedRecord]:
+    """The seed as it is right now (shards, or the legacy single file)."""
+    if (SEEDS_DIR / "manifest.json").exists():
+        try:
+            return read_all_records(SEEDS_DIR)
+        except Exception as exc:  # noqa: BLE001 - a broken seed must be reported, not fatal
+            _log("seed_shards_unreadable", error=type(exc).__name__, detail=str(exc))
+            return []
     try:
         rows = json.loads(SEEDS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    return records_from_legacy_rows([row for row in rows if isinstance(row, dict)])
 
 
-def _has_postings(row: dict[str, object]) -> bool:
-    confidence = row.get("confidence", 0.9)
-    return (
-        not isinstance(confidence, bool)
-        and isinstance(confidence, (int, float))
-        and confidence >= 0.9
-    )
+def _board_from_seed(connector_id: str, url: str, tenant_key: str | None) -> Board | None:
+    """Reconstruct a board from a stored row, for identity-based merging."""
+    if connector_id == "ats.ultipro":
+        return _ultipro_board(url)
+    if connector_id == "ats.oracle_recruiting":
+        return _oracle_board(url)
+    if connector_id == "ats.paylocity":
+        return _paylocity_board(url)
+    if connector_id in SUBDOMAIN_ATS:
+        board = _subdomain_board(connector_id, url)
+        if board is None:
+            return None
+        return Board(board.connector_id, board.tenant, board.url, tenant_key or board.tenant_key)
+    segments = [part for part in urlsplit(url).path.split("/") if part]
+    if not segments:
+        return None
+    return Board(connector_id, segments[0], url, tenant_key)
 
 
-def _interleave(
-    existing: list[dict[str, object]], new: list[dict[str, object]]
-) -> list[dict[str, object]]:
-    """Place freshly verified rows in the shipped largest-first ranking.
+def _merge_records(fresh: list[SeedRecord], existing: list[SeedRecord]) -> list[SeedRecord]:
+    """Merge a fresh ranking into the shipped one by *board identity*.
 
-    A previously written row no longer carries its posting count, so only the
-    two tiers it was written in survive: boards with postings (confidence 0.9)
-    belong above the first zero-posting row, and zero-posting boards go last.
+    Keying on the URL would duplicate a Workday board seen through another
+    locale/shard or a Greenhouse board seen on its sibling host; the same
+    identity rule the runtime uses keeps one row per board.  A freshly
+    verified row always replaces the old one.
     """
-    split = next(
-        (index for index, row in enumerate(existing) if not _has_postings(row)),
-        len(existing),
-    )
-    with_postings = [row for row in new if _has_postings(row)]
-    empty = [row for row in new if not _has_postings(row)]
-    return existing[:split] + with_postings + existing[split:] + empty
+    merged: dict[tuple[str, ...], SeedRecord] = {}
+    for record in existing:
+        board = _board_from_seed(record.connector_id, record.url, record.tenant_key)
+        key = board.dedupe_key if board is not None else (record.connector_id, record.url)
+        merged[key] = record
+    for record in fresh:
+        board = _board_from_seed(record.connector_id, record.url, record.tenant_key)
+        key = board.dedupe_key if board is not None else (record.connector_id, record.url)
+        merged[key] = record
+    return list(merged.values())
 
 
 def _write(
     verified: list[tuple[Board, int]],
     limit: int,
     merge_existing: bool = False,
+    *,
+    min_postings: int = 0,
 ) -> None:
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     ranked = sorted(verified, key=lambda item: item[1], reverse=True)
+    if min_postings > 0:
+        ranked = [(board, jobs) for board, jobs in ranked if jobs >= min_postings]
     if limit > 0:
         ranked = ranked[:limit]
-    seeds = [_seed_entry(board, jobs) for board, jobs in ranked]
-    if merge_existing:
-        seeds = _interleave(_shipped_rows(), seeds)
-    SEEDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SEEDS_PATH.write_text(json.dumps(seeds, indent=2) + "\n", encoding="utf-8")
+    fresh = [_record_for(board, jobs, today) for board, jobs in ranked]
+    records = _merge_records(fresh, _existing_records()) if merge_existing else fresh
+    manifest = write_seed_shards(SEEDS_DIR, records, zero_unconfident=ZERO_UNCONFIDENT)
     by_connector: dict[str, int] = defaultdict(int)
     for board, _jobs in ranked:
         by_connector[board.connector_id] += 1
     _log(
         "write",
-        path=str(SEEDS_PATH),
-        rows=len(seeds),
+        path=str(SEEDS_DIR),
+        rows=manifest.total,
+        hiring=manifest.hiring_total,
         added=len(ranked),
         merged=merge_existing,
         by_connector=dict(sorted(by_connector.items())),
@@ -2340,63 +2969,60 @@ def _write(
     _log("top_boards", boards=[f"{board.url} ({jobs})" for board, jobs in ranked[:10]])
 
 
-def _load_candidates() -> dict[Board, int]:
-    """Candidates from the shipped seed file (used by ``--refresh``)."""
-    try:
-        seeds = json.loads(SEEDS_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    known = (
-        {connector for _host, connector in SEED_ATS_HOSTS}
-        | set(SUBDOMAIN_ATS)
-        | {"ats.ultipro", "ats.oracle_recruiting", "ats.paylocity"}
+def _write_report(
+    path: str,
+    *,
+    mode: str,
+    candidates: dict[Board, int],
+    verified: list[tuple[Board, int]],
+    outcomes: dict[str, int],
+    limit: int,
+    min_postings: int,
+) -> dict[str, object]:
+    """Per-connector measurement of a run, written before anything is shipped."""
+    by_connector: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"live": 0, "hiring": 0, "empty": 0, "dead": 0, "unreachable": 0}
     )
-    boards: dict[Board, int] = {}
-    for seed in seeds if isinstance(seeds, list) else []:
-        if not isinstance(seed, dict):
+    for board, jobs in verified:
+        entry = by_connector[board.connector_id]
+        entry["live"] += 1
+        entry["hiring" if jobs > 0 else "empty"] += 1
+    live = {_cache_key(board) for board, _jobs in verified}
+    for board in candidates:
+        key = _cache_key(board)
+        if key in live:
             continue
-        url, connector_id = seed.get("url"), seed.get("ats_hint")
-        if not isinstance(url, str) or not isinstance(connector_id, str):
-            continue
-        if connector_id not in known:
-            continue
-        if connector_id == "ats.ultipro":
-            board = _ultipro_board(url)
-            if board is not None:
-                boards[board] = 1
-            continue
-        if connector_id == "ats.oracle_recruiting":
-            # Site codes live in the path, so the fixed-host reading below
-            # would collapse every Oracle row onto one bogus tenant.
-            board = _oracle_board(url)
-            if board is not None:
-                boards[board] = 1
-            continue
-        if connector_id == "ats.paylocity":
-            board = _paylocity_board(url)
-            if board is not None:
-                boards[board] = 1
-            continue
-        host = urlsplit(url).netloc.lower()
-        tenant: str | None = None
-        if connector_id in SUBDOMAIN_ATS:
-            suffix = "." + SUBDOMAIN_ATS[connector_id]["domain"]
-            if host.endswith(suffix):
-                tenant = host[: -len(suffix)].split(".")[0]
+        if key in outcomes:
+            if _entry_count(outcomes[key]) < 0:
+                by_connector[board.connector_id]["dead"] += 1
         else:
-            segments = [part for part in urlsplit(url).path.split("/") if part]
-            tenant = segments[0] if segments else None
-        if not tenant:
-            continue
-        tenant_key = seed.get("tenant_key")
-        boards[
-            Board(
-                connector_id,
-                tenant,
-                url,
-                tenant_key if isinstance(tenant_key, str) and tenant_key else None,
-            )
-        ] = 1
+            by_connector[board.connector_id]["unreachable"] += 1
+    eligible = [jobs for _board, jobs in verified if jobs >= min_postings]
+    report: dict[str, object] = {
+        "mode": mode,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "candidates": len(candidates),
+        "live": len(verified),
+        "hiring": sum(1 for _board, jobs in verified if jobs > 0),
+        "empty": sum(1 for _board, jobs in verified if jobs == 0),
+        "dead": sum(1 for value in outcomes.values() if _entry_count(value) < 0),
+        "unreachable": sum(1 for board in candidates if _cache_key(board) not in outcomes),
+        "would_write": min(limit, len(eligible)) if limit > 0 else len(eligible),
+        "min_postings": min_postings,
+        "by_connector": {key: dict(value) for key, value in sorted(by_connector.items())},
+    }
+    if path:
+        _atomic_write(Path(path), json.dumps(report, indent=2) + "\n")
+    return report
+
+
+def _load_candidates() -> dict[Board, int]:
+    """Candidates from the shipped seed (used by ``--refresh``)."""
+    boards: dict[Board, int] = {}
+    for record in _existing_records():
+        board = _board_from_seed(record.connector_id, record.url, record.tenant_key)
+        if board is not None:
+            boards[board] = record.postings
     return boards
 
 
@@ -2405,23 +3031,228 @@ def _cache_key(board: Board) -> str:
     return "|".join(board.dedupe_key)
 
 
-def _read_verified() -> dict[str, int]:
+#: URL shapes whose board identity *is* the settled cache key, so a board the
+#: cache settled as dead can be asked again without harvesting anything.  A
+#: measured audit of the dead pool found a quarter of it live (a Workable
+#: widget endpoint that 404'd during a bad window settled 10,000 boards dead),
+#: and a settle-for-ever cache hid every one of them.
+_KEY_BOARD_TEMPLATES: dict[str, str] = {
+    "ats.greenhouse": "https://boards.greenhouse.io/{tenant}",
+    "ats.lever": "https://jobs.lever.co/{tenant}",
+    "ats.ashby": "https://jobs.ashbyhq.com/{tenant}",
+    "ats.workable": "https://apply.workable.com/{tenant}",
+    "ats.smartrecruiters": "https://jobs.smartrecruiters.com/{tenant}",
+    "ats.bamboohr": "https://{tenant}.bamboohr.com",
+    "ats.icims": "https://{tenant}.icims.com",
+    "ats.jazzhr": "https://{tenant}.applytojob.com/apply",
+    "ats.eightfold": "https://{tenant}.eightfold.ai/careers",
+    "ats.paylocity": "https://recruiting.paylocity.com/recruiting/jobs/all/{tenant}",
+}
+
+
+def _dead_board(key: str) -> Board | None:
+    """The board a settled cache key names, when the key determines its URL.
+
+    Workday's identity drops the shard and UKG Pro's drops the employer code,
+    so neither can be rebuilt from the key alone; those entries are left to a
+    harvest, which is where their URL comes from in the first place.
+    """
+    parts = key.split("|")
+    connector = parts[0] if parts else ""
+    if connector == "ats.workday" or connector == "ats.ultipro":
+        return None
+    if connector == "ats.taleo" and len(parts) == 3:
+        url = f"https://{parts[1]}.taleo.net/careersection/{parts[2]}"
+        return _board_from_seed(connector, url, f"{parts[1]}|{parts[2]}")
+    if connector == "ats.oracle_recruiting" and len(parts) == 3:
+        url = f"https://{parts[1]}/hcmUI/CandidateExperience/en/sites/{parts[2]}"
+        return _board_from_seed(connector, url, None)
+    template = _KEY_BOARD_TEMPLATES.get(connector)
+    if template is None or len(parts) != 2:
+        return None
+    return _board_from_seed(connector, template.format(tenant=parts[1]), None)
+
+
+def _dead_candidates(
+    checked: Mapping[str, object],
+    only: set[str] | None = None,
+) -> tuple[dict[Board, int], dict[str, int]]:
+    """Boards the cache settled as dead, rebuilt so this run can ask again.
+
+    Returns the candidates and the count of entries whose identity cannot name
+    a URL, per connector, so the run log says what it could not reopen.
+    ``only`` narrows the pool to named connectors: a measured error in one
+    ATS's verifier should not spend an hour re-probing the other pools.
+    """
+    boards: dict[Board, int] = {}
+    skipped: dict[str, int] = defaultdict(int)
+    for key, value in checked.items():
+        if _entry_count(value) >= 0:
+            continue
+        connector = key.split("|")[0]
+        if only is not None and connector not in only:
+            continue
+        board = _dead_board(key)
+        if board is None:
+            skipped[connector] += 1
+            continue
+        boards[board] = 1
+    return boards, dict(sorted(skipped.items()))
+
+
+def _read_verified() -> dict[str, dict[str, object]]:
+    """Settled boards: ``{identity: {"count": n, "at": ISO}}``.
+
+    Older runs wrote a bare integer per board.  Those entries are stamped with
+    the cache file's mtime rather than being trusted forever: otherwise a dead
+    board settled by an old run would never be re-checked, silently disabling
+    ``--recheck-dead-after-days``.  The mtime is when the evidence was last
+    written, which is the best timestamp a legacy entry has.
+    """
     try:
         raw = json.loads(VERIFIED_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(raw, dict):
         return {}
-    return {str(key): value for key, value in raw.items() if isinstance(value, int)}
+    legacy_at = ""
+    if any(isinstance(value, int) for value in raw.values()):
+        try:
+            legacy_at = datetime.fromtimestamp(VERIFIED_PATH.stat().st_mtime, UTC).isoformat(
+                timespec="seconds"
+            )
+        except OSError:
+            legacy_at = datetime.now(UTC).isoformat(timespec="seconds")
+    entries: dict[str, dict[str, object]] = {}
+    for key, value in raw.items():
+        if isinstance(value, int):
+            entries[str(key)] = {"count": value, "at": legacy_at}
+        elif isinstance(value, dict) and isinstance(value.get("count"), int):
+            entry: dict[str, object] = {
+                "count": value["count"],
+                "at": str(value.get("at") or ""),
+            }
+            # Enough to rebuild the Board, so an interrupted run can write the
+            # live boards it already verified instead of verifying them again.
+            for field in ("url", "tenant", "connector", "tenant_key"):
+                if isinstance(value.get(field), str):
+                    entry[field] = value[field]
+            entries[str(key)] = entry
+    return entries
 
 
-def _checkpoint_verified(outcomes: dict[str, int]) -> None:
-    """Remember what this run settled so the next one can skip it."""
+def _entry_board(value: object) -> Board | None:
+    """The board a settled live entry describes, when the entry carries one."""
+    if not isinstance(value, dict):
+        return None
+    connector = value.get("connector")
+    url = value.get("url")
+    tenant = value.get("tenant")
+    tenant_key = value.get("tenant_key")
+    if not all(isinstance(item, str) and item for item in (connector, url, tenant)):
+        return None
+    return Board(
+        str(connector),
+        str(tenant),
+        str(url),
+        str(tenant_key) if isinstance(tenant_key, str) and tenant_key else None,
+    )
+
+
+def _resume_live(
+    checked: Mapping[str, object],
+    *,
+    days: int = RESUME_LIVE_DAYS,
+    now: datetime | None = None,
+) -> list[tuple[Board, int]]:
+    """Live boards a previous (possibly interrupted) run already verified.
+
+    Only fresh entries are reused: their posting count is written to the
+    shards exactly as if this run had probed the board.  Dead entries are not
+    included -- ``_new_only`` handles them with the re-check window.
+    """
+    moment = now or datetime.now(UTC)
+    resumed: list[tuple[Board, int]] = []
+    for value in checked.values():
+        count = _entry_count(value)
+        if count < 0:
+            continue
+        board = _entry_board(value)
+        if board is None:
+            continue
+        at = _entry_at(value)
+        if days > 0 and at:
+            try:
+                settled = datetime.fromisoformat(at.replace("Z", "+00:00"))
+            except ValueError:
+                settled = None
+            if settled is not None:
+                if settled.tzinfo is None:
+                    settled = settled.replace(tzinfo=UTC)
+                if (moment - settled).days >= days:
+                    continue
+        resumed.append((board, count))
+    return resumed
+
+
+def _entry_count(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("count"), int):
+        return int(value["count"])  # type: ignore[arg-type]
+    return 0
+
+
+def _entry_at(value: object) -> str:
+    if isinstance(value, dict):
+        raw = value.get("at")
+        return raw if isinstance(raw, str) else ""
+    return ""
+
+
+def _dead_is_current(value: object, *, days: int, now: datetime) -> bool:
+    """Whether a settled-dead board is still inside its re-check window."""
+    if days <= 0:
+        return False
+    at = _entry_at(value)
+    if not at:
+        return True  # legacy entry without a timestamp: trust it once more
+    try:
+        moment = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return (now - moment).days < days
+
+
+def _checkpoint_verified(
+    outcomes: dict[str, int],
+    stored: dict[str, dict[str, object]] | None = None,
+    boards: Mapping[str, Board] | None = None,
+) -> None:
+    """Remember what this run settled, and when, so the next one can skip it.
+
+    ``stored`` lets a long verification pass keep the cache in memory and only
+    pay for serialisation, instead of re-reading a multi-megabyte file for
+    every checkpoint.  ``boards`` adds enough identity to rebuild a live board
+    on resume, so an interrupted run does not have to verify it again.
+    """
     if not outcomes:
         return
-    stored = _read_verified()
-    stored.update(outcomes)
-    VERIFIED_PATH.write_text(json.dumps(stored, indent=1), encoding="utf-8")
+    stamp = datetime.now(UTC).isoformat(timespec="seconds")
+    entries = _read_verified() if stored is None else stored
+    for key, count in outcomes.items():
+        entry: dict[str, object] = {"count": count, "at": stamp}
+        board = boards.get(key) if boards is not None else None
+        if board is not None:
+            entry["url"] = board.url
+            entry["tenant"] = board.tenant
+            entry["connector"] = board.connector_id
+            if board.tenant_key:
+                entry["tenant_key"] = board.tenant_key
+        entries[key] = entry
+    _atomic_write(VERIFIED_PATH, json.dumps(entries, indent=1))
 
 
 def _by_connector(boards: dict[Board, int]) -> dict[str, int]:
@@ -2434,17 +3265,27 @@ def _by_connector(boards: dict[Board, int]) -> dict[str, int]:
 def _new_only(
     candidates: dict[Board, int],
     shipped: dict[Board, int],
-    checked: dict[str, int] | None = None,
+    checked: Mapping[str, object] | None = None,
+    *,
+    recheck_dead_days: int = RECHECK_DEAD_DAYS,
+    now: datetime | None = None,
 ) -> dict[Board, int]:
     """The candidates the shipped seed does not already cover.
 
     Keyed on ``Board.dedupe_key``, not URL, so another locale or shard of a
     board already in the file is neither re-verified nor re-added.  A board a
-    previous run settled as *dead* is skipped too; one it settled as live is
-    not, because a live board missing from the file has to be put back.
+    previous run settled as *dead* is skipped while its evidence is current;
+    after ``recheck_dead_days`` it is asked again, because a retired tenant can
+    reopen.  A board settled as live is never skipped (a live board missing
+    from the file has to be put back).
     """
     present = {_cache_key(board) for board in shipped}
-    dead = {key for key, jobs in (checked or {}).items() if jobs < 0}
+    moment = now or datetime.now(UTC)
+    dead = {
+        key
+        for key, value in (checked or {}).items()
+        if _entry_count(value) < 0 and _dead_is_current(value, days=recheck_dead_days, now=moment)
+    }
     return {
         board: count
         for board, count in candidates.items()
@@ -2497,6 +3338,14 @@ async def main() -> None:
         help="skip harvest: re-verify and re-rank the shipped seed file",
     )
     parser.add_argument(
+        "--refresh-connectors",
+        default="",
+        help=(
+            "comma-separated connectors --refresh should re-verify, e.g. "
+            "ats.taleo; their rows are merged back instead of replacing the seed"
+        ),
+    )
+    parser.add_argument(
         "--skip-fixed",
         action="store_true",
         help=(
@@ -2526,14 +3375,34 @@ async def main() -> None:
     parser.add_argument(
         "--bamboohr-chunks",
         type=int,
-        default=0,
+        default=6,
         help="10,000-row CDX chunks to walk for BambooHR (0 disables)",
     )
     parser.add_argument(
         "--ultipro-chunks",
         type=int,
-        default=12,
+        default=24,
         help="10,000-row CDX chunks to walk for UKG Pro/UltiPro (0 disables)",
+    )
+    parser.add_argument(
+        "--eightfold-chunks",
+        type=int,
+        default=12,
+        help="10,000-row CDX chunks to walk for Eightfold (0 disables)",
+    )
+    parser.add_argument(
+        "--taleo-chunks",
+        type=int,
+        default=6,
+        help="10,000-row CDX chunks to walk for Taleo (0 disables)",
+    )
+    parser.add_argument(
+        "--workday-buckets",
+        action="store_true",
+        help=(
+            "walk Workday by shard and tenant initial (with bucket splitting) "
+            "instead of by filtered chunk"
+        ),
     )
     parser.add_argument(
         "--bucket-sweep",
@@ -2552,7 +3421,7 @@ async def main() -> None:
     parser.add_argument(
         "--jazzhr-chunks",
         type=int,
-        default=0,
+        default=12,
         help="10,000-row CDX chunks to walk for JazzHR (0 disables)",
     )
     parser.add_argument(
@@ -2579,12 +3448,69 @@ async def main() -> None:
             "stops and writes what it has (default: %(default)s)"
         ),
     )
+    parser.add_argument(
+        "--min-postings",
+        type=int,
+        default=0,
+        help="omit live boards below this posting count (0 keeps every live board)",
+    )
+    parser.add_argument(
+        "--recheck-dead",
+        action="store_true",
+        help=(
+            "ask the boards settled dead again, rebuilt from their cached "
+            "identity (needs --incremental; pairs with --recheck-dead-after-days 0)"
+        ),
+    )
+    parser.add_argument(
+        "--recheck-dead-connectors",
+        default="",
+        help=(
+            "comma-separated connectors to reopen, e.g. ats.workable; "
+            "the rest of the dead pool stays settled"
+        ),
+    )
+    parser.add_argument(
+        "--recheck-dead-after-days",
+        type=int,
+        default=RECHECK_DEAD_DAYS,
+        help=(
+            "re-verify a board settled as dead after this many days "
+            "(0 always rechecks; default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="verify and report without writing shards or the verified cache",
+    )
+    parser.add_argument(
+        "--report",
+        default="",
+        help="write the per-connector run report here (JSON)",
+    )
     args = parser.parse_args()
     if args.refresh and args.incremental:
         parser.error("--refresh and --incremental are mutually exclusive")
+    if args.recheck_dead and not args.incremental:
+        parser.error("--recheck-dead needs --incremental: the settled cache is its input")
+    if args.recheck_dead_connectors and not args.recheck_dead:
+        parser.error("--recheck-dead-connectors only narrows --recheck-dead")
+    if args.refresh_connectors and not args.refresh:
+        parser.error("--refresh-connectors only narrows --refresh")
 
     LOG_PATH = Path(args.log_file)
-    checked: dict[str, int] = _read_verified() if args.incremental else {}
+    checked: dict[str, dict[str, object]] = _read_verified() if args.incremental else {}
+    # A previous run may have verified thousands of live boards before it was
+    # interrupted; reuse those results instead of probing them again.
+    resumed = _resume_live(checked) if args.incremental else []
+    resumed_keys = {_cache_key(board) for board, _count in resumed}
+    if resumed:
+        _log(
+            "resume_live",
+            boards=len(resumed),
+            by_connector=_by_connector({board: 1 for board, _count in resumed}),
+        )
     mode = "refresh" if args.refresh else "incremental" if args.incremental else "harvest"
     _log("run_start", mode=mode, argv=" ".join(sys.argv[1:]))
 
@@ -2594,6 +3520,24 @@ async def main() -> None:
     ) as client:
         if args.refresh:
             candidates = _load_candidates()
+            if args.refresh_connectors:
+                # Re-measuring one connector (after its posting counter was
+                # repaired) must not re-probe -- or replace -- the other 50,000
+                # boards, so the rest of the shipped seed is carried over.
+                wanted = {
+                    item.strip() for item in args.refresh_connectors.split(",") if item.strip()
+                }
+                candidates = {
+                    board: count
+                    for board, count in candidates.items()
+                    if board.connector_id in wanted
+                }
+                _log(
+                    "refresh_connectors",
+                    requested=sorted(wanted),
+                    matched=len(candidates),
+                    by_connector=_by_connector(candidates),
+                )
             _log(
                 "refresh",
                 boards=len(candidates),
@@ -2613,6 +3557,9 @@ async def main() -> None:
                 or bool(args.bucket_sweep)
                 or args.oracle_chunks > 0
                 or args.jazzhr_chunks > 0
+                or args.eightfold_chunks > 0
+                or args.taleo_chunks > 0
+                or args.workday_buckets
                 or args.paylocity_chunks > 0
             ):
                 _log("preflight_start")
@@ -2670,6 +3617,8 @@ async def main() -> None:
                 ("ats.bamboohr", args.bamboohr_chunks),
                 ("ats.oracle_recruiting", args.oracle_chunks),
                 ("ats.jazzhr", args.jazzhr_chunks),
+                ("ats.eightfold", args.eightfold_chunks),
+                ("ats.taleo", args.taleo_chunks),
             ):
                 found: dict[Board, int] = {}
                 if connector_id == "ats.icims" and not args.no_ct:
@@ -2694,6 +3643,16 @@ async def main() -> None:
                 )
                 _log("bucket_sweep_candidates", connector=swept_id, candidates=len(swept))
                 subdomains.update(swept)
+            if args.workday_buckets:
+                shard_swept = await harvest_shard_buckets(
+                    client, "ats.workday", args.bucket_budget_s
+                )
+                _log(
+                    "shard_bucket_candidates",
+                    connector="ats.workday",
+                    candidates=len(shard_swept),
+                )
+                subdomains.update(shard_swept)
             if args.ultipro_chunks > 0:
                 ultipro = await harvest_path_boards(
                     client, "ats.ultipro", args.ultipro_chunks, args.resume
@@ -2708,6 +3667,21 @@ async def main() -> None:
                 subdomains.update(paylocity)
             shipped = _load_candidates()
             candidates = _merge(shipped, fixed, subdomains)
+            if args.recheck_dead:
+                # A board settled dead is skipped by ``_new_only`` while its
+                # evidence is current, so reopening the pool has to happen
+                # before that filter: rebuild the boards from the cache keys
+                # and let the same re-check window decide.
+                wanted = {
+                    item.strip() for item in args.recheck_dead_connectors.split(",") if item.strip()
+                }
+                reopened, unrebuildable = _dead_candidates(checked, wanted or None)
+                candidates = _merge(candidates, reopened)
+                _log(
+                    "dead_recheck_candidates",
+                    candidates=len(reopened),
+                    unrebuildable=unrebuildable,
+                )
             _log(
                 "candidates",
                 total=len(candidates),
@@ -2715,23 +3689,69 @@ async def main() -> None:
                 by_connector=_by_connector(candidates),
             )
             if args.incremental:
-                candidates = _new_only(candidates, shipped, checked)
+                candidates = {
+                    board: count
+                    for board, count in candidates.items()
+                    if _cache_key(board) not in resumed_keys
+                }
+                candidates = _new_only(
+                    candidates,
+                    shipped,
+                    checked,
+                    recheck_dead_days=args.recheck_dead_after_days,
+                )
                 _log(
                     "incremental_filter",
                     candidates=len(candidates),
                     skipped=len(checked),
+                    resumed=len(resumed),
                     by_connector=_by_connector(candidates),
                 )
 
-        if not candidates:
+        if not candidates and not resumed:
             _log("no_candidates")
             return
 
         _log("verify_start", candidates=len(candidates), by_connector=_by_connector(candidates))
-        verified, outcomes = await verify_all(client, candidates, args.verify_budget_s)
-    _checkpoint_verified(outcomes)
+        verified, outcomes = await verify_all(
+            client,
+            candidates,
+            args.verify_budget_s,
+            checkpoint=not args.dry_run,
+            already=resumed,
+        )
 
-    _write(verified, args.limit, merge_existing=args.incremental)
+    report = _write_report(
+        args.report,
+        mode=mode,
+        candidates=candidates,
+        verified=verified,
+        outcomes=outcomes,
+        limit=args.limit,
+        min_postings=args.min_postings,
+    )
+    _log(
+        "run_report",
+        live=report["live"],
+        hiring=report["hiring"],
+        empty=report["empty"],
+        dead=report["dead"],
+        unreachable=report["unreachable"],
+        would_write=report["would_write"],
+    )
+    if args.dry_run:
+        _log("dry_run_end", mode=mode, verified=len(verified), report=args.report or None)
+        return
+    checkpoint_boards = {_cache_key(board): board for board in candidates}
+    checkpoint_boards.update({_cache_key(board): board for board, _count in resumed})
+    _checkpoint_verified(outcomes, None, checkpoint_boards)
+
+    _write(
+        verified,
+        args.limit,
+        merge_existing=args.incremental or bool(args.refresh_connectors),
+        min_postings=args.min_postings,
+    )
     _log("run_end", mode=mode, verified=len(verified))
 
 

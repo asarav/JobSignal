@@ -47,6 +47,23 @@ Posting intelligence history is append-only: `posting_signals`,
 Migrations are forward-only. Back up the data directory before upgrading if you
 want a rollback path; see ADR-0012 for why updates are manual.
 
+Every startup runs `PRAGMA quick_check`. A damaged database blocks startup with
+instructions to restore from `<data dir>/backups`; the app does not accept new
+writes into a file it cannot trust. Automatic backups run weekly by default and
+keep the four newest automatic archives.
+
+## Deleting everything
+
+Settings → Data & backup → **Delete all local data** requires typing `DELETE`.
+The supervisor stops the worker, waits for it to exit, removes every entry in
+the local data directory (database, backups and logs), recreates the directory
+and starts a fresh worker. Nothing outside that directory is touched. The
+browser preview refuses and says the feature is only in the desktop app. See
+[ADR-0017](adr/0017-delete-all-local-data.md).
+
+The wider security review — IPC fuzzing, the XSS corpus, audits and residual
+risks — is in [security-review.md](security-review.md).
+
 ## Reporting
 
 This is a local tool with no server component. If you find a safety issue — for

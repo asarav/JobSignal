@@ -80,6 +80,16 @@ class InMemoryBackupStore:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         return resolved
 
+    def auto_archives(self) -> list[Path]:
+        folder = (self._data_dir / "backups").resolve()
+        if not folder.is_dir():
+            return []
+        return sorted(folder.glob("jobsignal-auto-*.json"), key=lambda item: item.name)
+
+    def delete_archive(self, path: Path | str) -> None:
+        target = self.resolve_path(str(path))
+        target.unlink(missing_ok=True)
+
     async def write_archive(self, archive: Mapping[str, Any], path: str) -> str:
         target = self.resolve_path(path)
         target.write_text(json.dumps(archive, sort_keys=True), encoding="utf-8")

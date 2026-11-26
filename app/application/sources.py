@@ -93,6 +93,7 @@ class SourceRegistry:
         company_id: str | None = None,
         interval_s: float = DEFAULT_CRAWL_INTERVAL_S,
         tenant_key: str | None = None,
+        record_interest: bool = True,
     ) -> SourceConfig:
         if connector_id is None:
             # Unknown ATS: fall back to the generic career-site connector.
@@ -109,11 +110,36 @@ class SourceRegistry:
         async with self._uow_factory() as uow:
             await uow.sources.add(source)
             await uow.commit()
+        if record_interest:
+            # A source the user adds by hand is the clearest signal of which
+            # ATS (and therefore which index slices) is worth walking next.
+            # Discovery's own registrations pass ``False`` so it does not learn
+            # from itself.
+            await self._record_interest(connector_id)
         return source
+
+    async def _record_interest(self, connector_id: str | None) -> None:
+        key = (connector_id or "").strip()
+        if not key:
+            return
+        try:
+            async with self._uow_factory() as uow:
+                stored = await uow.settings.get("discovery_interest") or {}
+                counts = dict(stored) if isinstance(stored, dict) else {}
+                counts[key] = int(counts.get(key, 0)) + 1
+                await uow.settings.put("discovery_interest", counts)
+                await uow.commit()
+        except Exception:  # noqa: BLE001 - a signal must never fail a source add
+            return
 
     async def list_sources(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
         async with self._uow_factory() as uow:
             return await uow.sources.list(enabled_only=enabled_only)
+
+    async def list_archived(self) -> Sequence[SourceConfig]:
+        """Removed sources, so discovery does not re-add what the user deleted."""
+        async with self._uow_factory() as uow:
+            return await uow.sources.list(include_archived=True, archived_only=True)
 
     async def get(self, source_id: str) -> SourceConfig | None:
         async with self._uow_factory() as uow:

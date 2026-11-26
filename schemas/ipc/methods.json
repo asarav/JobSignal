@@ -506,6 +506,13 @@
       "response_schema": "schemas/ipc/companies/companies_get_detail_response.json"
     },
     {
+      "method": "companies.get_trend",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/companies/companies_get_trend_request.json",
+      "response_schema": "schemas/ipc/companies/companies_get_trend_response.json"
+    },
+    {
       "method": "companies.merge",
       "long_running": false,
       "timeout_s": 60.0,

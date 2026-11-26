@@ -76,8 +76,13 @@ SLICE_CONCURRENCY = 3
 #: Seconds between slice starts; paces the fan-out without serializing it.
 SLICE_STAGGER_S = 1.0
 
-#: Rows requested per Common Crawl query (a fast, columnar index server).
+#: Rows requested per Common Crawl page (a fast, columnar index server).
 CC_LIMIT = 200
+
+#: Pages requested per slice.  The index paginates at ``limit`` rows a page, so
+#: one 200-row page saw only a fraction of a bucket; a bounded sweep of pages
+#: names several times more tenants for the same slice without a second host.
+CC_PAGES = 5
 
 #: Rows requested per CDX query.  Measured against the Internet Archive
 #: gateway: ``limit=10000`` answers in ~13 s (23 s for 5,000) and returns a
@@ -87,11 +92,13 @@ CC_LIMIT = 200
 #: seed list came out undersized.
 CDX_LIMIT = 10000
 
-#: CDX fallback queries one pass may spend.  Each takes seconds to tens of
-#: seconds even at the high row limit, so a run of empty-or-failed Common
-#: Crawl slices must not turn the pass into a serial CDX crawl; the unserved
-#: slices are simply skipped this pass and revisited when the cursor wraps.
-MAX_CDX_FALLBACKS = 4
+#: CDX fallback queries one pass may spend by default.  Each takes seconds to
+#: tens of seconds even at the high row limit, so a run of empty-or-failed
+#: Common Crawl slices must not turn the pass into a serial CDX crawl; the
+#: unserved slices are skipped this pass and revisited when the cursor wraps.
+#: The runtime raises it (``web_index_cdx_per_pass``) when the pass has budget
+#: left after its Common Crawl work instead of spending a fixed 4.
+MAX_CDX_FALLBACKS = 8
 
 #: Wall-clock budget for the whole pass (the discovery call timeout is
 #: 300 s; the provider stops starting expensive fallbacks well before it).
@@ -138,6 +145,8 @@ class WebIndexProvider:
         *,
         limit: int = 200,
         cdx_limit: int = CDX_LIMIT,
+        pages: int = CC_PAGES,
+        cdx_per_pass: int = MAX_CDX_FALLBACKS,
         timeout_s: float = 45.0,
         cdx_timeout_s: float = 60.0,
         cdx_retry_delay_s: float = 5.0,
@@ -145,6 +154,8 @@ class WebIndexProvider:
         self._hosts = tuple(hosts) or DEFAULT_ATS_HOSTS
         self._endpoint = endpoint.rstrip("/")
         self._limit = max(1, limit)
+        self._pages = max(1, pages)
+        self._cdx_per_pass = max(0, cdx_per_pass)
         self._cdx_limit = max(1, cdx_limit)
         self._timeout_s = timeout_s
         self._cdx_timeout_s = cdx_timeout_s
@@ -184,7 +195,7 @@ class WebIndexProvider:
         semaphore = asyncio.Semaphore(SLICE_CONCURRENCY)
         seen: set[tuple[str, str]] = set()
         shared: dict[str, object] = {
-            "cdx_left": MAX_CDX_FALLBACKS,
+            "cdx_left": self._cdx_per_pass,
             "deadline": time.monotonic() + PASS_BUDGET_S,
             "crawl_ids": None,
         }
@@ -477,34 +488,62 @@ class WebIndexProvider:
         if cache is not None and key in cache:
             cached = cache[key]
             return cached if isinstance(cached, list) else None
-        url = self._query_url(crawl_id, host, bucket)
-        response = await ctx.http.send(
-            HttpRequest(method="GET", url=url, timeout_s=self._timeout_s)
-        )
-        if not isinstance(response, Ok):
-            ctx.logger.warning(
-                "discovery.web_index.failed",
-                host=host,
-                bucket=bucket,
-                index_id=crawl_id,
-                error=response.error.message,
+        rows: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        answered = False
+        # A short page ends the sweep: the index has no more rows for the
+        # slice, so stop rather than asking for empty pages.
+        for page in range(self._pages):
+            url = self._query_url(crawl_id, host, bucket, page=page)
+            response = await ctx.http.send(
+                HttpRequest(method="GET", url=url, timeout_s=self._timeout_s)
             )
-            return None
-        rows = self._rows(response.value.body, host)
-        if rows is None:
-            ctx.logger.warning(
-                "discovery.web_index.unparseable",
-                host=host,
-                bucket=bucket,
-                index_id=crawl_id,
-            )
+            if not isinstance(response, Ok):
+                ctx.logger.warning(
+                    "discovery.web_index.failed",
+                    host=host,
+                    bucket=bucket,
+                    index_id=crawl_id,
+                    page=page,
+                    error=response.error.message,
+                )
+                if not answered:
+                    return None
+                break
+            page_rows = self._rows(response.value.body, host)
+            if page_rows is None:
+                ctx.logger.warning(
+                    "discovery.web_index.unparseable",
+                    host=host,
+                    bucket=bucket,
+                    index_id=crawl_id,
+                    page=page,
+                )
+                if not answered:
+                    return None
+                break
+            answered = True
+            added = 0
+            for row in page_rows:
+                if row[1] in seen:
+                    continue
+                seen.add(row[1])
+                rows.append(row)
+                added += 1
+            if len(page_rows) < self._limit or not added:
+                break
         if cache is not None:
-            cache[key] = rows
-        return rows
+            cache[key] = rows if answered else None
+        return rows if answered else None
 
-    def _query_url(self, crawl_id: str, host: str, bucket: str) -> str:
+    def _query_url(
+        self, crawl_id: str, host: str, bucket: str, *, page: int = 0
+    ) -> str:
         url_param = quote(f"{host}/{bucket}*", safe="/*")
-        return f"{self._endpoint}/{crawl_id}-index?url={url_param}&output=json&limit={self._limit}"
+        return (
+            f"{self._endpoint}/{crawl_id}-index?url={url_param}&output=json"
+            f"&limit={self._limit}&pageSize={self._limit}&page={page}"
+        )
 
     def _rows(
         self, body: bytes, host: str

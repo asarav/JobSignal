@@ -17,11 +17,12 @@ import re
 from collections.abc import AsyncIterator
 from urllib.parse import urlsplit
 
-from app.domain.models.common import Ok, PortError, Result
+from app.domain.models.common import Err, Ok, PortError, Result
 from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpRequest
 from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
+from app.plugins.ats.posting_check import invalid_posting, posting_problem
 
 HOST_SUFFIX = ".applytojob.com"
 LIST_PATH = "/apply/jobs"
@@ -86,6 +87,9 @@ class JazzHrConnector:
         if not isinstance(response, Ok):
             return response
         html = response.value.body.decode("utf-8", errors="replace")
+        problem = posting_problem(html)
+        if problem is not None:
+            return Err(invalid_posting(self.id, ref.url, problem))
         return Ok(RawJob(ref=ref, title=None, body_text=None, body_html=html, payload={}))
 
 

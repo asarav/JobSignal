@@ -12,6 +12,21 @@ use std::path::PathBuf;
 fn main() {
     tauri_build::build();
 
+    // `tauri-build` embeds a Common Controls v6 manifest in the application
+    // binary. The lib test binary is linked separately and imports
+    // `TaskDialogIndirect`; without the same manifest Windows loads comctl32
+    // v5 and the test process dies before `main` with STATUS_ENTRYPOINT_NOT_FOUND.
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+        .join("tests.manifest");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    if cfg!(windows) {
+        println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let methods_path = manifest_dir.join("../../schemas/ipc/methods.json");
     println!("cargo:rerun-if-changed={}", methods_path.display());

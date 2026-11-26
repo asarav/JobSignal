@@ -1,0 +1,121 @@
+{
+  "version": 2,
+  "generated_at": "2026-11-26T18:40:29Z",
+  "ordering": "hiring_first",
+  "fields": {
+    "u": "board url",
+    "p": "postings observed at build time",
+    "v": "date the board was verified (YYYY-MM-DD)",
+    "t": "ats tenant",
+    "k": "ats tenant key when the url does not carry it"
+  },
+  "zero_unconfident_connectors": [
+    "ats.icims",
+    "ats.taleo",
+    "ats.workday"
+  ],
+  "totals": {
+    "boards": 54655,
+    "hiring": 28862
+  },
+  "connectors": {
+    "ats.bamboohr": {
+      "file": "boards/ats-bamboohr.ndjson",
+      "boards": 13435,
+      "hiring": 9513,
+      "with_postings": 9513,
+      "sha256": "bb3b16b9a60d34ecaf1fe52fdc6da78b960c283c1b35c62648f22607f599c0dc"
+    },
+    "ats.greenhouse": {
+      "file": "boards/ats-greenhouse.ndjson",
+      "boards": 6013,
+      "hiring": 5009,
+      "with_postings": 5009,
+      "sha256": "229fb9892a91b4ec44e66ff5c8c33f5904824f687c6bc9d50a9ee9dfc6b75ff9"
+    },
+    "ats.ashby": {
+      "file": "boards/ats-ashby.ndjson",
+      "boards": 3423,
+      "hiring": 3081,
+      "with_postings": 3081,
+      "sha256": "52aa4e20271a806c4c218f64e80fb9df87d8ec733b5a8ff693b74d2ea6988863"
+    },
+    "ats.ultipro": {
+      "file": "boards/ats-ultipro.ndjson",
+      "boards": 3898,
+      "hiring": 2261,
+      "with_postings": 2261,
+      "sha256": "1044fd9037f41a88cdb647a147e1a7c0349e188b247305c6720dee3a379819f0"
+    },
+    "ats.workday": {
+      "file": "boards/ats-workday.ndjson",
+      "boards": 2196,
+      "hiring": 2001,
+      "with_postings": 2001,
+      "sha256": "4075cd3aef3a5651acc76b71f8b809e34e25c339772477ca15a53e1c93a38562"
+    },
+    "ats.jazzhr": {
+      "file": "boards/ats-jazzhr.ndjson",
+      "boards": 2959,
+      "hiring": 1920,
+      "with_postings": 1920,
+      "sha256": "5f2dda05877e14b928e28a155997d93c6171e27631ae929a2920187f5a42b7fb"
+    },
+    "ats.icims": {
+      "file": "boards/ats-icims.ndjson",
+      "boards": 2401,
+      "hiring": 1546,
+      "with_postings": 1546,
+      "sha256": "38498c1829188557d71aaf6b78bdd89155d95eb0fdf373ede857b81bf2167d91"
+    },
+    "ats.lever": {
+      "file": "boards/ats-lever.ndjson",
+      "boards": 1416,
+      "hiring": 1084,
+      "with_postings": 1084,
+      "sha256": "c385ea21226b9c4f8d86398053a9cea27f90ada3e8f2c92a959e7a8a4d5b34d0"
+    },
+    "ats.oracle_recruiting": {
+      "file": "boards/ats-oracle_recruiting.ndjson",
+      "boards": 1192,
+      "hiring": 1072,
+      "with_postings": 1072,
+      "sha256": "9a3bd8dbb31d675849a406ddaf51ee1b45b92093cd26d50664eb1ff8fa80c704"
+    },
+    "ats.workable": {
+      "file": "boards/ats-workable.ndjson",
+      "boards": 1981,
+      "hiring": 511,
+      "with_postings": 511,
+      "sha256": "2812a2d22f0fdb06674f15739cda0fda15d21fed8990796a3729473bef5842c1"
+    },
+    "ats.smartrecruiters": {
+      "file": "boards/ats-smartrecruiters.ndjson",
+      "boards": 859,
+      "hiring": 443,
+      "with_postings": 443,
+      "sha256": "528b8960af86ffe4cfd82693165ea5b9b7b2e11cc4b3aa2cab9d9caab3efe66b"
+    },
+    "ats.taleo": {
+      "file": "boards/ats-taleo.ndjson",
+      "boards": 1199,
+      "hiring": 398,
+      "with_postings": 398,
+      "sha256": "4b670e003a0a976a5d02a55c919564541131e91aea2803caadf5db5263a07363"
+    },
+    "ats.eightfold": {
+      "file": "boards/ats-eightfold.ndjson",
+      "boards": 25,
+      "hiring": 22,
+      "with_postings": 22,
+      "sha256": "19bab0d6f507ba920ec213770bf2569ec1bd69cfa63d4504e895bda229ddf4f6"
+    },
+    "ats.paylocity": {
+      "file": "boards/ats-paylocity.ndjson",
+      "boards": 13658,
+      "hiring": 1,
+      "with_postings": 1,
+      "sha256": "f93faeb256caa27ee4df2f9f7016f25355687250c3448c23ba4fcc11a193d137"
+    }
+  }
+}

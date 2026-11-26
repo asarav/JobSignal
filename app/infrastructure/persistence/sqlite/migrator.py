@@ -71,7 +71,31 @@ async def backup_database(db_path: Path) -> Path | None:
     return dest
 
 
+#: Raised when SQLite reports a damaged file. The worker blocks startup
+#: rather than writing into a database it cannot trust.
+INTEGRITY_ERROR = (
+    "database integrity check failed; restore a backup from <data-dir>/backups "
+    "before starting Job Signal again"
+)
+
+
+async def check_integrity(conn: aiosqlite.Connection) -> None:
+    """Run ``PRAGMA quick_check`` and refuse a damaged database (spec §17.4)."""
+    cur = await conn.execute("PRAGMA quick_check")
+    rows = [str(row[0]) for row in await cur.fetchall()]
+    if rows != ["ok"]:
+        detail = ", ".join(rows[:5]) or "no result"
+        raise RuntimeError(f"{INTEGRITY_ERROR} ({detail})")
+
+
 async def migrate(db_path: Path) -> int:
+    try:
+        return await _migrate(db_path)
+    except aiosqlite.DatabaseError as exc:
+        raise RuntimeError(INTEGRITY_ERROR) from exc
+
+
+async def _migrate(db_path: Path) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     files = list_migration_files()
     async with aiosqlite.connect(db_path) as conn:
@@ -114,6 +138,7 @@ async def migrate(db_path: Path) -> int:
             )
             await conn.commit()
             latest = version
+        await check_integrity(conn)
         return latest
 
 

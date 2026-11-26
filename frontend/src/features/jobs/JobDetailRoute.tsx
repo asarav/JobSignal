@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, buttonClass } from "../../components/Button";
 import { Disclosure } from "../../components/Disclosure";
+import { JobDescription } from "../../components/JobDescription";
 import { Tabs } from "../../components/Tabs";
 import { Copy } from "../../copy/copy";
 import { AutofillPanel } from "./AutofillPanel";
@@ -289,15 +290,7 @@ export function JobDetailRoute() {
         <div className="space-y-4">
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-base font-semibold text-slate-900">Description</h2>
-            {description ? (
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-                {description}
-              </p>
-            ) : (
-              <p className="mt-2 text-sm text-slate-500">
-                No description was stored for this posting. Open the original to read it.
-              </p>
-            )}
+            <JobDescription value={description} />
           </section>
 
           <Disclosure summary="Posting facts" hint="Status, dates and observations.">

@@ -9,7 +9,11 @@ from app.domain.models.common import Err, Ok, PortError
 from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.discovery import DiscoveryQuery
 from app.domain.models.http import HttpRequest, HttpResponse
-from app.plugins.discovery.web_index import BUCKETS, WebIndexProvider
+from app.plugins.discovery.web_index import (
+    BUCKETS,
+    MAX_CDX_FALLBACKS,
+    WebIndexProvider,
+)
 from tests.support.fakes import FakeClock, FakeHttpClient, FakeStructuredLogger
 
 COLL_ID = "CC-MAIN-2026-43"
@@ -308,11 +312,12 @@ async def test_cdx_fallbacks_are_capped_per_pass():
     provider = _provider()
 
     _ = [s async for s in provider.discover(
-        DiscoveryQuery(extra={"cursor": 0, "slices": 6}), _ctx(http)
+        DiscoveryQuery(extra={"cursor": 0, "slices": 10}), _ctx(http)
     )]
 
     cdx_calls = [u for u in http.urls if "web.archive.org" in u]
-    assert len(cdx_calls) == 4  # MAX_CDX_FALLBACKS, not one per dead slice
+    # Capped by the per-pass budget, not one CDX request per dead slice.
+    assert len(cdx_calls) == MAX_CDX_FALLBACKS
 
 
 @pytest.mark.asyncio
@@ -355,3 +360,56 @@ async def test_cdx_asks_for_a_whole_bucket_and_retries_once():
     assert http.cdx_attempts == 2  # one 503, one retry
     assert all("limit=10000" in url for url in http.urls if "web.archive.org" in url)
 
+
+
+@pytest.mark.asyncio
+async def test_common_crawl_pages_are_swept_before_falling_back():
+    """One 200-row page samples a bucket; the sweep reads several pages."""
+
+    class _Paged(FakeHttpClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.urls: list[str] = []
+
+        async def send(self, req: HttpRequest):
+            self.urls.append(req.url)
+            if "/collinfo" in req.url:
+                return Ok(
+                    HttpResponse(
+                        status=200,
+                        url=req.url,
+                        headers={},
+                        body=json.dumps([{"id": COLL_ID}]).encode(),
+                        elapsed_ms=1,
+                    )
+                )
+            tenant = "acme" if "page=0" in req.url else "globex"
+            body = json.dumps(
+                {"url": f"https://jobs.ashbyhq.com/{tenant}", "status": "200"}
+            ).encode()
+            return Ok(
+                HttpResponse(
+                    status=200, url=req.url, headers={}, body=body, elapsed_ms=1
+                )
+            )
+
+    http = _Paged()
+    # One row per page, so a full page continues the sweep.
+    provider = WebIndexProvider(
+        hosts=(("jobs.ashbyhq.com", "ats.ashby"),), limit=1
+    )
+
+    sources = [
+        source
+        async for source in provider.discover(
+            DiscoveryQuery(extra={"cursor": 0, "slices": 1}), _ctx(http)
+        )
+    ]
+
+    assert {source.url for source in sources} == {
+        "https://jobs.ashbyhq.com/acme",
+        "https://jobs.ashbyhq.com/globex",
+    }
+    pages = [url for url in http.urls if "jobs.ashbyhq.com" in url]
+    assert any("page=0" in url for url in pages)
+    assert any("page=1" in url for url in pages)

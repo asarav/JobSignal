@@ -162,6 +162,7 @@ def _build_dispatcher(
         CompanyHistoryParams,
         CompanyMergeHistoryParams,
         CompanyMergeParams,
+        CompanyTrendParams,
         CrawlRunListParams,
         DiscoveryRunParams,
         EmptyParams,
@@ -301,6 +302,11 @@ def _build_dispatcher(
         "companies.get_detail",
         discovery.companies.get_detail,
         params_model=CompanyDetailParams,
+    )
+    dispatcher.register(
+        "companies.get_trend",
+        discovery.companies.get_trend,
+        params_model=CompanyTrendParams,
     )
     dispatcher.register(
         "companies.merge",
@@ -728,6 +734,14 @@ async def main() -> int:
                 await SuppressionsUseCase(container).sweep()
             except Exception as exc:  # noqa: BLE001 - maintenance must keep running
                 logger.warning("suppression.sweep_failed", error=str(exc))
+            try:
+                from app.application.backup import BackupService
+
+                archived = await BackupService(container).run_if_due()
+                if archived is not None:
+                    logger.info("backup.scheduled", path=archived.get("path"))
+            except Exception as exc:  # noqa: BLE001 - a failed backup is not fatal
+                logger.warning("backup.scheduled_failed", error=str(exc))
             if loop.time() >= next_intelligence_pass:
                 next_intelligence_pass = loop.time() + INTELLIGENCE_PASS_INTERVAL_S
                 # Bounded on every axis: endpoint checks respect the 7-day

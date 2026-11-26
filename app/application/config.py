@@ -76,6 +76,18 @@ class CrawlConfig(StrictModel):
     max_duration_s: int = Field(default=300, gt=0)
 
 
+class BackupConfig(StrictModel):
+    """Scheduled local backups (spec §17.4).
+
+    Automatic archives are written beside manual exports and pruned by count;
+    a manual export is never swept up by the retention rule.
+    """
+
+    enabled: bool = True
+    interval_days: int = Field(default=7, ge=1, le=365)
+    keep: int = Field(default=4, ge=1, le=52)
+
+
 class ExtractionCompletenessConfig(StrictModel):
     require: list[str] = Field(default_factory=lambda: ["title", "description", "company"])
     one_of: list[str] = Field(default_factory=lambda: ["location", "workplace_type"])
@@ -146,6 +158,22 @@ class DiscoveryConfig(StrictModel):
     warmup_passes: int = Field(default=5, ge=0)
     funnel_enabled: bool = True
     funnel_postings_per_pass: int = Field(default=50, gt=0)
+    #: Candidates probed for liveness before registration (one request each).
+    probe_candidates_per_pass: int = Field(default=50, ge=0)
+    #: Hiring seed boards registered per pass in steady state; the cold-start
+    #: bootstrap is separate.
+    seed_boards_per_pass: int = Field(default=25, ge=0)
+    #: Largest hiring seed boards registered on a cold start.
+    bootstrap_seed_sources: int = Field(default=2000, ge=0)
+    #: Live-but-empty boards promoted out of probation per pass.
+    empty_boards_per_pass: int = Field(default=5, ge=0)
+    #: Live-but-empty sources crawled per pass (they also keep a weekly cadence).
+    empty_crawl_sources_per_pass: int = Field(default=5, ge=0)
+    #: Candidates a pass may defer to the next one instead of dropping.
+    candidate_backlog_limit: int = Field(default=500, ge=0)
+    #: Slow Internet Archive fallbacks a web-index pass may spend once its
+    #: Common Crawl pages are done.
+    web_index_cdx_per_pass: int = Field(default=8, ge=0)
     tier_intervals_s: list[float] = Field(
         default_factory=lambda: [3600.0, 86400.0, 604800.0]
     )
@@ -308,6 +336,7 @@ class AppConfig(BaseSettings):
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    backup: BackupConfig = Field(default_factory=BackupConfig)
     dedup: DedupConfig = Field(default_factory=DedupConfig)
     matching: MatchingConfig = Field(default_factory=MatchingConfig)
     posting_intelligence: PostingIntelligenceConfig = Field(

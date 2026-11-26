@@ -102,9 +102,58 @@ jobs:
       - name: Build worker sidecar
         run: python scripts/build_worker.py --target ${{ matrix.target }}
 
+      - name: Delete-all-data end-to-end (real sidecar)
+        working-directory: frontend/src-tauri
+        run: cargo test --test delete_all_data_e2e -- --nocapture
+
       - name: Build native bundles
         working-directory: frontend
         run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Sidecar handshake smoke
+        shell: bash
+        run: python scripts/smoke_worker_sidecar.py --target ${{ matrix.target }}
+
+      - name: Verify macOS signature when configured
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          APP=$(find "frontend/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::No .app bundle was produced."
+            exit 1
+          fi
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            codesign --verify --deep --strict --verbose=2 "$APP"
+            spctl -a -vv "$APP"
+          else
+            echo "::warning::No Apple signing certificate configured; $APP is unsigned (release gate)."
+            codesign -dv "$APP" 2>&1 || true
+          fi
+
+      - name: Packaged app smoke (MSI)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          MSI=$(find "frontend/src-tauri/target/${{ matrix.target }}/release/bundle/msi" -name '*.msi' | head -1)
+          python scripts/smoke_packaged_app.py --msi "$MSI"
+
+      - name: Packaged app smoke (AppImage)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          IMG=$(find "frontend/src-tauri/target/${{ matrix.target }}/release/bundle/appimage" -name '*.AppImage' | head -1)
+          chmod +x "$IMG"
+          python scripts/smoke_packaged_app.py --appimage "$IMG"
+
+      - name: Packaged app smoke (macOS, unsigned)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP=$(find "frontend/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)
+          python scripts/smoke_packaged_app.py --macos-app "$APP" --timeout 240
 
       - name: Upload installers
         uses: actions/upload-artifact@v4

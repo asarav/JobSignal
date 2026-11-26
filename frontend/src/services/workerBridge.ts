@@ -519,6 +519,43 @@ class PreviewBridge implements WorkerBridge {
               : [],
         });
       }
+      case "companies.get_trend": {
+        const requestedId = String(params.company_id ?? "");
+        const survivorId = this.mergedCompanies[requestedId] ?? requestedId;
+        const company = previewCompanyList(this.applications).find(
+          (row) => row.company_id === survivorId,
+        );
+        if (!company) {
+          return {
+            v: 1,
+            type: "response",
+            id: "preview",
+            params: {},
+            ok: false,
+            error: {
+              code: "not_found",
+              message: `No company ${requestedId} in preview data.`,
+              retryable: false,
+              details: {},
+            },
+          };
+        }
+        const days = Math.max(1, Math.min(365, Number(params.days ?? 90)));
+        const points = previewCompanyTrend(days);
+        return response({
+          company_id: survivorId,
+          name: company.name,
+          requested_id: requestedId === survivorId ? null : requestedId,
+          days,
+          since: points[0]?.computed_at ?? "",
+          points,
+          n_points: points.length,
+          note:
+            points.length === 0
+              ? "No daily summaries yet. The intelligence pass writes one when the company has enough history."
+              : "Sample data: one point per day, from stored hiring summaries.",
+        });
+      }
       case "companies.get_merge_history": {
         const companyId = String(params.company_id ?? "");
         const records = companyId
@@ -1134,6 +1171,26 @@ function previewCompanyList(
       merged_company_count: 0,
     }))
     .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+}
+
+function previewCompanyTrend(days: number): Array<Record<string, unknown>> {
+  // Sample points only; the preview never invents a rate below the adequate
+  // tier, so the UI's withholding path is visible here too.
+  const points: Array<Record<string, unknown>> = [];
+  const samples = [3, 4, 4, 6, 5, 8];
+  const start = new Date("2026-09-01T00:00:00Z").getTime();
+  for (let index = 0; index < samples.length; index += 1) {
+    const at = new Date(start + index * 30 * 86_400_000);
+    points.push({
+      day: at.toISOString().slice(0, 10),
+      computed_at: at.toISOString().replace(".000Z", "Z"),
+      n_unique_postings: samples[index],
+      repost_ratio: null,
+      inactive_ratio: null,
+      sample_tier: "limited",
+    });
+  }
+  return points.slice(-Math.max(1, Math.min(points.length, Math.ceil(days / 30))));
 }
 
 function previewCompanyDetail(

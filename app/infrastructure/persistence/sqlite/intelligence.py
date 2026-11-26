@@ -427,6 +427,22 @@ class SqliteCompanySummaryRepository:
         row = await cur.fetchone()
         return _summary_row(dict(row)) if row else None
 
+    async def daily_history(
+        self, company_ids: Sequence[str], *, since: str, limit: int = 500
+    ) -> Sequence[Mapping[str, object]]:
+        wanted = [str(value) for value in company_ids if value]
+        if not wanted:
+            return []
+        self._conn.row_factory = aiosqlite.Row
+        cur = await self._conn.execute(
+            f"SELECT * FROM company_hiring_summaries "
+            f"WHERE company_id IN ({_placeholders(len(wanted))}) "
+            f"AND computed_at >= ? "
+            f"ORDER BY computed_at ASC, rowid ASC LIMIT ?",
+            (*wanted, since, max(1, int(limit))),
+        )
+        return [_summary_row(dict(row)) for row in await cur.fetchall()]
+
 
 def _summary_row(row: dict[str, Any]) -> dict[str, Any]:
     return {

@@ -20,6 +20,8 @@ from app.application.dto import (
     CompanyMergeHistoryResult,
     CompanyMergeParams,
     CompanyMergeResult,
+    CompanyTrendPoint,
+    CompanyTrendResult,
     JobSummary,
 )
 from app.domain.models.common import PortError
@@ -179,6 +181,101 @@ class CompaniesUseCase:
             ],
             recent_window_days=90,
             window_start=_iso(self._container.clock.now() - timedelta(days=90)),
+        )
+
+    async def trend(self, company_id: str, *, days: int = 90) -> CompanyTrendResult:
+        """Daily company summaries as a bounded time series.
+
+        The series is read under the merge survivor, one point per UTC day
+        (the latest summary that day). Counts are always returned; rates are
+        withheld below the ``adequate`` sample tier, because a small sample is
+        a count, not a trend.
+        """
+        now = self._container.clock.now()
+        since_dt = now - timedelta(days=max(1, min(365, days)))
+        since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        async with self._container.uow_factory() as uow:
+            company = await uow.companies.get(company_id)
+            if company is None:
+                raise PortError(
+                    code="not_found",
+                    message=f"unknown company: {company_id}",
+                    retryable=False,
+                )
+            merged = canonical_map(await uow.company_merges.latest_actions())
+            survivor = merged.get(company_id, company_id)
+            survivor_row = (
+                company if survivor == company_id else await uow.companies.get(survivor)
+            )
+            if survivor_row is None:
+                raise PortError(
+                    code="not_found",
+                    message=f"unknown company: {survivor}",
+                    retryable=False,
+                )
+            children = sorted(
+                [merged_id for merged_id, value in merged.items() if value == survivor]
+            )
+            rows = await uow.intelligence.company_summaries.daily_history(
+                [survivor, *children], since=since, limit=500
+            )
+            await uow.commit()
+
+        by_day: dict[str, Mapping[str, Any]] = {}
+        for row in rows:
+            day = str(row.get("computed_at") or "")[:10]
+            if day:
+                # Rows are oldest first, so the last write for a day wins.
+                by_day[day] = row
+
+        points: list[CompanyTrendPoint] = []
+        for day in sorted(by_day):
+            row = by_day[day]
+            metrics = row.get("metrics")
+            values = metrics if isinstance(metrics, Mapping) else {}
+            tier = str(row.get("sample_tier") or "insufficient")
+            adequate = tier == "adequate"
+            points.append(
+                CompanyTrendPoint(
+                    day=day,
+                    computed_at=str(row.get("computed_at") or ""),
+                    n_unique_postings=int(values.get("n_unique_postings") or 0),
+                    repost_ratio=(
+                        float(values["repost_ratio"])
+                        if adequate and values.get("repost_ratio") is not None
+                        else None
+                    ),
+                    inactive_ratio=(
+                        float(values["inactive_ratio"])
+                        if adequate and values.get("inactive_ratio") is not None
+                        else None
+                    ),
+                    sample_tier=tier,
+                )
+            )
+
+        if not points:
+            note = (
+                "No daily summaries yet. The intelligence pass writes one when "
+                "the company has enough history."
+            )
+        elif all(point.sample_tier != "adequate" for point in points):
+            note = (
+                "Counts only: these daily samples are below the adequate tier, "
+                "so no rate is shown."
+            )
+        else:
+            note = "One point per day, from the stored hiring summaries."
+
+        return CompanyTrendResult(
+            company_id=survivor,
+            name=str(survivor_row.get("canonical_name") or survivor),
+            requested_id=company_id if company_id != survivor else None,
+            days=max(1, min(365, days)),
+            since=since,
+            points=points,
+            n_points=len(points),
+            note=note,
         )
 
     async def merge(

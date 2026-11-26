@@ -441,6 +441,32 @@ export interface CompaniesGetMergeHistoryResponse {
   total?: number;
 }
 
+// schemas/ipc/companies/companies_get_trend_request.json
+export interface CompaniesGetTrendRequest {
+  company_id: string;
+  days?: number;
+}
+
+// schemas/ipc/companies/companies_get_trend_response.json
+export interface CompaniesGetTrendResponse {
+  company_id: string;
+  name?: string;
+  requested_id?: string | null;
+  days?: number;
+  since?: string;
+  points?: CompaniesGetTrendResponseCompanyTrendPoint[];
+  n_points?: number;
+  note?: string;
+}
+export interface CompaniesGetTrendResponseCompanyTrendPoint {
+  day: string;
+  computed_at: string;
+  n_unique_postings?: number;
+  repost_ratio?: number | null;
+  inactive_ratio?: number | null;
+  sample_tier?: string;
+}
+
 // schemas/ipc/companies/companies_list_request.json
 export interface CompaniesListRequest {}
 
@@ -551,6 +577,11 @@ export interface DiscoveryAutoDiscoverResponse {
   postings_harvested?: number;
   postings_verified?: number;
   tiers_changed?: number;
+  probed?: number;
+  live?: number;
+  dead?: number;
+  empty?: number;
+  queued?: number;
 }
 
 // schemas/ipc/discovery/discovery_run_request.json

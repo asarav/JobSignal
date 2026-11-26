@@ -145,8 +145,19 @@ class InMemorySourceRepository:
     async def get(self, source_id: str) -> SourceConfig | None:
         return self._store.get(source_id)
 
-    async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
-        items = [s for s in self._store.values() if not s.archived]
+    async def list(
+        self,
+        *,
+        enabled_only: bool = False,
+        include_archived: bool = False,
+        archived_only: bool = False,
+    ) -> Sequence[SourceConfig]:
+        if archived_only:
+            items = [s for s in self._store.values() if s.archived]
+        elif include_archived:
+            items = list(self._store.values())
+        else:
+            items = [s for s in self._store.values() if not s.archived]
         if enabled_only:
             items = [s for s in items if s.enabled]
         return list(items)

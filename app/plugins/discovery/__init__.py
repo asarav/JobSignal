@@ -29,8 +29,11 @@ from app.plugins.discovery.web_index import CDX_LIMIT, WebIndexProvider
 if TYPE_CHECKING:
     from app.plugins.registry import PluginDeps, PluginRegistry
 
-#: Bundled bootstrap seed list of public ATS tenants, shipped as package data.
-SEEDS_PATH = Path(__file__).resolve().parent / "seeds" / "ats_tenants.json"
+#: Bundled bootstrap seed, shipped as package data: a manifest plus one
+#: NDJSON shard per connector (see ``seed_shards``).  ``SEEDS_PATH`` remains for
+#: the legacy single-file layout an old checkout may still carry.
+SEEDS_DIR = Path(__file__).resolve().parent / "seeds"
+SEEDS_PATH = SEEDS_DIR / "ats_tenants.json"
 
 
 def _discovery_settings(deps: PluginDeps) -> dict[str, Any]:
@@ -56,6 +59,12 @@ def _positive_int(value: object, default: int) -> int:
     return value if value > 0 else default
 
 
+def _non_negative_int(value: object, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value if value >= 0 else default
+
+
 def register(registry: PluginRegistry, deps: PluginDeps) -> None:
     from app.domain.ports.plugins import PluginManifest
 
@@ -77,6 +86,7 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
         WebIndexProvider(
             limit=_positive_int(settings.get("web_index_limit"), 200),
             cdx_limit=_positive_int(settings.get("web_index_cdx_limit"), CDX_LIMIT),
+            cdx_per_pass=_non_negative_int(settings.get("web_index_cdx_per_pass"), 8),
         ),
     )
 
@@ -109,7 +119,8 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
             network_hosts=("web.archive.org",),
             description=(
                 "Enumerates subdomain and path-addressed ATS tenants (Workday, "
-                "iCIMS, BambooHR, Eightfold, UKG, Workable) from a public web index."
+                "iCIMS, BambooHR, Eightfold, JazzHR, Taleo, UKG, Workable, "
+                "Paylocity) from a public web index."
             ),
         ),
         DomainIndexProvider(),
@@ -141,5 +152,5 @@ def register(registry: PluginRegistry, deps: PluginDeps) -> None:
             network_hosts=(),
             description="Offline bootstrap seed list of public ATS tenants (M4).",
         ),
-        AtsDirectoryProvider.from_file(SEEDS_PATH),
+        AtsDirectoryProvider.from_directory(SEEDS_DIR),
     )

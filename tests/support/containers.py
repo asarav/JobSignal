@@ -15,6 +15,7 @@ from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
 from app.worker.composition_root import build_container
 from tests.support.fakes import (
+    FakeBrowserProvider,
     FakeClock,
     FakeEventPublisher,
     FakeIdGenerator,
@@ -30,6 +31,7 @@ def build_test_container(
     http: Any = None,
     registry: Any = None,
     events: Any = None,
+    browser: Any = None,
     clock: Any = None,
     config: AppConfig | None = None,
 ) -> Container:
@@ -42,6 +44,9 @@ def build_test_container(
         "events": events or FakeEventPublisher(),
         "http": http,
         "registry": registry,
+        # Tests must never launch real Playwright: a rendered-DOM crawl of a
+        # fixture URL would navigate the network and stall the suite.
+        "browser": browser or FakeBrowserProvider(),
     }
     if uow_factory is None:
         uow_factory = (

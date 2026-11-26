@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { CompanyTrendChart } from "../../components/CompanyTrendChart";
 import { Disclosure } from "../../components/Disclosure";
 import { PageHeader } from "../../components/PageHeader";
 import { RiskBadge } from "../../components/RiskBadge";
@@ -8,6 +9,7 @@ import type {
   CompaniesListResponseCompanyInfo,
   CompaniesGetDetailResponse,
   CompaniesGetMergeHistoryResponse,
+  CompaniesGetTrendResponse,
 } from "../../types/generated";
 
 function message(exc: unknown): string {
@@ -23,6 +25,7 @@ export function CompaniesRoute() {
   const navigate = useNavigate();
   const [companies, setCompanies] = useState<CompaniesListResponseCompanyInfo[]>([]);
   const [detail, setDetail] = useState<CompaniesGetDetailResponse | null>(null);
+  const [trend, setTrend] = useState<CompaniesGetTrendResponse | null>(null);
   const [history, setHistory] = useState<CompaniesGetMergeHistoryResponse | null>(null);
   const [mergeTarget, setMergeTarget] = useState("");
   const [mergeReason, setMergeReason] = useState("");
@@ -36,8 +39,10 @@ export function CompaniesRoute() {
       setCompanies(result.companies ?? []);
       if (id) {
         setDetail(await workerClient.getCompanyDetail({ company_id: id }));
+        setTrend(await workerClient.getCompanyTrend({ company_id: id, days: 90 }));
       } else {
         setDetail(null);
+        setTrend(null);
       }
       setHistory(
         await workerClient.getCompanyMergeHistory(id ? { company_id: id } : {}),
@@ -256,6 +261,9 @@ export function CompaniesRoute() {
               </div>
             ) : null}
           </div>
+
+          <h3 className="mt-4 text-sm font-semibold text-slate-700">Hiring trend</h3>
+          <CompanyTrendChart points={trend?.points ?? []} note={trend?.note} />
 
           <h3 className="mt-4 text-sm font-semibold text-slate-700">Hiring summary</h3>
           {detail.summary ? (

@@ -32,6 +32,11 @@ class Dispatcher:
     async def dispatch(self, method: str | None, params: dict[str, Any]) -> Any:
         if method is None:
             raise PortError(code="validation.invalid_params", message="method is required")
+        if not isinstance(params, dict):
+            raise PortError(
+                code="validation.invalid_params",
+                message="params must be an object",
+            )
         entry = self._methods.get(method)
         if entry is None:
             raise PortError(code="not_found", message=f"unknown method: {method}")
@@ -51,8 +56,11 @@ class Dispatcher:
 
     async def handle_request(self, request: dict[str, Any]) -> dict[str, Any]:
         request_id = request.get("id")
+        params = request.get("params")
+        if params is None:
+            params = {}
         try:
-            result = await self.dispatch(request.get("method"), request.get("params") or {})
+            result = await self.dispatch(request.get("method"), params)
             return ok_envelope(request_id, result).to_dict()
         except PortError as exc:
             return error_envelope(

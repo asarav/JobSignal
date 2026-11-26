@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 import pytest
 from app.application.config import AppConfig
 from app.application.sources import _refetch_allowed, run_crawl
-from app.domain.models.common import Ok
+from app.domain.models.common import Err, Ok, PortError
 from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpResponse
 from app.domain.models.job import RawJob, RawJobRef
@@ -16,6 +16,7 @@ from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSni
 from app.infrastructure.http.policy_client import PolicyHttpClient
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
 from app.plugins.ats.greenhouse import GreenhouseConnector
+from app.plugins.ats.posting_check import invalid_posting
 from tests.support.fakes import FakeClock, FakeHttpClient
 
 
@@ -71,6 +72,157 @@ class _StaticConnector:
                 payload={},
             )
         )
+
+
+class _DeadPostingConnector:
+    """A connector whose postings all answer with a settled not-found page."""
+
+    id = "ats.static"
+    version = "1.0.0"
+    capabilities = ConnectorCapabilities(list_jobs=True, get_job=True)
+
+    def matches(self, url: str, sniff: PageSniff | None = None) -> MatchResult:
+        return MatchResult(matched=True, confidence=1.0, ats_hint="static")
+
+    async def list_jobs(self, source: SourceConfig, ctx: ExecutionContext):
+        async def gen() -> AsyncIterator[RawJobRef]:
+            yield RawJobRef(
+                source_id=source.id,
+                url="https://acme.taleo.net/careersection/2/jobdetail.ftl?job=9",
+            )
+
+        return gen()
+
+    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext):
+        return Err(invalid_posting(self.id, ref.url, "page says 'job not found'"))
+
+
+@pytest.mark.asyncio
+async def test_a_dead_posting_is_counted_by_its_reason():
+    """``errors: 1`` alone cannot tell a retired posting from a rate limit."""
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1",
+        url="https://acme.taleo.net/careersection/2/jobsearch.ftl?lang=en",
+        kind="ats",
+        connector_id="ats.taleo",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    stats = await run_crawl(
+        source=source,
+        connector=_DeadPostingConnector(),  # type: ignore[arg-type]
+        uow_factory=factory,
+        http=PolicyHttpClient(transport=FakeHttpClient()),
+        clock_now=clock.now,
+    )
+
+    # A settled dead page counts as *gone*, not as a failed run: it must not
+    # hold back the not-seen rule (see the removal tests below).
+    assert stats["gone"] == 1
+    assert stats["errors"] == 0
+    assert stats["errors_by_code"] == {"connector.invalid_response": 1}
+    samples = stats["error_samples"]
+    assert isinstance(samples, list)
+    assert samples[0]["code"] == "connector.invalid_response"
+    assert str(samples[0]["url"]).endswith("job=9")
+
+
+class _UnreachablePostingConnector(_DeadPostingConnector):
+    """A connector whose postings fail in a way a retry could fix."""
+
+    async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext):
+        return Err(PortError(code="http.server_error", message="HTTP 503", retryable=True))
+
+
+@pytest.mark.asyncio
+async def test_an_expired_posting_does_not_block_removal():
+    """A dead posting settles the posting, not the run.
+
+    Counting it as a run error meant one expired posting silently disabled the
+    not-seen rule, so the source kept stale postings forever.
+    """
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://acme.example/careers", kind="ats", connector_id="ats.static"
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    await run_crawl(
+        source=source,
+        connector=_StaticConnector("Backend Engineer", "Build APIs."),
+        uow_factory=factory,
+        http=PolicyHttpClient(transport=FakeHttpClient()),
+        clock_now=clock.now,
+    )
+
+    # The board now lists only a posting that has expired, and the stored one
+    # is no longer listed at all: two clean listings retire it.
+    stats: dict[str, object] = {}
+    for _ in range(2):
+        clock.advance(25 * 3600)
+        stats = await run_crawl(
+            source=source,
+            connector=_DeadPostingConnector(),  # type: ignore[arg-type]
+            uow_factory=factory,
+            http=PolicyHttpClient(transport=FakeHttpClient()),
+            clock_now=clock.now,
+        )
+
+    assert stats["gone"] == 1
+    assert stats["errors"] == 0, "an expired posting is not a failed run"
+    assert stats["removed"] == 1
+    async with factory() as uow:
+        statuses = {job.get("posting_status") for job in await uow.jobs.list()}
+        runs = await uow.crawl_runs.list()
+    assert statuses == {"removed"}
+    assert runs[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_posting_still_holds_removal_back():
+    """The opposite case has to keep working: unknown means leave things alone."""
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1", url="https://acme.example/careers", kind="ats", connector_id="ats.static"
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+
+    await run_crawl(
+        source=source,
+        connector=_StaticConnector("Backend Engineer", "Build APIs."),
+        uow_factory=factory,
+        http=PolicyHttpClient(transport=FakeHttpClient()),
+        clock_now=clock.now,
+    )
+
+    stats: dict[str, object] = {}
+    for _ in range(2):
+        clock.advance(25 * 3600)
+        stats = await run_crawl(
+            source=source,
+            connector=_UnreachablePostingConnector(),  # type: ignore[arg-type]
+            uow_factory=factory,
+            http=PolicyHttpClient(transport=FakeHttpClient()),
+            clock_now=clock.now,
+        )
+
+    assert stats["errors"] == 1
+    assert stats.get("removed", 0) == 0
+    async with factory() as uow:
+        statuses = {job.get("posting_status") for job in await uow.jobs.list()}
+        runs = await uow.crawl_runs.list()
+    assert "removed" not in statuses, "an unreachable posting must not retire jobs"
+    assert {str(run["status"]) for run in runs} == {"completed", "completed_with_errors"}
 
 
 @pytest.mark.asyncio

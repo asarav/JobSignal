@@ -1027,11 +1027,23 @@ class SqliteSourceRepository:
             return None
         return self._row(row)
 
-    async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]:
+    async def list(
+        self,
+        *,
+        enabled_only: bool = False,
+        include_archived: bool = False,
+        archived_only: bool = False,
+    ) -> Sequence[SourceConfig]:
         self._conn.row_factory = aiosqlite.Row
         # An archived source is history: its jobs and runs stay, it is just no
-        # longer scheduled, listed or crawled.
-        query = "SELECT * FROM sources WHERE archived_at IS NULL"
+        # longer scheduled, listed or crawled.  Discovery asks for them only to
+        # avoid registering a board the user already removed.
+        if archived_only:
+            query = "SELECT * FROM sources WHERE archived_at IS NOT NULL"
+        elif include_archived:
+            query = "SELECT * FROM sources"
+        else:
+            query = "SELECT * FROM sources WHERE archived_at IS NULL"
         if enabled_only:
             query += " AND enabled = 1"
         cur = await self._conn.execute(query)

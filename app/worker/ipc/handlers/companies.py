@@ -7,6 +7,7 @@ from app.application.dto import (
     CompanyDetailParams,
     CompanyMergeHistoryParams,
     CompanyMergeParams,
+    CompanyTrendParams,
     EmptyParams,
 )
 
@@ -20,6 +21,11 @@ class CompaniesHandlers:
 
     async def get_detail(self, params: CompanyDetailParams) -> dict:
         return (await self._use_case.get_detail(params.company_id)).model_dump()
+
+    async def get_trend(self, params: CompanyTrendParams) -> dict:
+        return (
+            await self._use_case.trend(params.company_id, days=params.days)
+        ).model_dump()
 
     async def merge(self, params: CompanyMergeParams) -> dict:
         return (await self._use_case.merge(params)).model_dump()

@@ -14,9 +14,10 @@ from app.application.auto_discover import (
 from app.application.config import AppConfig
 from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.discovery import DiscoveredSource, DiscoveryQuery
+from app.domain.models.http import HttpResponse
 from app.domain.ports.plugins import PluginManifest
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
-from app.plugins.discovery import SEEDS_PATH
+from app.plugins.discovery import SEEDS_DIR, SEEDS_PATH
 from app.plugins.discovery.ats_directory import AtsDirectoryProvider
 from app.plugins.discovery.web_index import WebIndexProvider
 from app.worker.main import DiscoveryWiring, _build_discovery
@@ -24,15 +25,16 @@ from tests.support.containers import build_test_container
 from tests.support.fakes import FakeClock, FakeHttpClient, FakeStructuredLogger
 
 
-def _candidate(url: str) -> DiscoveredSource:
+def _candidate(url: str, ats_hint: str | None = None) -> DiscoveredSource:
     return DiscoveredSource(
         kind="ats",
         url=url,
         company_hint=None,
-        ats_hint=None,
+        ats_hint=ats_hint,
         confidence=0.9,
         evidence=[],
     )
+
 
 
 def _row(url: str) -> dict[str, str]:
@@ -60,6 +62,23 @@ class _Provider:
             yield _candidate(url)
 
 
+class _HintedProvider:
+    """A provider yielding boards of one ATS, so the probe can be exercised."""
+
+    id = "discovery.hinted"
+
+    def __init__(self, url: str, ats_hint: str) -> None:
+        self._url = url
+        self._ats_hint = ats_hint
+        self.calls = 0
+
+    async def discover(
+        self, query: DiscoveryQuery, ctx: ExecutionContext
+    ) -> AsyncIterator[DiscoveredSource]:
+        self.calls += 1
+        yield _candidate(self._url, self._ats_hint)
+
+
 class _BrokenProvider:
     """A provider that fails on its first iteration."""
 
@@ -78,9 +97,10 @@ def _wire(
     clock: FakeClock | None = None,
     factory: InMemoryUnitOfWorkFactory | None = None,
     config: AppConfig | None = None,
+    http: FakeHttpClient | None = None,
 ) -> tuple[Any, DiscoveryWiring]:
     container = build_test_container(
-        http=FakeHttpClient(),
+        http=http or FakeHttpClient(),
         clock=clock or FakeClock(),
         uow_factory=factory or InMemoryUnitOfWorkFactory(),
         config=config,
@@ -146,25 +166,32 @@ async def test_auto_discover_registers_dedupes_and_crawls():
 
 @pytest.mark.asyncio
 async def test_cold_start_runs_warmup_passes_until_seeds_are_exhausted():
-    urls = [
-        f"https://jobs.example.com/{n:04d}" for n in range(250)
-    ]
+    # One fixture board per origin: the policy client rate-limits per origin,
+    # so 250 boards on one host would serialize for minutes. The crawl path is
+    # still exercised here, just concurrently.
+    urls = [f"https://jobs{n:04d}.example.com/{n:04d}" for n in range(250)]
     provider = _Provider(urls)
     container, wiring = _wire(
         {"discovery.fake": provider},
-        config=AppConfig(discovery={"max_new_sources_per_run": 200}),
+        # One crawl per pass keeps this test about registration; the crawl
+        # budget and rate limiter have their own tests.
+        config=AppConfig(
+            discovery={"max_new_sources_per_run": 200, "max_crawl_sources_per_run": 1}
+        ),
     )
 
     result = await wiring.auto_discover_use_case.run_if_due(3600.0)
 
-    # 200 registered in the first pass, 50 in the second, then nothing new.
+    # Registration is now bounded by the probe budget (50 per pass), so the
+    # 250 candidates drain across the five warm-up passes instead of three.
     assert result is not None
     assert result.registered == 250
-    assert result.crawled >= 0
-    assert provider.calls == 3
+    assert result.probed == 250
+    assert result.crawled == 5
+    assert provider.calls == 5
     async with container.uow_factory() as uow:
         state = await uow.settings.get(AUTO_DISCOVER_STATE_KEY)
-    assert state is not None and state.get("rotation_cursor") == 36
+    assert state is not None and state.get("rotation_cursor") == 60
 
 
 @pytest.mark.asyncio
@@ -374,9 +401,9 @@ async def test_bundled_ats_directory_is_registered_and_yields_seeds():
         "discovery.domain_index",
         "discovery.oracle_recruiting",
     } <= ids
-    assert SEEDS_PATH.is_file()
+    assert SEEDS_PATH.is_file() or SEEDS_DIR.is_dir()
 
-    provider = AtsDirectoryProvider.from_file(SEEDS_PATH)
+    provider = AtsDirectoryProvider.from_directory(SEEDS_DIR)
     seeds = [seed async for seed in provider.discover(DiscoveryQuery(), _ctx())]
     assert len(seeds) >= 5
     assert all(seed.url.startswith("https://") for seed in seeds)
@@ -462,3 +489,86 @@ def _ctx() -> ExecutionContext:
         deadline=None,
         config={},
     )
+
+
+def _probe_http(status: int = 200, body: bytes = b'{"jobs": []}') -> FakeHttpClient:
+    url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs"
+    return FakeHttpClient(
+        {
+            url: HttpResponse(
+                status=status, url=url, headers={}, body=body, elapsed_ms=1
+            )
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dead_board_is_never_registered():
+    provider = _HintedProvider(
+        "https://boards.greenhouse.io/acme", "ats.greenhouse"
+    )
+    _, wiring = _wire(
+        {"discovery.hinted": provider}, http=_probe_http(status=404)
+    )
+
+    result = await wiring.auto_discover_use_case.run()
+
+    assert result.probed == 1
+    assert result.dead == 1
+    assert result.registered == 0
+    assert await wiring.registry.list_sources() == []
+
+
+@pytest.mark.asyncio
+async def test_an_empty_board_joins_by_probation_not_a_normal_slot():
+    provider = _HintedProvider(
+        "https://boards.greenhouse.io/acme", "ats.greenhouse"
+    )
+    _, wiring = _wire({"discovery.hinted": provider}, http=_probe_http())
+
+    first = await wiring.auto_discover_use_case.run()
+
+    assert first.registered == 0
+    assert await wiring.registry.list_sources() == []
+
+    second = await wiring.auto_discover_use_case.run()
+
+    assert second.registered == 1
+    assert second.empty == 1
+    sources = await wiring.registry.list_sources()
+    assert len(sources) == 1
+    assert sources[0].schedule.get("probe_status") == "live_empty"
+    interval = float(sources[0].schedule["interval_s"])
+    assert 0.9 * 604_800 <= interval <= 1.1 * 604_800
+
+
+@pytest.mark.asyncio
+async def test_a_removed_board_is_not_re_registered():
+    provider = _HintedProvider(
+        "https://boards.greenhouse.io/acme", "ats.greenhouse"
+    )
+    _, wiring = _wire({"discovery.hinted": provider})
+    source = await wiring.registry.add("https://boards.greenhouse.io/acme")
+    await wiring.registry.delete(source.id)
+
+    result = await wiring.auto_discover_use_case.run()
+
+    assert result.registered == 0
+    assert await wiring.registry.list_sources() == []
+
+
+@pytest.mark.asyncio
+async def test_overflow_is_queued_and_drained_next_pass():
+    provider = _Provider([f"https://jobs.example.com/{n}" for n in "abc"])
+    _, wiring = _wire(
+        {"discovery.fake": provider},
+        config=AppConfig(discovery={"max_new_sources_per_run": 1}),
+    )
+
+    first = await wiring.auto_discover_use_case.run()
+    assert first.registered == 1
+    assert first.queued == 2
+
+    second = await wiring.auto_discover_use_case.run()
+    assert second.registered == 1
+    assert len(await wiring.registry.list_sources()) == 2

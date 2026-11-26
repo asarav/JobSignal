@@ -347,6 +347,17 @@ async def test_company_summaries_and_endpoints(kind, tmp_path) -> None:
                 evidence=[{"kind": "reposts"}],
             )
         )
+        await uow.intelligence.company_summaries.add(
+            CompanySummaryRecord(
+                id="chs_0",
+                company_id="co_1",
+                computed_at=datetime(2026, 2, 1, tzinfo=UTC),
+                sample_tier="limited",
+                metrics={"n_unique_postings": 2},
+                labels=[],
+                evidence=[],
+            )
+        )
         await uow.intelligence.endpoints.add(
             EndpointObservationRecord(
                 id="ep_1",
@@ -365,11 +376,19 @@ async def test_company_summaries_and_endpoints(kind, tmp_path) -> None:
         same_day = await uow.intelligence.company_summaries.for_day(
             "co_1", "2026-03-01"
         )
+        history = await uow.intelligence.company_summaries.daily_history(
+            ["co_1"], since="2026-01-01T00:00:00Z"
+        )
+        bounded = await uow.intelligence.company_summaries.daily_history(
+            ["co_1"], since="2026-02-15T00:00:00Z"
+        )
         endpoint = await uow.intelligence.endpoints.latest("job_1")
 
     assert summary is not None and summary["sample_tier"] == "limited"
     assert summary["metrics"]["n_unique_postings"] == 4
     assert same_day is not None and same_day["id"] == "chs_1"
+    assert [row["id"] for row in history] == ["chs_0", "chs_1"]
+    assert [row["id"] for row in bounded] == ["chs_1"]
     assert endpoint is not None
     assert endpoint["state"] == "closed_message"
     assert endpoint["details"]["marker"] == "no longer accepting applications"

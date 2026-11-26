@@ -1,0 +1,98 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "name": {
+      "default": "",
+      "type": "string"
+    },
+    "requested_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "days": {
+      "default": 90,
+      "type": "integer"
+    },
+    "since": {
+      "default": "",
+      "type": "string"
+    },
+    "points": {
+      "items": {
+        "$ref": "#/$defs/CompaniesGetTrendResponseCompanyTrendPoint"
+      },
+      "type": "array"
+    },
+    "n_points": {
+      "default": 0,
+      "type": "integer"
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "company_id"
+  ],
+  "title": "CompaniesGetTrendResponse",
+  "type": "object",
+  "$defs": {
+    "CompaniesGetTrendResponseCompanyTrendPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "day": {
+          "type": "string"
+        },
+        "computed_at": {
+          "type": "string"
+        },
+        "n_unique_postings": {
+          "default": 0,
+          "type": "integer"
+        },
+        "repost_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inactive_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sample_tier": {
+          "default": "insufficient",
+          "type": "string"
+        }
+      },
+      "required": [
+        "day",
+        "computed_at"
+      ],
+      "type": "object"
+    }
+  }
+}

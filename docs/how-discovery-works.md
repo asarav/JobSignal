@@ -60,13 +60,14 @@ re-checked as its interval comes due. One pass:
    `crawl.completed` / `crawl.failed`. New jobs land in the database and are
    immediately searchable through your search profiles, with their hard
    filters applied.
-8. **Cold start.** A fresh install has no run state, so the worker runs
-   `discovery.warmup_passes` (default 5) passes back-to-back (each still
-   bounded by the pass caps and the crawl gate) to register most of the bundled
-   seed list within minutes — at most 200 new sources per pass. Because the
-   seed list is ordered largest-first, the biggest employers arrive first.
-   The loop stops early once a pass registers nothing new; afterwards the
-   normal continuous cadence takes over.
+8. **Cold start.** A fresh install has no run state, so the worker first
+   registers up to `discovery.bootstrap_seed_sources` (default 2,000) hiring
+   seed boards — largest first, empty ones excluded — and then runs
+   `discovery.warmup_passes` (default 5) passes back-to-back, each still bounded
+   by the pass caps and the crawl gate. A pass keeps
+   `discovery.seed_boards_per_pass` slots for the seed tail so live discovery
+   cannot starve it. The loop stops early once a pass registers nothing new;
+   afterwards the normal continuous cadence takes over.
 
 Each enabled source is also kept on its own loop at its effective interval —
 narrowed by its relevance tier — so boards and their postings are re-checked,
@@ -78,14 +79,39 @@ source schedule are stored in the app database.
 
 ## Sources, not seeds
 
-`discovery.ats_directory` ships an offline seed list of 35,572 boards:
-Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS,
-Oracle Recruiting Cloud, UKG Pro (UltiPro) and Paylocity, each confirmed live
-through the board's own public ATS API. It exists so a brand new install has
-something to crawl immediately (and so tests do not need the network). It is
-**not** the discovery engine: the app never depends on that file to find
-employers, and the file going stale only removes a head start, not discovery.
-`scripts/build_seed.py --refresh` re-verifies and re-ranks it.
+`discovery.ats_directory` ships an offline seed list of 54,655 boards across
+fourteen connectors: Greenhouse, Lever, Ashby, SmartRecruiters, Workable,
+BambooHR, Workday, iCIMS, Oracle Recruiting Cloud, UKG Pro (UltiPro),
+Paylocity, JazzHR, Taleo and Eightfold, each confirmed live through the board's
+own public ATS API. It is stored as one NDJSON shard per
+connector (`seeds/boards/*.ndjson`) plus `seeds/manifest.json`, which records
+each shard's board/posting counts, its checksum and the connectors whose zero
+is not trustworthy. The current manifest reports 54,655 boards and 28,862
+hiring boards, generated 2026-11-26. A record carries the URL, the
+postings observed at build time, the verification date and the tenant key;
+hiring boards are written before empty ones. It exists so a brand new install
+has something to crawl immediately (and so tests do not need the network). It
+is **not** the discovery engine: the app never depends on it to find
+employers, and it going stale only removes a head start, not discovery.
+`scripts/build_seed.py --refresh` re-verifies and re-ranks it, and
+`--dry-run --report` prints per-connector live/hiring/empty/dead counts without
+writing.
+
+## Hiring, empty and dead boards
+
+An index hit is not proof of a live board: measured on settled candidates, 53%
+no longer exist. Discovery probes a candidate before registering it and keeps
+three outcomes apart. **hiring** boards register immediately. **dead** boards (a
+404/410, or a redirect off the tenant host) are dropped and cached. **live but
+empty** boards are kept — a quiet employer hires next month — but they enter a
+persisted probation queue with its own small per-pass budget and a weekly
+cadence, never a normal registration slot; a few are crawled per pass so the
+tier cannot eat the crawl budget. A zero is only trusted where the listing is
+authoritative (a JSON count or a server-rendered list); on iCIMS, Taleo and
+Workday it means "not observed", so the board is treated as unknown and keeps
+the previous behaviour. `probe_status` on the source records the verdict, and
+a board that fails two crawls backs off to weekly. Counts (probed, live, empty,
+dead, queued) are shown after a manual pass on the Discover screen.
 
 Harvesting that list is done in the bulk web indexes, in 10,000-row slices.
 Board discovery keeps one row per board — per tenant, except Workday, where a
@@ -95,7 +121,13 @@ Greenhouse slice that returned 1190 rows used to yield roughly 100 tenants and
 now yields about 800. A slice that
 comes back completely full is walked again as narrower buckets, and each
 completed slice (and each UKG Pro chunk) is checkpointed, so an interrupted run
-resumes where it stopped instead of starting over. A later expansion pass runs
+resumes where it stopped instead of starting over. Checkpoints are written to a
+temp file and renamed into place, so a kill mid-write cannot truncate the last
+one, and verification checkpoints every 1,000 settled boards as well as at the
+end — a run interrupted after hours of verifying keeps every outcome it had
+settled, and `--incremental` resumes from there: live boards settled in the
+last seven days are written without being probed again, and dead boards inside
+their re-check window are skipped. A later expansion pass runs
 with `--incremental`: it verifies only boards no earlier pass has settled and
 merges them into the shipped file, so growing the list costs one pass over the
 new boards rather than a re-check of every board already in it. Every index

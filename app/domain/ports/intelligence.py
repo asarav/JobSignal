@@ -90,6 +90,15 @@ class CompanySummaryRepository(Protocol):
         self, company_id: str, day_prefix: str
     ) -> Mapping[str, object] | None: ...
 
+    async def daily_history(
+        self, company_ids: Sequence[str], *, since: str, limit: int = 500
+    ) -> Sequence[Mapping[str, object]]:
+        """Stored summaries for ``company_ids`` from ``since``, oldest first.
+
+        A trend read is bounded twice: by the date window and by ``limit``.
+        """
+        ...
+
 
 class EndpointObservationRepository(Protocol):
     async def add(self, record: EndpointObservationRecord) -> None: ...

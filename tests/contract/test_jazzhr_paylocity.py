@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from app.domain.models.common import Ok, PortError
+from app.domain.models.common import Err, Ok, PortError
 from app.domain.models.context import CancellationToken, ExecutionContext
 from app.domain.models.http import HttpResponse
+from app.domain.models.job import RawJobRef
 from app.domain.models.source import SourceConfig
 from app.domain.services.classifier import KNOWN_PATTERNS
 from app.plugins.ats.jazzhr import JazzHrConnector
@@ -131,3 +132,58 @@ def test_the_classifier_routes_both_platforms():
 
     assert patterns["applytojob.com"] == "ats.jazzhr"
     assert patterns["recruiting.paylocity.com/recruiting/jobs/all/"] == "ats.paylocity"
+
+
+@pytest.mark.asyncio
+async def test_jazzhr_returns_a_posting_page():
+    detail = "https://acme.applytojob.com/apply/jobs/details/AbC123"
+    http = FakeHttpClient(
+        {
+            detail: _html_response(
+                detail,
+                "<html><body><h1>Site Reliability Engineer</h1>"
+                "<p>Own the on-call rotation.</p></body></html>",
+            )
+        }
+    )
+    source = SourceConfig(id="s1", url=JAZZHR_SOURCE, kind="ats", connector_id="ats.jazzhr")
+    ref = RawJobRef(source_id="s1", url=detail, source_posting_id="AbC123")
+
+    result = await JazzHrConnector().fetch_job(ref, source, _ctx(http))
+
+    assert isinstance(result, Ok)
+    assert "Site Reliability Engineer" in (result.value.body_html or "")
+
+
+@pytest.mark.asyncio
+async def test_a_retired_paylocity_posting_fails_clearly():
+    """Measured: a retired company answers 200 with a not-found page.
+
+    Returning it as a posting would persist a job with no title and no
+    description, which looks like a healthy crawl that found nothing.
+    """
+    detail = "https://recruiting.paylocity.com/Recruiting/Jobs/Details/1139001"
+    http = FakeHttpClient(
+        {
+            detail: _html_response(
+                detail,
+                "<html><body><h1>JobNotFound</h1>"
+                "<p>This job is no longer available.</p></body></html>",
+            )
+        }
+    )
+    source = SourceConfig(
+        id="s1",
+        url=PAYLOCITY_SOURCE,
+        kind="ats",
+        connector_id="ats.paylocity",
+        ats_tenant_key=PAYLOCITY_COMPANY,
+    )
+    ref = RawJobRef(source_id="s1", url=detail, source_posting_id="1139001")
+
+    result = await PaylocityConnector().fetch_job(ref, source, _ctx(http))
+
+    assert isinstance(result, Err)
+    assert result.error.code == "connector.invalid_response"
+    assert result.error.retryable is False
+    assert "jobnotfound" in str(result.error.details["reason"]).lower()

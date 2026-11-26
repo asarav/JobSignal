@@ -10,9 +10,10 @@ success.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
+from app.application.config import live_config
 from app.domain.models.backup import BackupRunRecord
 from app.domain.models.common import PortError
 from app.domain.services.backup_archive import (
@@ -20,6 +21,9 @@ from app.domain.services.backup_archive import (
     build_archive,
     validate_archive,
 )
+
+#: Settings key remembering the last automatic backup.
+SCHEDULED_BACKUP_KEY = "last_scheduled_backup_at"
 
 
 class BackupService:
@@ -68,6 +72,60 @@ class BackupService:
             "schema_version": schema_version,
             "created_at": now.isoformat(),
         }
+
+    async def run_if_due(self) -> dict[str, Any] | None:
+        """The scheduled-backup policy: disabled, interval, state, prune.
+
+        The first check records a baseline instead of archiving whatever the
+        install happens to contain; the first automatic archive is due one
+        interval later.
+        """
+        config = live_config(self._container).backup
+        if not config.enabled:
+            return None
+        now = self._container.clock.now()
+        async with self._container.uow_factory() as uow:
+            raw = await uow.settings.get(SCHEDULED_BACKUP_KEY)
+            await uow.commit()
+        last: datetime | None = None
+        stamp = raw.get("at") if isinstance(raw, dict) else None
+        if isinstance(stamp, str) and stamp:
+            try:
+                last = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            except ValueError:
+                last = None
+        if last is None:
+            await self._record_scheduled_at(now)
+            return None
+        if now - last < timedelta(days=config.interval_days):
+            return None
+        result = await self.scheduled()
+        await self._record_scheduled_at(now)
+        return result
+
+    async def _record_scheduled_at(self, now: datetime) -> None:
+        async with self._container.uow_factory() as uow:
+            await uow.settings.put(
+                SCHEDULED_BACKUP_KEY, {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+            )
+            await uow.commit()
+
+    async def scheduled(self) -> dict[str, Any]:
+        """Write one automatic archive, then keep only the newest ``keep``.
+
+        Retention is scoped to ``jobsignal-auto-*`` names, so a manual export
+        is never deleted by the scheduler.
+        """
+        config = live_config(self._container).backup
+        now = self._container.clock.now()
+        result = await self.export(
+            path=f"backups/jobsignal-auto-{_stamp(now)}.json"
+        )
+        store = self._require_store()
+        archives = store.auto_archives()
+        for stale in archives[: max(0, len(archives) - int(config.keep))]:
+            store.delete_archive(stale)
+        return result
 
     async def import_archive(
         self, *, path: str, confirm: bool = False

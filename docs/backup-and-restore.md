@@ -52,6 +52,23 @@ Not included: `schema_migrations` (the installed build owns its migrations),
 `backup_runs` (local audit of this machine) and the FTS shadow tables (rebuilt
 from the copied text).
 
+## Automatic backups
+
+The maintenance loop checks `backup.enabled` (default on). The first check
+records a baseline in `app_settings` and writes nothing; after
+`backup.interval_days` (default 7) it writes
+`backups/jobsignal-auto-<timestamp>.json`. Retention keeps the newest
+`backup.keep` (default 4) automatic archives and never deletes a manual export.
+Both settings live in `AppConfig` and are validated like every other section.
+The history table records automatic exports alongside manual ones.
+
+## Damaged databases
+
+Startup runs `PRAGMA quick_check` after applying migrations. If SQLite reports
+damage, the worker stops before serving requests and names this document's
+restore steps. Restore the newest usable file from `<data dir>/backups` into an
+empty data directory; the worker will not write into a damaged database.
+
 ## Notes
 
 - A backup is **not** encrypted by this feature. It contains your answer book and

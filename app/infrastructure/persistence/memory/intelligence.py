@@ -282,6 +282,19 @@ class InMemoryCompanySummaryRepository:
                 return dict(row)
         return None
 
+    async def daily_history(
+        self, company_ids: Sequence[str], *, since: str, limit: int = 500
+    ) -> Sequence[Mapping[str, object]]:
+        wanted = {str(value) for value in company_ids if value}
+        rows = [
+            (index, row)
+            for index, row in enumerate(self._stores.summaries)
+            if str(row["company_id"]) in wanted
+            and str(row["computed_at"]) >= since
+        ]
+        rows.sort(key=lambda pair: (str(pair[1]["computed_at"]), pair[0]))
+        return [dict(row) for _, row in rows[: max(1, int(limit))]]
+
 
 class InMemoryEndpointObservationRepository:
     def __init__(self, stores: InMemoryIntelligenceStores) -> None:

@@ -46,6 +46,16 @@ Thumbs.db
 .seed_build_verified.json
 .seed_build_log.jsonl
 
+# Local scratch: one-off discovery seed audits and board probe dumps
+.seed_build_*.out
+.seed_build_report_*.json
+.seed_build_audit*.py
+.seed_build_*.json
+.p1.json
+.p2.json
+.probe.json
+.vite-dev.log
+
 # Local scratch: manual probe screenshots and throwaway test data
 lodestar-test-data/
 

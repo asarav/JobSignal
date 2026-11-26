@@ -28,6 +28,26 @@
     "tiers_changed": {
       "default": 0,
       "type": "integer"
+    },
+    "probed": {
+      "default": 0,
+      "type": "integer"
+    },
+    "live": {
+      "default": 0,
+      "type": "integer"
+    },
+    "dead": {
+      "default": 0,
+      "type": "integer"
+    },
+    "empty": {
+      "default": 0,
+      "type": "integer"
+    },
+    "queued": {
+      "default": 0,
+      "type": "integer"
     }
   },
   "title": "DiscoveryAutoDiscoverResponse",

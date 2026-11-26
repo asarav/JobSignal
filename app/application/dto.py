@@ -521,6 +521,33 @@ class CompanyMergeHistoryResult(DTO):
     total: int = 0
 
 
+class CompanyTrendParams(DTO):
+    company_id: str
+    days: int = Field(default=90, ge=1, le=365)
+
+
+class CompanyTrendPoint(DTO):
+    day: str
+    computed_at: str
+    n_unique_postings: int = 0
+    #: Rates are withheld below the adequate sample tier: a small sample is a
+    #: count, never a trend.
+    repost_ratio: float | None = None
+    inactive_ratio: float | None = None
+    sample_tier: str = "insufficient"
+
+
+class CompanyTrendResult(DTO):
+    company_id: str
+    name: str = ""
+    requested_id: str | None = None
+    days: int = 90
+    since: str = ""
+    points: list[CompanyTrendPoint] = Field(default_factory=list)
+    n_points: int = 0
+    note: str = ""
+
+
 class CompanyDetailResult(DTO):
     company_id: str
     name: str
@@ -896,6 +923,13 @@ class AutoDiscoverResult(DTO):
     postings_harvested: int = 0
     postings_verified: int = 0
     tiers_changed: int = 0
+    #: Candidates probed for liveness; live/dead/empty are its outcomes.
+    probed: int = 0
+    live: int = 0
+    dead: int = 0
+    empty: int = 0
+    #: Candidates carried into the next pass instead of being dropped.
+    queued: int = 0
 
 
 def task_summary(task: Any) -> TaskSummary:

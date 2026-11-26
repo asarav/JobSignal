@@ -70,7 +70,13 @@ class SourceRepository(Protocol):
 
     async def get(self, source_id: str) -> SourceConfig | None: ...
 
-    async def list(self, *, enabled_only: bool = False) -> Sequence[SourceConfig]: ...
+    async def list(
+        self,
+        *,
+        enabled_only: bool = False,
+        include_archived: bool = False,
+        archived_only: bool = False,
+    ) -> Sequence[SourceConfig]: ...
 
     async def set_enabled(self, source_id: str, enabled: bool) -> None: ...
 

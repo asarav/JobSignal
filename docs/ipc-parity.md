@@ -1,6 +1,6 @@
 # IPC parity: UI calls, preview handlers and the real worker
 
-Checked 2026-11-24 against the current working tree. The browser preview is a
+Checked 2026-11-26 against the current working tree. The browser preview is a
 development convenience, not the production data path. This report records how
 every UI request was matched to a real worker method and how the real worker was
 exercised with a seeded SQLite database.
@@ -9,12 +9,12 @@ exercised with a seeded SQLite database.
 
 | Surface | Count | Check |
 |---|---:|---|
-| `WorkerClient` methods | 86 | 84 data wrappers map to a catalogued method; `request` and `onEvent` are infrastructure. |
-| Methods in the TypeScript `WorkerMethod` union | 87 | Exactly equal to `schemas/ipc/methods.json`. |
-| Real IPC methods in the catalog and dispatcher | 87 | Catalogue, generated schema and dispatcher agree. |
-| UI call sites (requests, excluding event subscription) | 123 | Object keys are checked against the generated request type for each wrapper. |
-| Distinct real methods the UI calls | 74 | Every one is registered by the real worker. |
-| Preview bridge handlers | 56 | Every case name exists in the real catalog. The 55 successful results validate against that method's real response schema; `system.import_backup` is an intentional preview error. |
+| `WorkerClient` methods | 87 | 85 data wrappers map to a catalogued method; `request` and `onEvent` are infrastructure. |
+| Methods in the TypeScript `WorkerMethod` union | 88 | Exactly equal to `schemas/ipc/methods.json`. |
+| Real IPC methods in the catalog and dispatcher | 88 | Catalogue, generated schema and dispatcher agree. |
+| UI call sites (requests, excluding event subscription) | 124 | Object keys are checked against the generated request type for each wrapper. |
+| Distinct real methods the UI calls | 75 | Every one is registered by the real worker. |
+| Preview bridge handlers | 57 | Every case name exists in the real catalog. The 56 successful results validate against that method's real response schema; `system.import_backup` is an intentional preview error. |
 
 The static checks are in `frontend/src/services/ipcParity.test.ts` and
 `frontend/src/services/previewSchemaParity.test.ts`. The real worker run is
@@ -52,7 +52,7 @@ cd frontend
 npx vitest run src/services/ipcParity.test.ts
 ```
 
-Result: **0 invalid fields** across 123 calls.
+Result: **0 invalid fields** across 124 calls.
 
 | Real method | Calls | Screens |
 |---|---:|---|
@@ -73,6 +73,7 @@ Result: **0 invalid fields** across 123 calls.
 | `browser.open_job` | 1 | features/jobs/AutofillPanel.tsx:55 |
 | `companies.get_detail` | 1 | features/companies/CompaniesRoute.tsx:38 |
 | `companies.get_merge_history` | 1 | features/companies/CompaniesRoute.tsx:43 |
+| `companies.get_trend` | 1 | features/companies/CompaniesRoute.tsx:42 |
 | `companies.list` | 2 | features/companies/CompaniesRoute.tsx:35<br>features/keywords/KeywordsRoute.tsx:67 |
 | `companies.merge` | 1 | features/companies/CompaniesRoute.tsx:70 |
 | `companies.unmerge` | 1 | features/companies/CompaniesRoute.tsx:81 |
@@ -136,7 +137,7 @@ request method.
 
 ## Preview handler audit
 
-All 56 preview cases are real method names. The preview result is checked
+All 57 preview cases are real method names. The preview result is checked
 against the real response schema for the same method, including required fields
 and forbidden extras:
 
@@ -158,6 +159,7 @@ applications.update_status
 applications.update_suppression_policy
 companies.get_detail
 companies.get_merge_history
+companies.get_trend
 companies.list
 companies.merge
 companies.unmerge

@@ -96,6 +96,92 @@ async def test_keyword_insights_round_trip_over_ipc() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_company_trend_reads_each_day_once_under_the_survivor() -> None:
+    from app.domain.models.company_merge import CompanyMergeRecord
+    from app.domain.models.posting import CompanySummaryRecord
+    from app.worker.main import _build_dispatcher
+
+    container = build_test_container()
+    await _seed(container)
+    async with container.uow_factory() as uow:
+        for index, (company, day, count, tier) in enumerate(
+            [
+                ("co_b", datetime(2026, 1, 1, tzinfo=UTC), 2, "limited"),
+                ("co_a", datetime(2026, 1, 1, 23, tzinfo=UTC), 5, "limited"),
+                ("co_a", datetime(2026, 2, 1, tzinfo=UTC), 9, "adequate"),
+            ]
+        ):
+            await uow.intelligence.company_summaries.add(
+                CompanySummaryRecord(
+                    id=f"chs_{index}",
+                    company_id=company,
+                    computed_at=day,
+                    sample_tier=tier,
+                    metrics={
+                        "n_unique_postings": count,
+                        "repost_ratio": 0.2,
+                        "inactive_ratio": 0.1,
+                    },
+                    labels=[],
+                    evidence=[],
+                )
+            )
+        await uow.company_merges.add(
+            CompanyMergeRecord(
+                id="merge_1",
+                survivor_id="co_a",
+                merged_id="co_b",
+                action="merge",
+                created_at=datetime(2026, 2, 1, tzinfo=UTC),
+                reason="same employer",
+            )
+        )
+        await uow.commit()
+
+    dispatcher = _build_dispatcher(container)
+    trend = await _call(dispatcher, "companies.get_trend", {"company_id": "co_b", "days": 90})
+
+    assert trend["company_id"] == "co_a"
+    assert trend["requested_id"] == "co_b"
+    assert trend["n_points"] == 2
+    assert [point["day"] for point in trend["points"]] == ["2026-01-01", "2026-02-01"]
+    # The merged company's later summary wins the shared day.
+    assert trend["points"][0]["n_unique_postings"] == 5
+    assert trend["points"][0]["repost_ratio"] is None
+    assert trend["points"][1]["repost_ratio"] == pytest.approx(0.2)
+
+    async with container.uow_factory() as uow:
+        await uow.company_merges.add(
+            CompanyMergeRecord(
+                id="merge_2",
+                survivor_id="co_a",
+                merged_id="co_b",
+                action="unmerge",
+                created_at=datetime(2026, 3, 2, tzinfo=UTC),
+                reason="separate again",
+            )
+        )
+        await uow.commit()
+    separate = await _call(dispatcher, "companies.get_trend", {"company_id": "co_b"})
+    assert separate["requested_id"] is None
+    assert separate["points"][0]["n_unique_postings"] == 2
+    assert separate["n_points"] == 1
+
+
+@pytest.mark.asyncio
+async def test_company_trend_unknown_company_is_an_error_envelope() -> None:
+    from app.worker.main import _build_dispatcher
+
+    dispatcher = _build_dispatcher(build_test_container())
+    response = await dispatcher.handle_request(
+        {"id": "req_1", "method": "companies.get_trend", "params": {"company_id": "missing"}}
+    )
+    assert response["ok"] is False
+    assert response["error"]["code"] == "not_found"
+
+
+@pytest.mark.asyncio
 async def test_company_merge_errors_are_envelopes_not_crashes() -> None:
     from app.worker.main import _build_dispatcher
 

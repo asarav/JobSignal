@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "days": {
+      "default": 90,
+      "maximum": 365,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "company_id"
+  ],
+  "title": "CompaniesGetTrendRequest",
+  "type": "object"
+}

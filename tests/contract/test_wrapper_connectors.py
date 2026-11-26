@@ -51,12 +51,8 @@ def _html_response(url: str, html: str) -> HttpResponse:
 
 
 EIGHTFOLD_SOURCE = "https://acme.eightfold.ai/careers"
-EIGHTFOLD_LIST = (
-    "https://acme.eightfold.ai/api/apply/v2/jobs?domain=acme.com&start=0&num=100"
-)
-EIGHTFOLD_DETAIL = (
-    "https://acme.eightfold.ai/api/apply/v2/jobs/42?domain=acme.com"
-)
+EIGHTFOLD_LIST = "https://acme.eightfold.ai/api/apply/v2/jobs?domain=acme.com&start=0&num=100"
+EIGHTFOLD_DETAIL = "https://acme.eightfold.ai/api/apply/v2/jobs/42?domain=acme.com"
 
 
 @pytest.mark.asyncio
@@ -185,8 +181,9 @@ async def test_phenom_uses_the_widget_endpoint_and_field_mapping():
     http = _PhenomHttp()
     connector = PhenomConnector()
     assert (
-        connector.matches("https://careers.acme.com", sniff=_sniff("<script>ddoKey</script>"))
-        .matched
+        connector.matches(
+            "https://careers.acme.com", sniff=_sniff("<script>ddoKey</script>")
+        ).matched
         is True
     )
     source = SourceConfig(
@@ -252,7 +249,9 @@ async def test_amazon_lists_from_search_json_and_fetches_detail_html():
     connector = AmazonConnector()
     assert connector.matches("https://www.amazon.jobs/en/search").matched is True
     source = SourceConfig(
-        id="s1", url="https://www.amazon.jobs/en/search", kind="ats",
+        id="s1",
+        url="https://www.amazon.jobs/en/search",
+        kind="ats",
         connector_id="ats.amazon",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
@@ -285,7 +284,10 @@ async def test_taleo_lists_jobdetail_links_and_returns_the_detail():
     connector = TaleoConnector()
     assert connector.matches(TALEO_SEARCH).matched is True
     source = SourceConfig(
-        id="s1", url=TALEO_SEARCH, kind="ats", connector_id="ats.taleo",
+        id="s1",
+        url=TALEO_SEARCH,
+        kind="ats",
+        connector_id="ats.taleo",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert [ref.url for ref in refs] == [TALEO_DETAIL]
@@ -359,7 +361,10 @@ async def test_career_site_routes_an_embedded_workday_wrapper():
     )
     connector = CareerSiteConnector()
     source = SourceConfig(
-        id="s1", url=page, kind="career_site", connector_id="ats.career_site",
+        id="s1",
+        url=page,
+        kind="career_site",
+        connector_id="ats.career_site",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert len(refs) == 1
@@ -375,14 +380,15 @@ async def test_career_site_routes_a_phenom_custom_host():
     class _PhenomHttp(FakeHttpClient):
         async def send(self, req):
             if req.url == page:
-                return Ok(
-                    _html_response(page, "<script>window.ddoKey='refineSearch'</script>")
-                )
+                return Ok(_html_response(page, "<script>window.ddoKey='refineSearch'</script>"))
             return Ok(_json_response(req.url, _phenom_search()))
 
     connector = CareerSiteConnector()
     source = SourceConfig(
-        id="s1", url=page, kind="career_site", connector_id="ats.career_site",
+        id="s1",
+        url=page,
+        kind="career_site",
+        connector_id="ats.career_site",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(_PhenomHttp()))]
     assert len(refs) == 1
@@ -404,7 +410,10 @@ async def test_career_site_harvests_job_links_when_no_ats_is_embedded():
     )
     connector = CareerSiteConnector()
     source = SourceConfig(
-        id="s1", url=page, kind="career_site", connector_id="ats.career_site",
+        id="s1",
+        url=page,
+        kind="career_site",
+        connector_id="ats.career_site",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert [ref.url for ref in refs] == [f"{page}/jobs/1"]
@@ -432,7 +441,10 @@ async def test_career_site_reads_a_sitemap_for_job_urls():
     )
     connector = CareerSiteConnector()
     source = SourceConfig(
-        id="s1", url=page, kind="career_site", connector_id="ats.career_site",
+        id="s1",
+        url=page,
+        kind="career_site",
+        connector_id="ats.career_site",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert [ref.url for ref in refs] == [detail]
@@ -441,10 +453,7 @@ async def test_career_site_reads_a_sitemap_for_job_urls():
 @pytest.mark.asyncio
 async def test_google_search_page_harvests_only_job_cards():
     page = "https://www.google.com/about/careers/applications/jobs/results/"
-    detail = (
-        "https://www.google.com/about/careers/applications/jobs/results/"
-        "123-staff-engineer"
-    )
+    detail = "https://www.google.com/about/careers/applications/jobs/results/123-staff-engineer"
     http = FakeHttpClient(
         {
             page: _html_response(
@@ -456,7 +465,10 @@ async def test_google_search_page_harvests_only_job_cards():
     )
     connector = CareerSiteConnector()
     source = SourceConfig(
-        id="s1", url=page, kind="career_site", connector_id="ats.career_site",
+        id="s1",
+        url=page,
+        kind="career_site",
+        connector_id="ats.career_site",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert [ref.url for ref in refs] == [detail]
@@ -466,12 +478,53 @@ async def test_google_search_page_harvests_only_job_cards():
 async def test_apple_search_page_harvests_public_detail_links():
     page = "https://jobs.apple.com/en-us/search?query=engineer"
     detail = "https://jobs.apple.com/en-us/details/114438346/specialist"
-    http = FakeHttpClient(
-        {page: _html_response(page, f'<a href="{detail}">Specialist</a>')}
-    )
+    http = FakeHttpClient({page: _html_response(page, f'<a href="{detail}">Specialist</a>')})
     connector = CareerSiteConnector()
     source = SourceConfig(
-        id="s1", url=page, kind="career_site", connector_id="ats.career_site",
+        id="s1",
+        url=page,
+        kind="career_site",
+        connector_id="ats.career_site",
     )
     refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
     assert [ref.url for ref in refs] == [detail]
+
+
+@pytest.mark.asyncio
+async def test_taleo_lists_postings_through_its_faceted_search_endpoint():
+    # Current sections render the list client-side; the page names the portal
+    # and the endpoint answers the same JSON the page's own script renders.
+    search = "https://acme.taleo.net/careersection/2/jobsearch.ftl?lang=en"
+    endpoint = (
+        "https://acme.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=101430233"
+    )
+    http = FakeHttpClient(
+        {
+            search: _html_response(
+                search, '<script>queryString: "lang=en&portal=101430233"</script>'
+            ),
+            endpoint: _json_response(
+                endpoint,
+                {
+                    "pagingData": {"currentPageNo": 1, "pageSize": 25, "totalCount": 2},
+                    "requisitionList": [{"jobId": "99"}, {"jobId": "100"}],
+                },
+            ),
+        }
+    )
+    connector = TaleoConnector()
+    source = SourceConfig(
+        id="s1",
+        url=search,
+        kind="ats",
+        connector_id="ats.taleo",
+    )
+
+    refs = [ref async for ref in await connector.list_jobs(source, _ctx(http))]
+
+    assert [ref.url for ref in refs] == [
+        "https://acme.taleo.net/careersection/2/jobdetail.ftl?job=99&lang=en",
+        "https://acme.taleo.net/careersection/2/jobdetail.ftl?job=100&lang=en",
+    ]
+    posted = [req for req in http.sent if req.method == "POST"]
+    assert posted and posted[0].headers["tz"] == "UTC"

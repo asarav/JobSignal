@@ -1,0 +1,12 @@
+{
+  "payloads": [
+    "<script>window.__xss = true;</script>",
+    "<img src=x onerror=\"window.__xss = true\">",
+    "<svg onload=\"window.__xss = true\"></svg>",
+    "<a href=\"javascript:window.__xss=true\">Apply</a>",
+    "<iframe src=\"javascript:window.__xss=true\"></iframe>",
+    "<div style=\"background:url(javascript:window.__xss=true)\">x</div>",
+    "<p onmouseover=\"window.__xss = true\">hover</p>",
+    "&lt;script&gt;alert(1)&lt;/script&gt;"
+  ]
+}

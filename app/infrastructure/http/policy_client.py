@@ -168,6 +168,13 @@ class RateLimiter:
         st = self._origin(host)
         st.backoff_until = max(st.backoff_until, time.monotonic() + seconds)
 
+    def remaining_backoff(self, host: str) -> float:
+        """Seconds this origin is still refused for (0 when it is open)."""
+        st = self._state.get(host)
+        if st is None:
+            return 0.0
+        return max(0.0, st.backoff_until - time.monotonic())
+
 
 @dataclass
 class PolicyHttpClient:
@@ -329,18 +336,18 @@ class PolicyHttpClient:
                 # Retryable status.
                 if resp.status in _RETRYABLE_STATUSES:
                     retry_after = self._retry_after(resp)
+                    if retry_after is not None:
+                        # The origin named a window for this client IP, so the
+                        # whole origin waits, not just this request: letting the
+                        # others keep knocking through the countdown is what
+                        # turned 90% of a 1 req/s host's answers into refusals.
+                        self.rate_limiter.backoff(host, retry_after)
+                    last_error = self._rate_error(resp, host, retry_after)
                     if attempt < self.max_retries - 1:
                         await self._sleep_backoff(attempt, retry_after)
-                        last_error = PortError(
-                            code="http.server_error", message=f"HTTP {resp.status}", retryable=True
-                        )
                         continue
                     self.rate_limiter.release(host)
-                    return Err(
-                        PortError(
-                            code="http.server_error", message=f"HTTP {resp.status}", retryable=True
-                        )
-                    )
+                    return Err(last_error)
 
                 # 404 tenant etc. pass through.
                 self.rate_limiter.release(host)
@@ -355,6 +362,22 @@ class PolicyHttpClient:
         except Exception as exc:  # noqa: BLE001
             self.rate_limiter.release(host)
             return Err(PortError(code="http.transport", message=str(exc), retryable=True))
+
+    def _rate_error(self, resp: HttpResponse, host: str, retry_after: float | None) -> PortError:
+        """A retryable-status error that names what an operator needs to know."""
+        limited = resp.status == 429
+        waited = f"; origin backed off {retry_after:.0f}s" if retry_after is not None else ""
+        return PortError(
+            code="http.rate_limited" if limited else "http.server_error",
+            message=f"HTTP {resp.status} from {host}{waited}",
+            retryable=True,
+            details={
+                "host": host,
+                "status": resp.status,
+                "retry_after_s": retry_after,
+                "origin_backoff_s": round(self.rate_limiter.remaining_backoff(host), 1),
+            },
+        )
 
     async def _sleep_backoff(self, attempt: int, retry_after: float | None) -> None:
         if retry_after is not None:

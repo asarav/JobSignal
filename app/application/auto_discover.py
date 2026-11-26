@@ -29,10 +29,12 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.application.board_probe import BoardProbe, ProbeTarget
 from app.application.config import discovery_settings
 from app.application.container import Container
 from app.application.dto import AutoDiscoverResult
@@ -51,6 +53,7 @@ from app.domain.models.discovery import (
 )
 from app.domain.models.source import SourceConfig
 from app.domain.ports.http import HttpClient
+from app.domain.services.board_identity import identity_key
 from app.domain.services.tiers import (
     DEFAULT_TIER_INTERVALS_S,
     TIERS,
@@ -100,6 +103,62 @@ DEFAULT_WARMUP_PASSES = 5
 #: call needs a generous ceiling (the pass is still bounded by its budgets).
 DEFAULT_PROVIDER_TIMEOUT_S = 300.0
 
+#: Candidates probed before registering in one pass.  Each probe is one HTTP
+#: request, so the budget is what keeps a fifty-percent-dead index from turning
+#: registration into a crawl of the archive's mistakes.
+DEFAULT_PROBE_CANDIDATES_PER_PASS = 50
+
+#: Hiring seed boards registered per pass in steady state (the cold-start
+#: bootstrap is separate and much larger).  Reserving this share keeps the seed
+#: tail moving even when live discovery fills the normal cap.
+DEFAULT_SEED_BOARDS_PER_PASS = 25
+
+#: Boards the first-run bootstrap registers, largest hiring first.
+DEFAULT_BOOTSTRAP_SEED_SOURCES = 2_000
+
+#: Live-but-empty boards promoted out of probation per pass.  They are kept
+#: (a quiet employer hires later) but never take a normal registration slot.
+DEFAULT_EMPTY_BOARDS_PER_PASS = 5
+
+#: Live-but-empty sources crawled per pass.  6k empties at a weekly cadence is
+#: ~860 crawls/day, so the tier is capped independently of the crawl budget.
+DEFAULT_EMPTY_CRAWL_SOURCES_PER_PASS = 5
+
+#: Candidates a pass may leave unregistered without losing them.
+DEFAULT_CANDIDATE_BACKLOG_LIMIT = 500
+
+#: Cadence of a live-but-empty or repeatedly failing source.
+SLOW_INTERVAL_S = 604_800.0
+
+#: How long a probe answer is trusted, by state.  A dead board is re-asked
+#: after three months because a retired tenant can reopen.
+PROBE_TTL_S: dict[str, float] = {
+    "hiring": 86_400.0,
+    "live_empty": 2_592_000.0,
+    "dead": 7_776_000.0,
+    "unknown": 3_600.0,
+}
+
+#: Settings keys inside the auto-discovery state blob.
+PROBE_CACHE_KEY = "probe_cache"
+PROBATION_KEY = "probation"
+BACKLOG_KEY = "register_backlog"
+DISMISSED_KEY = "dismissed"
+YIELD_KEY = "yield"
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationStats:
+    """What one pass's registration stage did (surfaced in the result)."""
+
+    registered: int = 0
+    probed: int = 0
+    live: int = 0
+    dead: int = 0
+    empty: int = 0
+    queued: int = 0
+    by_connector: dict[str, int] = field(default_factory=dict)
+
 
 class _NoGate:
     async def __aenter__(self) -> None:
@@ -125,10 +184,13 @@ class AutoDiscoverUseCase:
         self._registry = registry
         self._http = http
         self._crawl_gate = crawl_gate
+        self._board_probe = BoardProbe(http)
         #: Config can be refreshed by the worker after a settings update; the
         #: container itself is immutable and fixed at startup.
         self._config: Any = container.config
         self._pass_cache: dict[object, object] = {}
+        #: Per-connector slice weights for this pass (user interest + yield).
+        self._pass_weights: dict[str, float] = {}
         # Continuous passes can overlap with a manual ``discovery.auto_discover``
         # request; serialize them so one pass never double-spends its budgets.
         self._run_lock = asyncio.Lock()
@@ -173,7 +235,8 @@ class AutoDiscoverUseCase:
                 budget=slice_budget,
                 spent=slices,
             )
-        registered = await self._register(discovered)
+        registration = await self._register(state, discovered)
+        registered = registration.registered
         postings_verified = 0
         tiers_changed = 0
         if self._funnel_enabled():
@@ -212,6 +275,11 @@ class AutoDiscoverUseCase:
             postings_harvested=len(postings),
             postings_verified=postings_verified,
             tiers_changed=tiers_changed,
+            probed=registration.probed,
+            live=registration.live,
+            dead=registration.dead,
+            empty=registration.empty,
+            queued=registration.queued,
         )
         self._container.logger.info(
             "discovery.auto_discover.completed",
@@ -222,6 +290,11 @@ class AutoDiscoverUseCase:
             postings_harvested=result.postings_harvested,
             postings_verified=result.postings_verified,
             tiers_changed=result.tiers_changed,
+            probed=result.probed,
+            live=result.live,
+            dead=result.dead,
+            empty=result.empty,
+            queued=result.queued,
             rotation_cursor=cursor,
         )
         return result
@@ -255,6 +328,9 @@ class AutoDiscoverUseCase:
         """
         passes = self._warmup_passes()
         total = AutoDiscoverResult()
+        bootstrapped = await self._bootstrap_seed()
+        if bootstrapped:
+            total.registered += bootstrapped
         for index in range(passes):
             try:
                 result = await self.run()
@@ -277,6 +353,11 @@ class AutoDiscoverUseCase:
                     total.postings_verified + result.postings_verified
                 ),
                 tiers_changed=total.tiers_changed + result.tiers_changed,
+                probed=total.probed + result.probed,
+                live=total.live + result.live,
+                dead=total.dead + result.dead,
+                empty=total.empty + result.empty,
+                queued=result.queued,
             )
             self._container.logger.info(
                 "discovery.auto_discover.warmup_pass",
@@ -301,6 +382,7 @@ class AutoDiscoverUseCase:
         provider that can harvest posting URLs is asked for those instead of
         boards (the bundled ``discovery.funnel`` provider is exactly that).
         """
+        self._pass_weights = await self._slice_weights()
         plugin_registry = self._container.registry
         discovered: list[DiscoveredSource] = []
         postings: list[DiscoveredPosting] = []
@@ -356,11 +438,45 @@ class AutoDiscoverUseCase:
     ) -> list[DiscoveredSource]:
         """Materialize a provider's stream so the isolation shim covers it."""
         items: list[DiscoveredSource] = []
-        query = DiscoveryQuery(extra={"cursor": cursor, "slices": slices})
+        query = DiscoveryQuery(
+            extra={
+                "cursor": cursor,
+                "slices": slices,
+                "target_weights": dict(self._pass_weights),
+            }
+        )
         ctx = self._make_ctx()
         async for source in provider.discover(query, ctx):
             items.append(source)
         return items
+
+    async def _slice_weights(self) -> dict[str, float]:
+        """How much index effort each connector deserves next pass.
+
+        Two user-side signals, both cheap: sources the user added by hand (the
+        clearest vote for an ATS) and how many boards that connector's last
+        slices produced.  Every connector keeps a weight of at least 1, so a
+        quiet target is still explored.  Providers that support weighted
+        allocation (``discovery.domain_index``) read ``target_weights``.
+        """
+        weights: dict[str, float] = {}
+        try:
+            async with self._container.uow_factory() as uow:
+                interest = await uow.settings.get("discovery_interest") or {}
+        except Exception:  # noqa: BLE001 - a signal must never fail discovery
+            interest = {}
+        if isinstance(interest, dict):
+            for key, value in interest.items():
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    weights[str(key)] = 1.0 + min(3.0, value / 5.0)
+        produced = (await self._state()).get(YIELD_KEY)
+        if isinstance(produced, dict):
+            for key, value in produced.items():
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    weights[str(key)] = weights.get(str(key), 1.0) + min(
+                        2.0, value / 10.0
+                    )
+        return weights
 
     async def _collect_postings(
         self, provider: Any, cursor: int, slices: int
@@ -373,39 +489,349 @@ class AutoDiscoverUseCase:
             items.append(posting)
         return items
 
-    async def _register(self, discovered: Sequence[DiscoveredSource]) -> int:
-        """Store unknown career sites as sources; existing URLs are skipped."""
+    async def _register(
+        self, state: dict[str, object], discovered: Sequence[DiscoveredSource]
+    ) -> RegistrationStats:
+        """Probe, order and store candidates; never lose the ones over the cap.
+
+        * Board identity (not the raw URL) decides what is already known, and
+          archived sources count: a board the user removed must not come back.
+        * A live candidate is probed first (bounded per pass).  A dead board is
+          dropped, a hiring board registers, and a confidently empty board goes
+          to probation instead of taking a registration slot.
+        * Seed boards already carry their posting count, so an empty seed board
+          skips the probe entirely and cannot displace a hiring one.
+        * Candidates over the budget are persisted to a backlog and drained by
+          the next pass instead of being discarded.
+        """
         max_new = self._setting_int(
             "max_new_sources_per_run", DEFAULT_MAX_NEW_SOURCES_PER_RUN
         )
-        known = {_source_key(s.url) for s in await self._registry.list_sources()}
+        seed_budget = self._setting_int(
+            "seed_boards_per_pass", DEFAULT_SEED_BOARDS_PER_PASS
+        )
+        max_probes = self._setting_int(
+            "probe_candidates_per_pass", DEFAULT_PROBE_CANDIDATES_PER_PASS
+        )
+        empty_budget = self._setting_int(
+            "empty_boards_per_pass", DEFAULT_EMPTY_BOARDS_PER_PASS
+        )
+        backlog_limit = self._setting_int(
+            "candidate_backlog_limit", DEFAULT_CANDIDATE_BACKLOG_LIMIT
+        )
+        now = _as_utc(self._container.clock.now())
+
+        taken = await self._taken_identities()
+        known_urls = {
+            _source_key(s.url) for s in await self._registry.list_sources()
+        }
+        raw_dismissed = state.get(DISMISSED_KEY)
+        dismissed = (
+            {item for item in raw_dismissed if isinstance(item, str)}
+            if isinstance(raw_dismissed, list)
+            else set()
+        )
+        raw_cache = state.get(PROBE_CACHE_KEY)
+        cache: dict[str, object] = (
+            dict(raw_cache) if isinstance(raw_cache, dict) else {}
+        )
+        raw_probation = state.get(PROBATION_KEY)
+        probation = (
+            [row for row in raw_probation if isinstance(row, dict)]
+            if isinstance(raw_probation, list)
+            else []
+        )
+        raw_backlog = state.get(BACKLOG_KEY)
+        backlog = (
+            [row for row in raw_backlog if isinstance(row, dict)]
+            if isinstance(raw_backlog, list)
+            else []
+        )
+
+        queued = [_candidate_from_row(row) for row in backlog]
+        candidates = [item for item in queued if item is not None] + list(discovered)
+        seed_candidates = [item for item in candidates if _is_seed_candidate(item)]
+        live_candidates = [item for item in candidates if not _is_seed_candidate(item)]
+
+        deferred: list[DiscoveredSource] = []
+        new_probation: list[dict[str, object]] = []
         registered = 0
-        for source in discovered:
-            if registered >= max_new:
-                self._container.logger.info(
-                    "discovery.register_capped",
-                    cap=max_new,
-                    candidates=len(discovered),
-                )
-                break
-            key = _source_key(source.url)
-            if key in known:
+        probed = 0
+        live = 0
+        dead = 0
+        empty = 0
+        by_connector: dict[str, int] = {}
+
+        def note(source: DiscoveredSource) -> None:
+            connector = source.ats_hint or ""
+            by_connector[connector] = by_connector.get(connector, 0) + 1
+
+        def claim(source: DiscoveredSource, ident: str) -> None:
+            taken.add(ident)
+            known_urls.add(_source_key(source.url))
+
+        # Reserve a share of the cap for the seed tail, so live discovery
+        # cannot starve it forever.  With no seed candidates the whole cap goes
+        # to live discovery.
+        seed_reserved = (
+            min(seed_budget, max(1, max_new // 4)) if seed_candidates else 0
+        )
+        live_cap = max(0, max_new - seed_reserved)
+
+        # Promote a few empty boards from an earlier pass first.  They keep the
+        # slow cadence and never compete with a hiring board for a normal slot.
+        # Draining before the candidate walk also means re-observing a board
+        # that is still in probation cannot block its own promotion.
+        drained = 0
+        remaining_probation: list[dict[str, object]] = []
+        probation_idents: set[str] = set()
+        for row in probation:
+            if drained >= empty_budget:
+                remaining_probation.append(row)
                 continue
-            connector_id = source.ats_hint or self._registry.classify(source.url)
+            source = _candidate_from_row(row)
+            ident = (
+                identity_key(source.ats_hint, source.url, source.tenant_key)
+                if source is not None
+                else ""
+            )
+            if source is None or not ident or ident in taken or ident in dismissed:
+                continue
             try:
-                await self._registry.add(
-                    source.url,
-                    connector_id=connector_id,
-                    interval_s=self._default_interval_s(),
-                    tenant_key=source.tenant_key,
+                await self._add_source(
+                    source, interval_s=SLOW_INTERVAL_S, probe_status="live_empty", postings=0
                 )
-            except Exception as exc:  # noqa: BLE001 - a bad URL must not abort the run
+            except Exception as exc:  # noqa: BLE001 - one bad row must not stop the pass
                 self._container.logger.warning(
                     "discovery.register_failed", url=source.url, error=str(exc)
                 )
                 continue
-            known.add(key)
+            claim(source, ident)
             registered += 1
+            empty += 1
+            drained += 1
+            note(source)
+        for row in remaining_probation:
+            pending = _candidate_from_row(row)
+            if pending is None:
+                continue
+            pending_ident = identity_key(
+                pending.ats_hint, pending.url, pending.tenant_key
+            )
+            if pending_ident:
+                probation_idents.add(pending_ident)
+
+        for source in live_candidates:
+            ident = identity_key(source.ats_hint, source.url, source.tenant_key)
+            if not ident or ident in taken or ident in dismissed:
+                continue
+            if _source_key(source.url) in known_urls:
+                continue
+            entry = _fresh_probe(cache, ident, now)
+            if entry is None:
+                if probed >= max_probes:
+                    deferred.append(source)
+                    continue
+                outcome = await self._board_probe.probe(
+                    ProbeTarget(source.ats_hint, source.url, source.tenant_key)
+                )
+                probed += 1
+                cache[ident] = {
+                    "state": outcome.state,
+                    "postings": outcome.postings,
+                    "at": now.isoformat(),
+                }
+                state_name: str = outcome.state
+                postings = outcome.postings
+            else:
+                raw_state = entry.get("state")
+                state_name = raw_state if isinstance(raw_state, str) else "unknown"
+                raw_postings = entry.get("postings")
+                postings = raw_postings if isinstance(raw_postings, int) else None
+            if state_name == "dead":
+                dead += 1
+                claim(source, ident)
+                continue
+            if state_name == "live_empty":
+                if ident not in probation_idents:
+                    new_probation.append(_candidate_row(source, "live_empty", 0))
+                    probation_idents.add(ident)
+                claim(source, ident)
+                continue
+            if registered >= live_cap:
+                deferred.append(source)
+                continue
+            await self._add_source(
+                source,
+                interval_s=self._default_interval_s(),
+                probe_status="hiring" if state_name == "hiring" else None,
+                postings=postings,
+            )
+            claim(source, ident)
+            registered += 1
+            live += 1
+            note(source)
+
+        for source in seed_candidates:
+            ident = identity_key(source.ats_hint, source.url, source.tenant_key)
+            if not ident or ident in taken or ident in dismissed:
+                continue
+            if _source_key(source.url) in known_urls:
+                continue
+            observed = source.observed_postings
+            if observed == 0:
+                if ident not in probation_idents:
+                    new_probation.append(_candidate_row(source, "live_empty", 0))
+                    probation_idents.add(ident)
+                claim(source, ident)
+                continue
+            if registered >= max_new:
+                deferred.append(source)
+                continue
+            await self._add_source(
+                source,
+                interval_s=self._default_interval_s(),
+                probe_status="hiring" if observed else None,
+                postings=observed,
+            )
+            claim(source, ident)
+            registered += 1
+            live += 1
+            note(source)
+
+        state[PROBE_CACHE_KEY] = _prune_probe_cache(cache, now)
+        state[PROBATION_KEY] = (new_probation + remaining_probation)[:1000]
+        state[BACKLOG_KEY] = [
+            _candidate_row(item) for item in deferred[:backlog_limit]
+        ]
+        state[YIELD_KEY] = by_connector
+
+        stats = RegistrationStats(
+            registered=registered,
+            probed=probed,
+            live=live,
+            dead=dead,
+            empty=empty,
+            queued=len(deferred[:backlog_limit]),
+            by_connector=by_connector,
+        )
+        if deferred:
+            self._container.logger.info(
+                "discovery.register_backlog",
+                queued=stats.queued,
+                candidates=len(candidates),
+                cap=max_new,
+            )
+        self._container.logger.info(
+            "discovery.register_completed",
+            registered=stats.registered,
+            probed=stats.probed,
+            live=stats.live,
+            dead=stats.dead,
+            empty=stats.empty,
+            queued=stats.queued,
+        )
+        return stats
+
+    async def _add_source(
+        self,
+        source: DiscoveredSource,
+        *,
+        interval_s: float,
+        probe_status: str | None = None,
+        postings: int | None = None,
+    ) -> None:
+        """Register one board and record what the probe observed about it."""
+        connector_id = source.ats_hint or self._registry.classify(source.url)
+        stored = await self._registry.add(
+            source.url,
+            connector_id=connector_id,
+            interval_s=interval_s,
+            tenant_key=source.tenant_key,
+            record_interest=False,
+        )
+        if probe_status is None and postings is None:
+            return
+        schedule = dict(stored.schedule)
+        if probe_status is not None:
+            schedule["probe_status"] = probe_status
+        if postings is not None:
+            schedule["observed_postings"] = postings
+        async with self._container.uow_factory() as uow:
+            row = await uow.sources.get(stored.id)
+            if row is not None:
+                await uow.sources.save(replace(row, schedule=schedule))
+                await uow.commit()
+
+    async def _taken_identities(self) -> set[str]:
+        """Boards already known, including the ones the user removed."""
+        taken: set[str] = set()
+        for source in list(await self._registry.list_sources()) + list(
+            await self._registry.list_archived()
+        ):
+            ident = identity_key(source.connector_id, source.url, source.ats_tenant_key)
+            if ident:
+                taken.add(ident)
+        return taken
+
+    async def _bootstrap_seed(self) -> int:
+        """Register the largest hiring seed boards on a cold start.
+
+        This is a separate budget from ``max_new_sources_per_run``: the seed is
+        a warm start, so the first minutes should produce a useful corpus
+        instead of 200 boards an hour for a week.  Empty boards do not
+        participate; they enter probation later.
+        """
+        limit = self._setting_non_negative(
+            "bootstrap_seed_sources", DEFAULT_BOOTSTRAP_SEED_SOURCES
+        )
+        if limit <= 0:
+            return 0
+        candidates: list[DiscoveredSource] = []
+        for entry in self._container.registry.list_by_kind("discovery"):
+            if not self._container.registry.is_enabled(str(entry.manifest.id)):
+                continue
+            provider = entry.instance
+            bootstrap = getattr(provider, "bootstrap_candidates", None)
+            if callable(bootstrap):
+                try:
+                    candidates = list(bootstrap(limit))
+                except Exception as exc:  # noqa: BLE001 - a bad seed must not abort
+                    self._container.logger.warning(
+                        "discovery.bootstrap_failed", error=str(exc)
+                    )
+                break
+        if not candidates:
+            return 0
+        taken = await self._taken_identities()
+        registered = 0
+        for source in candidates:
+            ident = identity_key(source.ats_hint, source.url, source.tenant_key)
+            if not ident or ident in taken:
+                continue
+            try:
+                await self._add_source(
+                    source,
+                    interval_s=self._default_interval_s(),
+                    probe_status="hiring",
+                    postings=source.observed_postings,
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad URL must not abort
+                self._container.logger.warning(
+                    "discovery.bootstrap_register_failed",
+                    url=source.url,
+                    error=str(exc),
+                )
+                continue
+            taken.add(ident)
+            registered += 1
+            if registered >= limit:
+                break
+        self._container.logger.info(
+            "discovery.bootstrap_completed",
+            registered=registered,
+            candidates=len(candidates),
+        )
         return registered
 
     # -------------------------------------------------------------------- funnel
@@ -538,9 +964,26 @@ class AutoDiscoverUseCase:
         budget = self._setting_int(
             "max_crawl_sources_per_run", DEFAULT_MAX_CRAWL_SOURCES_PER_RUN
         )
-        sources = await self._due_sources(budget)
+        empty_cap = self._setting_int(
+            "empty_crawl_sources_per_pass", DEFAULT_EMPTY_CRAWL_SOURCES_PER_PASS
+        )
+        # Ask for more than the budget because dead and empty sources are
+        # filtered out below; then take normal sources first and let only a few
+        # empty ones through.
+        due = await self._due_sources(budget + empty_cap + 20)
+        normal: list[SourceConfig] = []
+        empties: list[SourceConfig] = []
+        for source in due:
+            status = source.schedule.get("probe_status")
+            if status == "dead":
+                continue
+            if status == "live_empty":
+                empties.append(source)
+            else:
+                normal.append(source)
+        selected = (normal[:budget] + empties[:empty_cap])[: budget + empty_cap]
         outcomes = await asyncio.gather(
-            *(self._crawl_one(source) for source in sources)
+            *(self._crawl_one(source) for source in selected)
         )
         crawled = sum(1 for ok in outcomes if ok)
         return crawled, len(outcomes) - crawled
@@ -572,10 +1015,44 @@ class AutoDiscoverUseCase:
             self._container.logger.warning(
                 "crawl.failed", source_id=source.id, error=str(exc)
             )
+            await self._note_crawl_outcome(source, ok=False)
             return False
-        if stats.get("error"):
-            return False
-        return True
+        ok = not stats.get("error")
+        await self._note_crawl_outcome(source, ok=ok)
+        return ok
+
+    async def _note_crawl_outcome(self, source: SourceConfig, *, ok: bool) -> None:
+        """Back a repeatedly failing board off; keep an empty one slow.
+
+        A source that fails two crawls in a row is far more likely dead than
+        temporarily broken, so it drops to the weekly cadence and stops taking
+        a hot/warm slot.  It is never deleted: the failure stays visible and the
+        user can remove it.
+        """
+        schedule = dict(source.schedule)
+        if ok:
+            if "probe_failures" not in schedule:
+                return
+            schedule.pop("probe_failures", None)
+        else:
+            raw_failures = schedule.get("probe_failures")
+            failures = (
+                raw_failures if isinstance(raw_failures, int) else 0
+            ) + 1
+            schedule["probe_failures"] = failures
+            if failures >= 2:
+                schedule["probe_status"] = "dead"
+                schedule["interval_s"] = SLOW_INTERVAL_S
+        try:
+            async with self._container.uow_factory() as uow:
+                row = await uow.sources.get(source.id)
+                if row is not None:
+                    await uow.sources.save(replace(row, schedule=schedule))
+                    await uow.commit()
+        except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a pass
+            self._container.logger.warning(
+                "discovery.crawl_outcome_failed", source_id=source.id, error=str(exc)
+            )
 
     async def _due_sources(self, limit: int) -> list[SourceConfig]:
         """Enabled sources whose own interval has elapsed, stalest first."""
@@ -776,6 +1253,93 @@ def _select_postings(
             break
         round_index += 1
     return selected, unregistered
+
+
+def _candidate_row(
+    source: DiscoveredSource,
+    probe_status: str | None = None,
+    postings: int | None = None,
+) -> dict[str, object]:
+    """A candidate as persisted state (backlog, probation)."""
+    observed = postings if postings is not None else source.observed_postings
+    row: dict[str, object] = {
+        "url": source.url,
+        "kind": source.kind,
+        "confidence": source.confidence,
+    }
+    if source.ats_hint:
+        row["ats_hint"] = source.ats_hint
+    if source.tenant_key:
+        row["tenant_key"] = source.tenant_key
+    if source.company_hint:
+        row["company_hint"] = source.company_hint
+    if observed is not None:
+        row["postings"] = observed
+    if probe_status:
+        row["probe_status"] = probe_status
+    return row
+
+
+def _candidate_from_row(row: Mapping[str, object]) -> DiscoveredSource | None:
+    url = row.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+    ats_hint = row.get("ats_hint")
+    tenant_key = row.get("tenant_key")
+    company_hint = row.get("company_hint")
+    kind = row.get("kind")
+    confidence = row.get("confidence")
+    postings = row.get("postings")
+    return DiscoveredSource(
+        kind=kind if isinstance(kind, str) and kind else "ats",
+        url=url,
+        company_hint=company_hint if isinstance(company_hint, str) else None,
+        ats_hint=ats_hint if isinstance(ats_hint, str) and ats_hint else None,
+        confidence=float(confidence) if isinstance(confidence, (int, float)) else 0.6,
+        evidence=[],
+        tenant_key=tenant_key if isinstance(tenant_key, str) and tenant_key else None,
+        observed_postings=(
+            postings if isinstance(postings, int) and not isinstance(postings, bool) else None
+        ),
+    )
+
+
+def _is_seed_candidate(source: DiscoveredSource) -> bool:
+    """Seed shards carry an observed count; live candidates do not."""
+    return source.observed_postings is not None
+
+
+def _fresh_probe(
+    cache: Mapping[str, object], ident: str, now: datetime
+) -> dict[str, object] | None:
+    entry = cache.get(ident)
+    if not isinstance(entry, dict):
+        return None
+    raw_state = entry.get("state")
+    ttl = PROBE_TTL_S.get(str(raw_state))
+    if ttl is None:
+        return None
+    moment = _parse_ts(entry.get("at"))
+    if moment is None:
+        return entry
+    if (now - moment).total_seconds() <= ttl:
+        return entry
+    return None
+
+
+def _prune_probe_cache(
+    cache: Mapping[str, object], now: datetime
+) -> dict[str, object]:
+    """Keep the probe cache bounded: nothing older than the longest TTL."""
+    kept: dict[str, object] = {}
+    for key, entry in cache.items():
+        if not isinstance(entry, dict):
+            continue
+        moment = _parse_ts(entry.get("at"))
+        if moment is not None and (now - moment).total_seconds() > max(PROBE_TTL_S.values()):
+            continue
+        kept[key] = entry
+    return kept
 
 
 def _tenant_of_source(source: SourceConfig) -> str:

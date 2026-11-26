@@ -63,6 +63,17 @@ Merging never changes risk history, snapshots or posting rows; it only changes h
 company evidence is read. See
 [ADR-0013](adr/0013-company-merge-and-keyword-history.md).
 
+## Hiring trend
+
+`companies.get_trend` reads `company_hiring_summaries`, one append-only row per
+company per UTC day, and returns at most 90 points oldest first. Merged
+companies read under the survivor, so a merge does not split the series. A
+summary is only labelled at the *adequate* sample tier; below it the point
+carries counts and the rate is withheld rather than shown as a precise number.
+Empty days are gaps, not zeroes. The Companies screen draws the series as an
+inline SVG — no chart dependency — and describes it as observed postings, not a
+forecast.
+
 ## Keyword demand
 
 Per-posting keyword persistence and prevalence live in migration 0016 and are
@@ -70,6 +81,10 @@ described in [how-keywords-work.md](how-keywords-work.md).
 
 ## Tests
 
+- `tests/integration/test_ipc_company_keywords.py` — trend round-trip, merge
+  resolution and small-sample withholding.
+- `tests/contract/test_posting_intelligence_repositories.py` — daily-history
+  parity between the SQLite and in-memory stores.
 - `tests/integration/test_companies.py` — counts, detail contents and the
   not-found error.
 - `tests/integration/test_company_merge.py` — merge, unmerge, idempotency, cycle

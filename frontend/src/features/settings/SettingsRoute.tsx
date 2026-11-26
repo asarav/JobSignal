@@ -6,6 +6,7 @@ import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { Tabs } from "../../components/Tabs";
 import { Copy } from "../../copy/copy";
+import { deleteAllData } from "../../services/deleteData";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
   PluginsListResponsePluginInfo,
@@ -101,6 +102,9 @@ export function SettingsRoute() {
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importConfirmed, setImportConfirmed] = useState(false);
+  const [deleteText, setDeleteText] = useState("");
+  const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [sourceUrl, setSourceUrl] = useState("");
   const [lastRun, setLastRun] = useState<Record<string, unknown> | null>(null);
   const [lastAutoRun, setLastAutoRun] = useState<Record<string, unknown> | null>(null);
@@ -182,6 +186,21 @@ export function SettingsRoute() {
       setBusy(false);
     }
   }, [importPath, load]);
+
+  const removeAllData = useCallback(async () => {
+    setDeleting(true);
+    setDeleteMessage(null);
+    try {
+      await deleteAllData(deleteText);
+      setDeleteText("");
+      setDeleteMessage("Local data deleted. The worker is restarting with an empty database…");
+      window.setTimeout(() => window.location.reload(), 2500);
+    } catch (exc) {
+      setDeleteMessage(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteText]);
 
   const toggle = async (plugin: PluginsListResponsePluginInfo) => {
     setBusy(true);
@@ -493,6 +512,11 @@ export function SettingsRoute() {
               <p className="mt-3 text-sm text-slate-600">
                 {String(lastAutoRun.discovered ?? 0)} sites found,{" "}
                 {String(lastAutoRun.registered ?? 0)} new sources,{" "}
+                {String(lastAutoRun.probed ?? 0)} probed (
+                {String(lastAutoRun.live ?? 0)} live,{" "}
+                {String(lastAutoRun.empty ?? 0)} empty,{" "}
+                {String(lastAutoRun.dead ?? 0)} dead),{" "}
+                {String(lastAutoRun.queued ?? 0)} queued,{" "}
                 {String(lastAutoRun.crawled ?? 0)} crawled,{" "}
                 {String(lastAutoRun.failed ?? 0)} failed.
               </p>
@@ -592,6 +616,38 @@ export function SettingsRoute() {
                 ))}
               </ul>
             )}
+          </section>
+
+          <section className="rounded-lg border border-red-300 bg-red-50 p-4">
+            <h2 className="text-base font-semibold text-red-900">Delete all local data</h2>
+            <p className="mt-1 text-xs text-red-800">
+              Removes every job, source, résumé, backup and log from the local data folder,
+              then restarts the worker on an empty database. Export a backup first if you may
+              want this data again. This cannot be undone.
+            </p>
+            <label className="mt-3 block text-xs font-medium text-red-900" htmlFor="delete-all">
+              Type DELETE to confirm
+            </label>
+            <input
+              id="delete-all"
+              type="text"
+              value={deleteText}
+              autoComplete="off"
+              onChange={(event) => setDeleteText(event.target.value)}
+              className="mt-1 rounded border border-red-300 px-2 py-1 font-mono text-sm"
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                className="border-red-600 bg-red-600 text-white"
+                disabled={deleting || deleteText.trim() !== "DELETE"}
+                onClick={() => void removeAllData()}
+              >
+                {deleting ? "Deleting…" : "Delete all local data"}
+              </Button>
+              {deleteMessage ? (
+                <span className="text-xs text-red-900">{deleteMessage}</span>
+              ) : null}
+            </div>
           </section>
         </div>
       ) : null}

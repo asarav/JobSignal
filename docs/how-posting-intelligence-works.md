@@ -57,9 +57,9 @@ clicks or fills anything. A single timeout is missing evidence; two consecutive
 timeouts become a weak signal. Checks are budgeted: an active job at most once
 per seven days, plus an explicit "Verify now".
 
-The verifier itself ships in the next M8 slice. Until then,
-`signal.endpoint_availability` reports missing and the other seven providers
-carry the assessment.
+The verifier is `jobs.verify_now` and the maintenance sweep. When a check
+cannot run, `signal.endpoint_availability` reports missing and the other seven
+providers carry the assessment; missing is never treated as negative evidence.
 
 ## Risk and confidence
 

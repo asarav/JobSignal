@@ -56,7 +56,9 @@ on the user, who would have to add sources whenever the list missed an employer.
 3. **Demote the seed file to a bootstrap.** `discovery.ats_directory` stays for
    cold start, demos and tests, and its description says so. `discovery.
    auto_discover` refuses to treat it as the discovery engine. As shipped, the
-   seed file is a **warm start**: 35,572 boards across eleven ATSs — the five
+   seed file is a **warm start**: 35,572 boards across eleven ATSs at the time
+   of this decision (the current manifest records 54,655 boards across fourteen
+   connectors) — the five
    fixed-host ATSs whose boards live at `host/{tenant}` (Greenhouse, Lever,
    Ashby, SmartRecruiters and Workable), the subdomain-addressed Workday, iCIMS
    and BambooHR boards, path-addressed UKG Pro/UltiPro boards, GUID-addressed
@@ -165,3 +167,45 @@ seed:
 
 The seed builder's domain-chunk path remains for the warm start; it is no
 longer the only route to these tenants.
+
+## Addendum (2026-11-25): liveness tiers, sharded seed, denser slices
+
+The decision above treats "registered candidate" and "live board" as the same
+thing, and the seed as one ordering. Measurement showed both are too coarse:
+53% of settled index candidates were dead, and 6,017 of the seed's 35,572 rows
+were live but listing nothing.
+
+- **Sharded seed.** `seeds/ats_tenants.json` became one NDJSON shard per
+  connector plus `seeds/manifest.json` (counts, per-shard SHA-256 and the
+  connectors whose zero is not trustworthy). The directory is 3.8 MB, a refresh
+  rewrites one reviewable file, and `SeedCatalog` reads a bounded, largest-first
+  window per pass from a persisted cursor instead of materialising 35k
+  `DiscoveredSource` objects hourly. A test checks that every bundled URL still
+  classifies to its shard's connector.
+- **A probe, not hope.** `BoardProbe` asks the same public endpoint the board
+  page asks and returns `hiring` / `live_empty` / `dead` / `unknown`, cached in
+  `app_settings` (1 day / 30 days / 90 days / 1 hour). Probes are capped per
+  pass (`discovery.probe_candidates_per_pass`), and an unknown stays unknown
+  rather than being read as dead.
+- **Empty is a tier, not a discard.** A confidently empty board goes to a
+  persisted probation queue with its own budget (`empty_boards_per_pass`) and a
+  weekly cadence; a few empty sources are crawled per pass
+  (`empty_crawl_sources_per_pass`) so the tier cannot spend the crawl budget.
+  `probe_status` records the verdict; two failed crawls back off to weekly.
+- **Bootstrap is its own budget.** The first run registers up to
+  `bootstrap_seed_sources` (2,000) hiring boards, separate from
+  `max_new_sources_per_run`; steady-state passes reserve
+  `seed_boards_per_pass` slots for the seed tail.
+- **Nothing is dropped on overflow.** Rejected-over-cap candidates go to a
+  persisted backlog drained next pass, largest/hiring first.
+- **Identity, including removals.** Registration dedupes on
+  `app/domain/services/board_identity.py` (shared with the seed builder) over
+  active *and archived* sources, so a Workday locale or a Greenhouse sibling
+  host is not a new board and a board the user removed is not re-added.
+- **Denser, weighted slices.** `discovery.domain_index` requests 10,000 rows
+  with per-target exclusion clauses (falling back to the plain query), adds
+  JazzHR, Taleo and Paylocity targets, and splits a pass's slices in proportion
+  to per-connector yield and to sources the user added by hand, with every
+  target keeping an exploration floor. `discovery.web_index` sweeps several
+  Common Crawl pages per slice and spends its CDX fallbacks against a per-pass
+  budget (`web_index_cdx_per_pass`) instead of a fixed four.

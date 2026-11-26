@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 
 mod allowlist {
     include!(concat!(env!("OUT_DIR"), "/allowlist.rs"));
@@ -92,7 +92,8 @@ impl RestartPolicy {
     /// Records an attempt at `now` and returns its 1-based ordinal, or `None`
     /// when the budget is exhausted.
     pub fn attempt(&mut self, now: Instant) -> Option<usize> {
-        self.history.retain(|instant| now.duration_since(*instant) < self.window);
+        self.history
+            .retain(|instant| now.duration_since(*instant) < self.window);
         if self.history.len() >= self.max_restarts {
             return None;
         }
@@ -128,8 +129,13 @@ pub struct Supervisor {
 }
 
 struct SupervisorInner {
-    app: AppHandle,
+    /// Present in the desktop app; `None` in the headless delete test.
+    app: Option<AppHandle>,
     data_dir: PathBuf,
+    /// Test-only override so the harness can launch the frozen sidecar.
+    worker_override: Option<PathBuf>,
+    /// Last worker PID, kept after exit so the harness can prove it is gone.
+    last_child_pid: AtomicU32,
     allowlist: HashSet<&'static str>,
     /// Writer channel for the currently running worker, if any.
     outbound: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
@@ -137,24 +143,44 @@ struct SupervisorInner {
     pending: Mutex<std::collections::HashMap<String, oneshot::Sender<Value>>>,
     ready: watch::Sender<bool>,
     stopping: AtomicBool,
+    /// Set by ``delete_all_data``; the supervisor wipes the data directory
+    /// after the worker exits, then starts a fresh worker.
+    wipe_requested: AtomicBool,
+    wipe_failed: AtomicBool,
+    restart_done: Notify,
     restart_policy: Mutex<RestartPolicy>,
 }
 
 impl Supervisor {
     fn new(app: AppHandle, data_dir: PathBuf) -> Self {
+        Self::build(Some(app), data_dir, None)
+    }
+
+    fn build(app: Option<AppHandle>, data_dir: PathBuf, worker_override: Option<PathBuf>) -> Self {
         let (ready, _) = watch::channel(false);
         Self {
             inner: Arc::new(SupervisorInner {
                 app,
                 data_dir,
+                worker_override,
+                last_child_pid: AtomicU32::new(0),
                 allowlist: ALLOWED_METHODS.iter().copied().collect(),
                 outbound: Mutex::new(None),
                 pending: Mutex::new(std::collections::HashMap::new()),
                 ready,
                 stopping: AtomicBool::new(false),
+                wipe_requested: AtomicBool::new(false),
+                wipe_failed: AtomicBool::new(false),
+                restart_done: Notify::new(),
                 restart_policy: Mutex::new(default_restart_policy()),
             }),
         }
+    }
+
+    /// Headless constructor used by `tests/delete_all_data_e2e.rs`.
+    #[doc(hidden)]
+    pub fn headless_for_test(data_dir: PathBuf, worker: PathBuf) -> Self {
+        Self::build(None, data_dir, Some(worker))
     }
 
     /// Directory the worker stores its data in; openable files must live here.
@@ -175,6 +201,23 @@ impl Supervisor {
             let reason = self.run_once().await;
             self.inner.ready.send_replace(false);
             if self.inner.stopping.load(Ordering::SeqCst) {
+                if self.inner.wipe_requested.swap(false, Ordering::SeqCst) {
+                    match wipe_data_dir(&self.inner.data_dir) {
+                        Ok(()) => {
+                            self.inner.stopping.store(false, Ordering::SeqCst);
+                            self.inner.restart_done.notify_waiters();
+                            log::warn!(
+                                "all local data deleted; worker restarting on a fresh database"
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            log::error!("failed to delete local data: {error}");
+                            self.inner.wipe_failed.store(true, Ordering::SeqCst);
+                            self.inner.restart_done.notify_waiters();
+                        }
+                    }
+                }
                 break;
             }
             log::warn!("worker exited ({reason}); evaluating restart policy");
@@ -208,15 +251,23 @@ impl Supervisor {
     /// Records a restart and returns its 1-based ordinal, or `None` when the
     /// restart budget is exhausted.
     async fn record_restart(&self) -> Option<usize> {
-        self.inner.restart_policy.lock().await.attempt(Instant::now())
+        self.inner
+            .restart_policy
+            .lock()
+            .await
+            .attempt(Instant::now())
     }
 
     /// Runs one worker process until it exits.
     async fn run_once(&self) -> String {
-        let mut child = match spawn_worker(&self.inner.data_dir) {
-            Ok(child) => child,
-            Err(error) => return format!("spawn failed: {error}"),
-        };
+        let mut child =
+            match spawn_worker(&self.inner.data_dir, self.inner.worker_override.as_deref()) {
+                Ok(child) => child,
+                Err(error) => return format!("spawn failed: {error}"),
+            };
+        self.inner
+            .last_child_pid
+            .store(child.id().unwrap_or(0), Ordering::SeqCst);
         let stdin = match child.stdin.take() {
             Some(stdin) => stdin,
             None => return "worker stdin unavailable".to_string(),
@@ -288,8 +339,10 @@ impl Supervisor {
                 if value.get("topic").and_then(Value::as_str) == Some("worker.ready") {
                     self.inner.ready.send_replace(true);
                 }
-                if let Err(error) = self.inner.app.emit("worker://event", &value) {
-                    log::warn!("failed to emit worker event: {error}");
+                if let Some(app) = &self.inner.app {
+                    if let Err(error) = app.emit("worker://event", &value) {
+                        log::warn!("failed to emit worker event: {error}");
+                    }
                 }
             }
             _ => {}
@@ -386,7 +439,11 @@ impl Supervisor {
             ),
             Err(_) => {
                 self.inner.pending.lock().await.remove(&request_id);
-                error_envelope(Some(&request_id), "task.timeout", "worker request timed out")
+                error_envelope(
+                    Some(&request_id),
+                    "task.timeout",
+                    "worker request timed out",
+                )
             }
         }
     }
@@ -397,7 +454,102 @@ impl Supervisor {
         self.inner.stopping.store(true, Ordering::SeqCst);
         let _ = self.request("system.shutdown", json!({})).await;
         *self.inner.outbound.lock().await = None;
+        // The response above came from the worker that is now exiting; a
+        // caller must not observe its stale ready flag as the restarted one.
+        self.inner.ready.send_replace(false);
     }
+
+    /// Delete every local file after the worker has exited, then restart it.
+    ///
+    /// The worker owns the SQLite database, so deletion happens only after the
+    /// supervisor observed it exit. Only the configured data directory is
+    /// touched.
+    async fn delete_all_data(&self, confirm: &str) -> Result<(), String> {
+        if !valid_delete_confirmation(confirm) {
+            return Err("type DELETE exactly to confirm deleting all local data".to_string());
+        }
+        let notified = self.inner.restart_done.notified();
+        self.inner.wipe_failed.store(false, Ordering::SeqCst);
+        self.inner.wipe_requested.store(true, Ordering::SeqCst);
+        self.shutdown().await;
+        match tokio::time::timeout(Duration::from_secs(45), notified).await {
+            Ok(()) => {
+                if self.inner.wipe_failed.load(Ordering::SeqCst) {
+                    return Err(
+                        "some local files could not be deleted; see the worker log".to_string()
+                    );
+                }
+                // Success means the fresh worker is actually serving again,
+                // not merely that the files were removed. A restart that never
+                // reaches `worker.ready` must be reported, not hidden.
+                match tokio::time::timeout(Duration::from_secs(60), self.wait_ready()).await {
+                    Ok(true) => Ok(()),
+                    _ => Err(
+                        "local data was deleted, but the worker did not restart; reopen the app"
+                            .to_string(),
+                    ),
+                }
+            }
+            Err(_) => {
+                self.inner.wipe_requested.store(false, Ordering::SeqCst);
+                Err("the worker did not stop in time; no data was deleted".to_string())
+            }
+        }
+    }
+
+    // The delete-all-data end-to-end harness lives in an integration test so
+    // its test binary can carry the Common Controls manifest without adding a
+    // second manifest resource to the application binary.
+    #[doc(hidden)]
+    pub fn spawn_for_test(self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move { self.supervise().await })
+    }
+
+    #[doc(hidden)]
+    pub async fn wait_ready_for_test(&self) -> bool {
+        self.wait_ready().await
+    }
+
+    #[doc(hidden)]
+    pub async fn request_for_test(&self, method: &str, params: Value) -> Value {
+        self.request(method, params).await
+    }
+
+    #[doc(hidden)]
+    pub fn last_child_pid_for_test(&self) -> u32 {
+        self.inner.last_child_pid.load(Ordering::SeqCst)
+    }
+
+    #[doc(hidden)]
+    pub async fn delete_all_data_for_test(&self, confirm: &str) -> Result<(), String> {
+        self.delete_all_data(confirm).await
+    }
+
+    #[doc(hidden)]
+    pub async fn shutdown_for_test(&self) {
+        self.shutdown().await;
+    }
+}
+
+/// The deletion confirmation is exact, not a truthy string.
+pub fn valid_delete_confirmation(value: &str) -> bool {
+    value.trim() == "DELETE"
+}
+
+/// Remove every entry inside ``directory`` but keep the directory itself.
+/// Symlinks are removed as links, never followed.
+pub fn wipe_data_dir(directory: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
 }
 
 impl SupervisorInner {
@@ -497,7 +649,10 @@ fn spawn_sidecar(path: &Path, data_dir: &Path) -> std::io::Result<Child> {
         .spawn()
 }
 
-fn spawn_worker(data_dir: &Path) -> std::io::Result<Child> {
+fn spawn_worker(data_dir: &Path, worker_override: Option<&Path>) -> std::io::Result<Child> {
+    if let Some(worker) = worker_override {
+        return spawn_sidecar(worker, data_dir);
+    }
     // `tauri dev` may copy the external binary next to the debug executable.
     // Prefer live Python there so worker edits take effect; release bundles
     // always prefer the frozen sidecar and never fall back to the host PATH.
@@ -612,12 +767,22 @@ async fn worker_request(
     method: String,
     params: Option<Value>,
 ) -> Result<Value, String> {
-    Ok(state.request(&method, params.unwrap_or_else(|| json!({}))).await)
+    Ok(state
+        .request(&method, params.unwrap_or_else(|| json!({})))
+        .await)
 }
 
 #[tauri::command]
 async fn worker_shutdown(state: State<'_, Supervisor>) -> Result<Value, String> {
     state.shutdown().await;
+    Ok(json!({ "ok": true }))
+}
+
+/// Delete all local data, then restart the worker on a fresh database.
+/// Requires the typed confirmation documented in ADR-0017.
+#[tauri::command]
+async fn delete_all_data(state: State<'_, Supervisor>, confirm: String) -> Result<Value, String> {
+    state.delete_all_data(&confirm).await?;
     Ok(json!({ "ok": true }))
 }
 
@@ -641,6 +806,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             worker_request,
             worker_shutdown,
+            delete_all_data,
             open_original_file,
             open_external_url
         ])
@@ -699,6 +865,29 @@ mod tests {
     }
 
     #[test]
+    fn delete_confirmation_must_be_the_exact_word() {
+        assert!(valid_delete_confirmation("DELETE"));
+        assert!(valid_delete_confirmation(" DELETE "));
+        for value in ["delete", "Delete", "DELETE!", "yes", "", "DELET"] {
+            assert!(!valid_delete_confirmation(value), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn wiping_keeps_the_data_directory_and_removes_everything_inside() {
+        let root = std::env::temp_dir().join(format!("lodestar-wipe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("nested/deeper")).unwrap();
+        std::fs::write(root.join("lodestar.sqlite"), b"db").unwrap();
+        std::fs::write(root.join("nested/deeper/file.txt"), b"x").unwrap();
+
+        wipe_data_dir(&root).unwrap();
+
+        assert!(root.is_dir());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn external_urls_are_limited_to_http_and_https() {
         assert!(is_external_url("https://example.com/jobs/1"));
         assert!(is_external_url(" http://example.com "));
@@ -734,7 +923,9 @@ mod tests {
         }
         for prefix in FORBIDDEN_PREFIXES {
             assert!(
-                !ALLOWED_METHODS.iter().any(|method| method.starts_with(prefix)),
+                !ALLOWED_METHODS
+                    .iter()
+                    .any(|method| method.starts_with(prefix)),
                 "allowlist must not contain {prefix}*, found a generated entry"
             );
         }
@@ -793,7 +984,9 @@ mod tests {
         assert!(!ALLOWED_METHODS.is_empty());
         let unique: std::collections::HashSet<&&str> = ALLOWED_METHODS.iter().collect();
         assert_eq!(unique.len(), ALLOWED_METHODS.len());
-        assert!(ALLOWED_METHODS.iter().all(|method| !method.trim().is_empty()));
+        assert!(ALLOWED_METHODS
+            .iter()
+            .all(|method| !method.trim().is_empty()));
     }
 
     #[test]

@@ -56,6 +56,8 @@ from app.application.dto import (
     CompanyMergeHistoryResult,
     CompanyMergeParams,
     CompanyMergeResult,
+    CompanyTrendParams,
+    CompanyTrendResult,
     CrawlRunListParams,
     CrawlRunListResult,
     DiscoveryRunParams,
@@ -329,6 +331,7 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     # M9: company breadth is read-only; merging is a separate, audited action.
     MethodSpec("companies.list", EmptyParams, CompanyListResult),
     MethodSpec("companies.get_detail", CompanyDetailParams, CompanyDetailResult),
+    MethodSpec("companies.get_trend", CompanyTrendParams, CompanyTrendResult),
     MethodSpec("companies.merge", CompanyMergeParams, CompanyMergeResult),
     MethodSpec("companies.unmerge", CompanyDetailParams, CompanyMergeResult),
     MethodSpec(

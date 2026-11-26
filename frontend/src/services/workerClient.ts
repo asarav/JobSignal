@@ -33,6 +33,8 @@ import type {
   ApplicationsUpdateSuppressionPolicyRequest,
   ApplicationsUpdateSuppressionPolicyResponse,
   CompaniesGetDetailRequest,
+  CompaniesGetTrendRequest,
+  CompaniesGetTrendResponse,
   CompaniesGetMergeHistoryRequest,
   CompaniesGetMergeHistoryResponse,
   CompaniesMergeRequest,
@@ -223,6 +225,7 @@ export type WorkerMethod =
   | "applications.get_analytics"
   | "companies.list"
   | "companies.get_detail"
+  | "companies.get_trend"
   | "companies.merge"
   | "companies.unmerge"
   | "companies.get_merge_history"
@@ -452,6 +455,12 @@ export class WorkerClient {
     request: CompaniesGetDetailRequest,
   ): Promise<CompaniesGetDetailResponse> {
     return this.request("companies.get_detail", { ...request });
+  }
+
+  getCompanyTrend(
+    request: CompaniesGetTrendRequest,
+  ): Promise<CompaniesGetTrendResponse> {
+    return this.request("companies.get_trend", { ...request });
   }
 
   mergeCompany(request: CompaniesMergeRequest): Promise<CompaniesMergeResponse> {

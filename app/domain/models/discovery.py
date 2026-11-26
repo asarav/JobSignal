@@ -33,6 +33,10 @@ class DiscoveredSource:
     #: tenant in the subdomain but its CxS API also needs the board site, so a
     #: discovered Workday board records the tenant explicitly.
     tenant_key: str | None = None
+    #: Posting count observed by whoever proposed the board (the seed shards
+    #: carry it; a probe fills it in for live discovery).  ``None`` means "not
+    #: observed", which is different from an observed zero.
+    observed_postings: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

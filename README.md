@@ -8,24 +8,17 @@ dependency, and no telemetry.
 The repository is named `JobSignal` for historical reasons; the product is named
 **Job Signal** and the Python package is **lodestar**.
 
-> **Current milestone: 7 — Applications and autofill (complete).**
-> The desktop shell, IPC contract, plugin registry, Settings and Diagnostics ship
-> from Milestone 0; sources, ATS connectors and crawls from Milestone 1;
-> the universal extraction pipeline from Milestone 2; search profiles, hard
-> filters, full-text search, fingerprints, identity resolution, repost events
-> and the Seen/Duplicates view from Milestone 3.
-> Milestone 4 makes the app find jobs on its own: discovery enumerates career
-> sites from a public web index (no seed file, no user-added sources), and every
-> enabled source is crawled on its own persisted schedule within per-pass
-> budgets. See [`docs/how-discovery-works.md`](docs/how-discovery-works.md).
-> Milestone 5 imports resumes, extracts sections, contact details, experience,
-> education, certifications, projects, evidence-labelled skills and years of
-> experience, scores jobs with `fit.weighted_v1`, and exposes the ranking,
-> weights, skill-status and profile-editing UI.
-> Milestone 6 ranks crawl budget by relevance: harvested posting URLs are
-> verified with a single fetch through identity resolution, sources are tiered
-> hot/warm/cold from the candidate profile and hard filters, and a profile
-> change retiers immediately.
+> **Current milestone: 11 — Security, reliability and privacy (complete).**
+> Milestones 0–7 ship the shell, IPC contract, connectors, extraction, search
+> and dedup, automatic discovery, resume matching, application tracking and
+> reviewed autofill. Milestone 8 stores explainable posting intelligence;
+> Milestone 9 adds outcomes, calibration, company merging and keyword demand;
+> Milestone 10 adds keyword trends, company hiring trends and weight
+> suggestions. Milestone 11 closes the hardening work: dependency audits, IPC
+> fuzzing and the XSS corpus, a startup integrity check, scheduled local
+> backups, delete-all-data, packaged-app smoke tests and this documentation
+> pass. See [`docs/security-review.md`](docs/security-review.md) for the threat
+> model and the evidence.
 
 ## What Milestone 6 adds
 
@@ -177,24 +170,37 @@ See [`docs/how-resume-and-matching-works.md`](docs/how-resume-and-matching-works
   pods (a pod-scoped index query answers in 17–38 s) and rebuilds each
   `{host}/hcmUI/CandidateExperience/{lang}/sites/{site}` board from the URL.
 - **The seed file is a warm start, not the engine.**
-  `discovery.ats_directory` ships 35,572 boards across eleven ATSs (Greenhouse,
-  Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday, iCIMS, Oracle
-  Recruiting Cloud, UKG Pro/UltiPro and Paylocity), each
+  `discovery.ats_directory` ships 54,655 boards across fourteen ATSs
+  (Greenhouse, Lever, Ashby, SmartRecruiters, Workable, BambooHR, Workday,
+  iCIMS, Oracle Recruiting Cloud, UKG Pro/UltiPro, Paylocity, JazzHR, Taleo and
+  Eightfold), each
   confirmed live through its own public ATS API and ordered largest-first by
   open postings (refreshed via `scripts/build_seed.py`), so a cold install has
   something to crawl within minutes while the web-index rotation fills in
-  long-tail companies. The seed covers those eleven ATSs only; Eightfold,
-  JazzHR and the remaining vendors are found by live discovery.
-  Deleting the seed does not stop discovery.
+  long-tail companies. The directory is shipped as one NDJSON shard per
+  connector plus `seeds/manifest.json` (board/posting counts and a checksum)
+  rather than a single JSON array, so a refresh rewrites one reviewable file
+  and a pass reads only a bounded window from it. Each record carries the
+  postings observed at build time (`p`) and the date (`v`): hiring boards sort
+  first and live-but-empty ones last. The manifest currently records 54,655
+  boards, 28,862 of them hiring, generated 2026-11-26. Deleting the seed does
+  not stop discovery.
 - **`discovery.auto_discover`** (`app/application/auto_discover.py`): asks
-  every enabled provider for candidates, dedupes by canonical URL, registers
-  up to `discovery.max_new_sources_per_run` new sources (connector from the
-  provider's ATS hint or the URL classifier), then crawls the sources that are
-  due — stalest attempt first, in parallel, up to
-  `discovery.max_crawl_sources_per_run`. On a cold start (no run state yet)
-  it runs `discovery.warmup_passes` (default 5) passes back-to-back so the
-  bundled seed list is registered in minutes rather than over the first
-  days. Per-provider and per-source failures are isolated and counted,
+  every enabled provider for candidates, dedupes by **board identity** (not the
+  raw URL, and including sources you removed, so a deleted board does not come
+  back), probes up to `discovery.probe_candidates_per_pass` live candidates for
+  liveness, then registers hiring boards up to
+  `discovery.max_new_sources_per_run` (connector from the provider's ATS hint
+  or the URL classifier). A dead board is dropped; a confidently empty one goes
+  to a probation queue drained at `discovery.empty_boards_per_pass` on a weekly
+  cadence, so it never takes a hiring board's slot. Candidates over the cap are
+  kept in a persisted backlog instead of being discarded, and a board that
+  fails two crawls backs off to weekly. Seed boards skip the probe (their
+  posting count is already known) and keep a reserved share of each pass,
+  `discovery.seed_boards_per_pass`. On a cold start (no run state yet) it
+  registers up to `discovery.bootstrap_seed_sources` (default 2,000) hiring
+  seed boards first and runs `discovery.warmup_passes` (default 5) passes
+  back-to-back. Per-provider and per-source failures are isolated and counted,
   never fatal.
 - **Bounded work.** A source is crawled by the scheduler and by the pass only
   through one shared crawl gate (`crawl.global_concurrency`); the pass has a
@@ -287,7 +293,7 @@ submission guard lives for the whole session.
   budget instead of a fixed 60 s, which used to report a failure for work that
   was still running.
 
-## What Milestone 8 adds (first slice)
+## What Milestone 8 adds
 
 Posting intelligence is now stored, not only computed. Every evaluated job gets
 an append-only assessment built from eight explainable signals, each carrying
@@ -458,6 +464,12 @@ the period holds at least 10 postings. Empty periods are reported as missing
 evidence, and company scope resolves merges. Two batched reads feed a whole
 response.
 
+`companies.get_trend` reads the append-only daily company summaries as a
+90-day hiring series. One point per UTC day, merged-company aware, with the
+rate withheld below the *adequate* sample tier. The Companies screen draws it
+as an inline SVG (no chart dependency) and labels it as observed postings, not
+a forecast.
+
 `matching.get_weight_proposals` compares the stored fit dimensions of
 applications that got a reply with those that did not. At 20+ applications
 with at least 5 per side it returns an explainable suggestion (gap, sample,
@@ -501,10 +513,27 @@ and [ADR-0014](docs/adr/0014-associations-and-weight-history.md).
   stored `ETag`, fall back to `If-Modified-Since`, and on a `304` record a
   revalidation that reuses the previous classification instead of refetching.
   See [ADR-0016](docs/adr/0016-conditional-endpoint-requests.md).
-- **Auto-update stays off.** [ADR-0012](docs/adr/0012-auto-update.md) remains the
-  decision (disabled, no updater plugin, manual download from a signed
-  manifest); `tests/safety/test_auto_update.py` now enforces that the Tauri
-  config carries no updater and that the ADR keeps its rollback rule.
+- **Integrity before use.** Startup runs `PRAGMA quick_check` after migrations.
+  A damaged file blocks startup with backup guidance instead of accepting
+  writes; `tests/integration/test_sqlite_integrity.py` truncates a database and
+  asserts the refusal.
+- **Scheduled backups.** `backup.enabled`, `backup.interval_days` (7) and
+  `backup.keep` (4) drive the maintenance loop. The first check records a
+  baseline, later checks export `backups/jobsignal-auto-*.json`, and retention
+  only removes automatic archives — a manual export is never pruned. State is
+  persisted in `app_settings` (`last_scheduled_backup_at`).
+- **Delete all local data.** Settings → Data & backup requires typing `DELETE`;
+  the supervisor stops the worker, waits for exit, removes only the data
+  directory's contents, recreates it and restarts the worker. The preview build
+  refuses with an explanation. See
+  [ADR-0017](docs/adr/0017-delete-all-local-data.md).
+- **Security evidence.** `docs/security-review.md` records the threat model,
+  the IPC fuzz corpus, the XSS corpus and the audit jobs. The control for
+  posting text is "never render posting HTML"; no sanitizer is involved.
+- **Packaged verification.** `scripts/smoke_worker_sidecar.py` drives the frozen
+  sidecar over NDJSON on every OS, `scripts/smoke_packaged_app.py` launches an
+  extracted MSI/AppImage/macOS app against an empty data directory, and
+  `scripts/check_docs.py` keeps links, ADRs and milestone references honest.
 
 All checks run against these: full pytest with the coverage gate, ruff, mypy,
 import-linter, `gen_schemas.py --check`, `gen-ts-types.mjs --check`, frontend
@@ -521,20 +550,43 @@ These are **intentionally absent** so far, and the IPC allowlist rejects them
 
 No browser automation is installed by default; Playwright is an opt-in extra.
 
-### Verification limits in the current tree
+### Verification status (2026-11-26)
 
-These are not product gaps, but they are not claimed as verified by the current
-headless pass either. See [`docs/ipc-parity.md`](docs/ipc-parity.md) for the
-method-by-method audit and the exact commands.
+See [`docs/ipc-parity.md`](docs/ipc-parity.md) for the method-by-method audit
+and [`docs/security-review.md`](docs/security-review.md) for the security
+evidence.
 
-- The packaged Tauri desktop shell was not launched. Rust allowlist and
-  supervisor tests ran, and the Python worker was run over its real NDJSON
-  protocol, but the native WebView handshake was not driven.
-- Headed Playwright autofill was not exercised; Playwright remains an optional
-  extra and the existing safety suite covers the fill-only boundary.
-- No live external job board was crawled in this pass. Database-backed source
-  list, crawl history and the workflow were exercised against a seeded SQLite
-  database; live collection still needs a real board and network access.
+Verified in this Windows pass:
+
+- Full pytest: 924 passed, with the coverage gates at domain 92.0%, application
+  86.8% and adapters 82.9%. Ruff, mypy, import-linter, schema/type freshness,
+  frontend typecheck, 130 Vitest tests, the production build, Rust `cargo test`
+  (14 unit tests + the delete-all-data integration test) and clippy all passed.
+- Delete-all-data ran end to end against the frozen worker: wrong and missing
+  confirmations deleted nothing, `DELETE` exited the old worker PID, removed
+  only the data directory's contents while a sibling directory survived,
+  restarted the worker, and recreated `lodestar.sqlite` at schema 18 after a
+  fresh `worker.ready`. The command now waits for that handshake and reports a
+  restart failure instead of returning a false success.
+- The frozen sidecar completed the real NDJSON handshake
+  (`worker.ready` → `system.hello` → shutdown, schema 18, exit 0).
+- The rebuilt Windows MSI was administratively extracted and launched against
+  an empty data directory: `lodestar.sqlite` appeared with schema 18 and
+  `lodestar-worker.exe` sat beside `lodestar-tauri.exe`.
+- A real Greenhouse crawl (`https://boards.greenhouse.io/figma`) stored 141
+  postings in 1 completed crawl run with 0 errors.
+- Both Windows installers were produced; Authenticode reports both
+  **NotSigned**.
+
+Not verified here:
+
+- Headed Playwright autofill was not run locally; it remains an optional extra
+  and CI installs Chromium on Linux for the real fill-only suite.
+- macOS signing, notarization and launch were not run on this Windows machine.
+  `desktop-build.yml` now verifies `codesign`/`spctl` when a certificate is
+  configured and records the artifact as unsigned otherwise. Treat macOS as a
+  release gate, not as verified.
+- The Linux AppImage smoke is implemented in CI but was not run here.
 - The browser preview remains sample-only: it does not implement `browser.*` or
   a real backup restore, and it is not evidence that the desktop worker path
   works. The desktop app always uses the real Tauri bridge.
@@ -555,7 +607,7 @@ schemas/ipc/           # generated JSON Schemas; methods.json is the allowlist
 scripts/               # run.py, gen_schemas.py, gen-ts-types.mjs, dev.ps1
 tests/
   unit/ contract/ integration/ safety/ swapability/ support/
-docs/adr/              # architecture decision records
+docs/adr/              # architecture decision records 0001-0017
 .github/workflows/     # CI matrix
 ```
 
@@ -566,7 +618,8 @@ app/domain/services/     # classifier.py, normalizer.py  (pure domain logic)
 app/application/         # sources.py (registry + crawl runner), auto_discover.py,
                          # orchestration/scheduler.py, commands/
 app/plugins/ats/         # greenhouse/, ashby/, lever/, smartrecruiters, workday,
-                         # icims, eightfold, phenom, amazon, taleo, career_site
+                         # icims, eightfold, phenom, amazon, taleo, jazzhr,
+                         # paylocity, ultipro, career_site
 app/plugins/discovery/   # web_index.py (seed-free enumeration), ats_directory.py (bootstrap)
 app/infrastructure/      # persistence (sources, jobs, snapshots, crawl runs)
 ```
@@ -576,6 +629,21 @@ Documentation for M4 lives in
 runs, what leaves the machine, coverage limits) and
 [`docs/adr/0005-m4-automatic-discovery.md`](docs/adr/0005-m4-automatic-discovery.md)
 (why discovery is seed-free, budgets, and the options that were rejected).
+
+Architecture decisions from the later milestones:
+
+- [ADR-0011](docs/adr/0011-posting-intelligence-history.md) — append-only
+  posting intelligence history
+- [ADR-0012](docs/adr/0012-auto-update.md) — manual updates, no self-updater
+- [ADR-0013](docs/adr/0013-company-merge-and-keyword-history.md) — company
+  merges and keyword history
+- [ADR-0014](docs/adr/0014-associations-and-weight-history.md) — associations
+  and append-only weight history
+- [ADR-0015](docs/adr/0015-local-backup-and-restore.md) — local backup and
+  restore
+- [ADR-0016](docs/adr/0016-conditional-endpoint-requests.md) — conditional
+  endpoint requests
+- [ADR-0017](docs/adr/0017-delete-all-local-data.md) — typed delete-all-data
 
 ### Dependency rule
 

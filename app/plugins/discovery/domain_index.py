@@ -33,7 +33,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlencode, urlsplit
@@ -45,16 +45,47 @@ from app.domain.models.http import HttpRequest
 
 CDX_ENDPOINT = "https://web.archive.org/cdx/search/cdx"
 
-#: One leading character of the tenant/host label per slice.
-BUCKETS = "abcdefghijklmnopqrstuvwxyz"
+#: One leading character of the tenant/host label per slice.  Digits are
+#: included because Paylocity boards are addressed by a GUID.
+BUCKETS = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 #: Domain scans answer in 40–90 s each; a few concurrent slices keep a pass
 #: inside its 300 s shim timeout while still advancing coverage every day.
 SLICES_PER_PASS = 3
 
-#: Rows requested per slice. Enough for a bucket's tenants, small enough that
-#: the gateway answers in a reasonable time.
-CDX_LIMIT = 1000
+#: Rows requested per slice.  Measured in the seed builder: a 10,000-row
+#: query answers in seconds and names many more tenants per request than a
+#: 1,000-row sample, which is the difference between a bucket being covered
+#: and merely sampled.
+CDX_LIMIT = 10_000
+
+#: Per-target exclusion clauses that keep board roots and drop job pages,
+#: assets and marketing hosts.  Measured in the seed builder; a target whose
+#: dense query fails falls back to the plain one.
+DENSE_FILTERS: dict[str, tuple[str, ...]] = {
+    "myworkdayjobs.com": (
+        "!original:.*/assets/.*",
+        "!original:.*/job/.*",
+        r"!original:.*\?.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
+    "icims.com": ("!original:.*/jobs/.*",),
+    "bamboohr.com": (r"!original:.*\.bamboohr\.com/[a-z]{2,}/.*",),
+    "eightfold.ai": (
+        "!original:.*/careers/job/.*",
+        "!original:.*/api/.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
+    "applytojob.com": ("!original:.*/apply/jobs/details/.*",),
+    "taleo.net": (
+        "!original:.*/jobdetail.ftl.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
+    "recruiting.paylocity.com": (
+        r"!original:.*/details/.*",
+        r"!original:.*\.(xml|json|ico|txt|png|jpe?g|gif|css|js|svg|woff2?)$",
+    ),
+}
 
 #: Concurrent slice requests stay low: bursts are what the gateway throttles.
 SLICE_CONCURRENCY = 3
@@ -66,6 +97,14 @@ _WORKDAY_PLAIN_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.myworkdayjobs\
 _ICIMS_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.icims\.com$")
 _BAMBOO_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.bamboohr\.com$")
 _EIGHTFOLD_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.eightfold\.ai$")
+_JAZZHR_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.applytojob\.com$")
+_TALEO_HOST_RE = re.compile(r"^(?P<tenant>[a-z0-9][a-z0-9-]*)\.taleo\.net$")
+_TALEO_SECTION_RE = re.compile(r"^/careersection/(?P<section>[A-Za-z0-9_]+)(?:/|$)", re.IGNORECASE)
+_PAYLOCITY_PATH_RE = re.compile(
+    r"^/recruiting/jobs/all/(?P<company>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)",
+    re.IGNORECASE,
+)
 _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[A-Za-z]{2,4})?$")
 _ULTIPRO_HOSTS = frozenset(
     {
@@ -105,8 +144,11 @@ DEFAULT_TARGETS: tuple[IndexTarget, ...] = (
     IndexTarget("icims.com", "ats.icims", "domain"),
     IndexTarget("bamboohr.com", "ats.bamboohr", "domain"),
     IndexTarget("eightfold.ai", "ats.eightfold", "domain"),
+    IndexTarget("applytojob.com", "ats.jazzhr", "domain"),
+    IndexTarget("taleo.net", "ats.taleo", "domain"),
     IndexTarget("recruiting.ultipro.com", "ats.ultipro", "prefix"),
     IndexTarget("apply.workable.com", "ats.workable", "prefix"),
+    IndexTarget("recruiting.paylocity.com", "ats.paylocity", "prefix"),
 )
 
 
@@ -154,20 +196,37 @@ class DomainIndexProvider:
     def rotation_size(self) -> int:
         return len(self._targets) * len(BUCKETS)
 
-    def slices_for(self, cursor: int, slices: int) -> list[tuple[IndexTarget, str]]:
+    def slices_for(
+        self,
+        cursor: int,
+        slices: int,
+        weights: Mapping[str, float] | None = None,
+    ) -> list[tuple[IndexTarget, str]]:
         """The ``(target, bucket)`` pairs this pass walks.
 
-        The pass cursor advances by ``slices`` every run, so dividing it by the
-        step gives a daily pass number; each pass takes the next
-        ``slices_per_pass`` pairs and wraps at the end of the rotation.
+        With no weights the rotation is uniform: each pass takes the next
+        ``slices_per_pass`` pairs and wraps, so coverage grows every pass.
+        With weights, the pass's slices are split between targets in proportion
+        to recent yield and user interest (every target keeps at least one when
+        the budget allows), and each target continues its own bucket walk.  A
+        busy ATS therefore gets more of a bounded pass without starving a
+        quiet one.
         """
-        flat = [(target, bucket) for target in self._targets for bucket in BUCKETS]
-        if not flat:
+        if not self._targets:
             return []
         step = max(1, slices)
         pass_index = max(0, cursor) // step
-        start = pass_index * self._slices_per_pass
-        return [flat[(start + offset) % len(flat)] for offset in range(self._slices_per_pass)]
+        if not weights:
+            flat = [(target, bucket) for target in self._targets for bucket in BUCKETS]
+            start = pass_index * self._slices_per_pass
+            return [flat[(start + offset) % len(flat)] for offset in range(self._slices_per_pass)]
+        shares = _allocate(self._slices_per_pass, self._targets, weights)
+        picked: list[tuple[IndexTarget, str]] = []
+        for target, count in shares:
+            for offset in range(count):
+                bucket = BUCKETS[(pass_index * max(1, count) + offset) % len(BUCKETS)]
+                picked.append((target, bucket))
+        return picked
 
     async def discover(
         self, query: DiscoveryQuery, ctx: ExecutionContext
@@ -176,7 +235,13 @@ class DomainIndexProvider:
         cursor = raw_cursor if isinstance(raw_cursor, int) else 0
         raw_slices = query.extra.get("slices", 1)
         slices = raw_slices if isinstance(raw_slices, int) and raw_slices > 0 else 1
-        pairs = self.slices_for(cursor, slices)
+        raw_weights = query.extra.get("target_weights")
+        weights: dict[str, float] = {}
+        if isinstance(raw_weights, Mapping):
+            for key, value in raw_weights.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    weights[str(key)] = float(value)
+        pairs = self.slices_for(cursor, slices, weights)
         semaphore = asyncio.Semaphore(SLICE_CONCURRENCY)
 
         async def fetch(pair: tuple[IndexTarget, str]) -> list[Candidate]:
@@ -232,40 +297,48 @@ class DomainIndexProvider:
     async def _rows(
         self, target: IndexTarget, bucket: str, ctx: ExecutionContext
     ) -> list[str] | None:
-        url = _cdx_url(target, bucket, self._cdx_limit)
-        # One attempt only: domain scans already take tens of seconds, and a
-        # retry would push a pass past the shim timeout. A failed slice is
-        # simply re-walked when the rotation comes round again.
+        # Dense first: the connector's own exclusion clauses name far more
+        # tenants per 10,000-row answer (measured at ~4x on BambooHR).  A dense
+        # query that the gateway refuses falls back to the plain one.
         started = time.monotonic()
-        response = await ctx.http.send(
-            HttpRequest(method="GET", url=url, timeout_s=self._timeout_s)
+        response = None
+        for dense in (True, False):
+            url = _cdx_url(target, bucket, self._cdx_limit, dense=dense)
+            # One attempt per shape: domain scans already take tens of seconds,
+            # and a retry would push a pass past the shim timeout.  A failed
+            # slice is re-walked when the rotation comes round again.
+            attempt = await ctx.http.send(
+                HttpRequest(method="GET", url=url, timeout_s=self._timeout_s)
+            )
+            if isinstance(attempt, Ok) and _urls(attempt.value.body) is not None:
+                response = attempt
+                break
+        if response is None:
+            ctx.logger.warning(
+                "discovery.domain_index.cdx_failed",
+                target=target.target,
+                bucket=bucket,
+                error="no shape answered",
+            )
+            return None
+        rows = _urls(response.value.body)
+        ctx.logger.info(
+            "discovery.domain_index.slice",
+            target=target.target,
+            bucket=bucket,
+            bytes=len(response.value.body),
+            rows=0 if rows is None else len(rows),
+            parsed=rows is not None,
+            elapsed_s=round(time.monotonic() - started, 1),
         )
-        if isinstance(response, Ok):
-            rows = _urls(response.value.body)
-            ctx.logger.info(
-                "discovery.domain_index.slice",
+        if rows is None:
+            ctx.logger.warning(
+                "discovery.domain_index.cdx_unparseable",
                 target=target.target,
                 bucket=bucket,
                 bytes=len(response.value.body),
-                rows=0 if rows is None else len(rows),
-                parsed=rows is not None,
-                elapsed_s=round(time.monotonic() - started, 1),
             )
-            if rows is None:
-                ctx.logger.warning(
-                    "discovery.domain_index.cdx_unparseable",
-                    target=target.target,
-                    bucket=bucket,
-                    bytes=len(response.value.body),
-                )
-            return rows
-        ctx.logger.warning(
-            "discovery.domain_index.cdx_failed",
-            target=target.target,
-            bucket=bucket,
-            error=response.error.message,
-        )
-        return None
+        return rows
 
 
 def _urls(body: bytes) -> list[str] | None:
@@ -281,7 +354,9 @@ def _urls(body: bytes) -> list[str] | None:
     ]
 
 
-def _cdx_url(target: IndexTarget, bucket: str, limit: int) -> str:
+def _cdx_url(
+    target: IndexTarget, bucket: str, limit: int, *, dense: bool = False
+) -> str:
     """The public index query for one slice (exported for tests)."""
     params: dict[str, str] = {
         "url": f"{target.target}/{bucket}" if target.match == "prefix" else target.target,
@@ -293,7 +368,44 @@ def _cdx_url(target: IndexTarget, bucket: str, limit: int) -> str:
     }
     if target.match == "domain":
         params["filter"] = f"original:^https?://{bucket}"
-    return f"{CDX_ENDPOINT}?{urlencode(params)}"
+    filters = list(DENSE_FILTERS.get(target.target, ())) if dense else []
+    if filters:
+        filters.insert(0, params["filter"])
+        params["filter"] = filters
+    return f"{CDX_ENDPOINT}?{urlencode(params, doseq=True)}"
+
+
+def _allocate(
+    total: int, targets: Sequence[IndexTarget], weights: Mapping[str, float]
+) -> list[tuple[IndexTarget, int]]:
+    """Split ``total`` slices across targets in proportion to their weight.
+
+    Every target keeps one slice when the budget allows, so exploration never
+    reaches zero; the remainder follows the weights (user interest plus last
+    pass's yield).  Deterministic, so a pass is reproducible from its cursor.
+    """
+    if not targets or total <= 0:
+        return []
+    strength = {
+        target.connector_id: max(0.0, float(weights.get(target.connector_id, 1.0)))
+        for target in targets
+    }
+    if sum(strength.values()) <= 0:
+        strength = {target.connector_id: 1.0 for target in targets}
+    floor = 1 if total >= len(targets) else 0
+    remaining = total - floor * len(targets)
+    pooled = sum(strength.values())
+    exact = [remaining * strength[t.connector_id] / pooled for t in targets]
+    shares = [floor + int(value) for value in exact]
+    leftover = total - sum(shares)
+    order = sorted(
+        range(len(targets)),
+        key=lambda index: (exact[index] - int(exact[index]), strength[targets[index].connector_id]),
+        reverse=True,
+    )
+    for index in order[:leftover]:
+        shares[index] += 1
+    return [(target, shares[index]) for index, target in enumerate(targets) if shares[index]]
 
 
 def _candidate(connector_id: str, url: str) -> Candidate | None:
@@ -319,6 +431,17 @@ def _candidate(connector_id: str, url: str) -> Candidate | None:
             _EIGHTFOLD_HOST_RE,
             lambda board_host: f"https://{board_host}/careers",
         )
+    if connector_id == "ats.jazzhr":
+        return _subdomain_board(
+            connector_id,
+            host,
+            _JAZZHR_HOST_RE,
+            lambda board_host: f"https://{board_host}",
+        )
+    if connector_id == "ats.taleo":
+        return _taleo(host, parts.path)
+    if connector_id == "ats.paylocity":
+        return _paylocity(host, parts.path)
     if connector_id == "ats.ultipro":
         return _ultipro(host, parts.path)
     if connector_id == "ats.workable":
@@ -366,6 +489,40 @@ def _subdomain_board(
     if tenant in _RESERVED_LABELS:
         return None
     return Candidate(build(host), tenant, tenant.replace("-", " ").title(), connector_id)
+
+
+def _taleo(host: str, path: str) -> Candidate | None:
+    match = _TALEO_HOST_RE.match(host)
+    if match is None:
+        return None
+    section = _TALEO_SECTION_RE.match(path)
+    if section is None:
+        return None
+    tenant = match.group("tenant")
+    if tenant in _RESERVED_LABELS:
+        return None
+    board = section.group("section")
+    return Candidate(
+        f"https://{host}/careersection/{board}/jobsearch.ftl?lang=en",
+        f"{tenant}|{board}",
+        tenant.replace("-", " ").title(),
+        "ats.taleo",
+    )
+
+
+def _paylocity(host: str, path: str) -> Candidate | None:
+    if host != "recruiting.paylocity.com":
+        return None
+    match = _PAYLOCITY_PATH_RE.match(path)
+    if match is None:
+        return None
+    company = match.group("company").lower()
+    return Candidate(
+        f"https://recruiting.paylocity.com/recruiting/jobs/all/{company}",
+        company,
+        None,
+        "ats.paylocity",
+    )
 
 
 def _ultipro(host: str, path: str) -> Candidate | None:
