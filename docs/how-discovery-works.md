@@ -86,7 +86,10 @@ Paylocity, JazzHR, Taleo and Eightfold, each confirmed live through the board's
 own public ATS API. It is stored as one NDJSON shard per
 connector (`seeds/boards/*.ndjson`) plus `seeds/manifest.json`, which records
 each shard's board/posting counts, its checksum and the connectors whose zero
-is not trustworthy. The current manifest reports 54,655 boards and 28,862
+is not trustworthy. A shard is verified against that checksum on read, over
+its LF bytes: `.gitattributes` pins the shards to LF so a Windows checkout
+cannot turn a healthy file into a checksum mismatch, and the reader normalises
+CRLF anyway. The current manifest reports 54,655 boards and 28,862
 hiring boards, generated 2026-11-26. A record carries the URL, the
 postings observed at build time, the verification date and the tenant key;
 hiring boards are written before empty ones. It exists so a brand new install

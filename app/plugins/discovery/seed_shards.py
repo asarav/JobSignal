@@ -290,6 +290,9 @@ def read_shard(directory: Path, info: ShardInfo) -> list[SeedRecord]:
         body = path.read_bytes()
     except OSError as exc:
         raise SeedError(f"seed shard is unreadable: {info.file}") from exc
+    # A checkout that rewrites line endings (``core.autocrlf`` on Windows) must
+    # not read as tampering: the manifest checksum is over LF bytes.
+    body = body.replace(b"\r\n", b"\n")
     if info.sha256:
         digest = hashlib.sha256(body).hexdigest()
         if digest != info.sha256:

@@ -55,6 +55,11 @@ Thumbs.db
 .p2.json
 .probe.json
 .vite-dev.log
+.pytest_*.log
+.cargo_audit*.log
+.ci_*.log
+.ci_*.html
+.ci-repro/
 
 # Local scratch: manual probe screenshots and throwaway test data
 lodestar-test-data/

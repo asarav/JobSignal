@@ -1,0 +1,4 @@
+# Seed shards are checksummed byte-for-byte against seeds/manifest.json.
+# A checkout must never rewrite their line endings, whatever core.autocrlf says.
+app/plugins/discovery/seeds/boards/*.ndjson text eol=lf
+app/plugins/discovery/seeds/manifest.json text eol=lf

@@ -55,7 +55,7 @@ directory.
 
 - `pip-audit` against the installed environment,
 - `npm audit --omit=dev --audit-level=high`,
-- `rustsec/audit-check` for the Tauri crate.
+- `cargo audit` (RustSec advisory database) for the Tauri crate.
 
 Findings are fixed or recorded below with a reason. The workflow fails on new
 high-severity findings; there is no blanket `continue-on-error`.
@@ -71,7 +71,28 @@ Results on 2026-11-26:
   dependencies and are not copied into the frozen worker; the project-resolved
   audit is clean and CI audits a fresh environment. This is a recorded
   environment exception, not a suppression in the project.
-- `cargo audit` runs in CI; it was not installed on this Windows machine.
+
+RustSec results (`cargo-audit 0.23.0` against the RustSec database of
+2026-11-26, 478 crates in `frontend/src-tauri/Cargo.lock`):
+
+- The first run found two vulnerabilities. Both were fixed in the lockfile,
+  which is part of this change, and the re-run reports none:
+  - `RUSTSEC-2026-0594` (`cookie` 0.18.2, private cookie nonces can repeat after
+    a fork, medium 6.5) → `cookie 0.18.3`.
+  - `RUSTSEC-2026-0592` (`url` 2.5.8, stack overflow in `Url::origin()` on
+    nested `blob:` URLs) → `url 2.5.9` with `form_urlencoded 1.2.3`.
+- Six advisory warnings remain and are recorded exceptions, not suppressions:
+  `RUSTSEC-2026-0543` (`chrono` unmaintained), `RUSTSEC-2024-0370`
+  (`proc-macro-error` unmaintained), `RUSTSEC-2026-0370`/`-0371`/`-0372`
+  (`zvariant`, `zbus_names`, `zvariant_derive` unmaintained) and
+  `RUSTSEC-2024-0429` (`glib` 0.18 unsoundness in `VariantStrIter`).
+  All six are transitive, none has an upgrade that keeps Tauri 2 working
+  (the `glib`/`zvariant` path is Tauri's Linux GTK/zbus backend and the
+  advisory covers an API Job Signal never calls), and none is reachable from
+  the app's own code on Windows or macOS. `cargo audit` exits 0 on warnings, so
+  the CI gate still fails on any new vulnerability.
+
+Local `cargo audit` after the fix: exit 0, "6 allowed warnings found".
 
 ### Data at rest and deletion
 
@@ -111,4 +132,7 @@ prune manual exports.
       restarts the worker, and recreates schema 18. See ADR-0017 for evidence.
 - [x] Backup import validation and scheduled retention tested.
 - [ ] macOS codesign/notarization verified on macOS CI (release gate).
-- [ ] Dependency audits on the release commit recorded (CI job).
+- [x] Dependency audits recorded for this change: `pip-audit` and
+      `npm audit --omit=dev --audit-level=high` clean, RustSec findings fixed in
+      `Cargo.lock` or listed above as reasoned exceptions. The CI `audits` job
+      re-runs all three on the release commit.

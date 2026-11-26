@@ -61,6 +61,17 @@ def test_a_shard_is_verified_against_its_manifest_checksum(tmp_path: Path) -> No
         next(SeedCatalog.open(tmp_path).records())
 
 
+def test_a_crlf_checkout_still_matches_its_checksum(tmp_path: Path) -> None:
+    """Windows checkouts rewrite line endings; the manifest is over LF bytes."""
+    write_seed_shards(tmp_path, [_record("ats.lever", "https://jobs.lever.co/acme", 3)])
+    shard = tmp_path / "boards" / "ats-lever.ndjson"
+    shard.write_bytes(shard.read_bytes().replace(b"\n", b"\r\n"))
+
+    assert [r.url for r in SeedCatalog.open(tmp_path).records()] == [
+        "https://jobs.lever.co/acme"
+    ]
+
+
 def test_a_stale_shard_is_removed_when_its_connector_disappears(tmp_path: Path) -> None:
     write_seed_shards(
         tmp_path,
