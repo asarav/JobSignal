@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from app.infrastructure.persistence.sqlite.migrator import migrate
 
-MIGRATION_COUNT = 18
+MIGRATION_COUNT = 19
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,14 @@
         "type": "number"
       },
       "type": "object"
+    },
+    "hidden_out_of_area": {
+      "default": 0,
+      "type": "integer"
+    },
+    "hidden_missing_skills": {
+      "default": 0,
+      "type": "integer"
     }
   },
   "title": "MatchingGetResultsResponse",

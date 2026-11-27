@@ -80,6 +80,10 @@ class NormalizedJob:
     provenance: Sequence[Provenance]
     posting_status_hint: PostingStatus
     fetched_at: datetime
+    #: Structured analyzer output (section-aware requirements, ATS keywords,
+    #: parsed location scope).  Empty for rows created before migration 0019
+    #: until the bounded backfill has seen them.
+    requirements: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

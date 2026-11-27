@@ -60,6 +60,20 @@
       },
       "type": "array"
     },
+    "required_keywords": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "missing_required": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
     "note": {
       "default": "",
       "type": "string"

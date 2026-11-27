@@ -184,6 +184,7 @@ def _build_dispatcher(
         KeywordsPrevalenceParams,
         KeywordsTrendsParams,
         MatchingApplyWeightsParams,
+        MatchingResultsParams,
         MatchingRunParams,
         MatchingWeightHistoryParams,
         MatchingWeightProposalsParams,
@@ -362,7 +363,7 @@ def _build_dispatcher(
     dispatcher.register("resume.set_skill_status", resume.set_skill_status, params_model=ResumeSkillStatusParams)
 
     dispatcher.register("matching.run", matching.run, params_model=MatchingRunParams)
-    dispatcher.register("matching.get_results", matching.get_results, params_model=ResumeProfileParams)
+    dispatcher.register("matching.get_results", matching.get_results, params_model=MatchingResultsParams)
     dispatcher.register("matching.update_weights", matching.update_weights, params_model=MatchingWeightsParams)
     dispatcher.register(
         "matching.get_weight_proposals",

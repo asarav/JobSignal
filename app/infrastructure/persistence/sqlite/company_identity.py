@@ -124,8 +124,8 @@ class SqliteJobKeywordRepository:
         )
         await self._conn.executemany(
             "INSERT OR IGNORE INTO job_keywords("
-            "id, job_id, revision_hash, keyword_id, mentions, taxonomy_version, "
-            "extracted_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "id, job_id, revision_hash, keyword_id, mentions, importance, "
+            "taxonomy_version, extracted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     keyword.id,
@@ -133,6 +133,7 @@ class SqliteJobKeywordRepository:
                     keyword.revision_hash,
                     keyword.keyword_id,
                     keyword.mentions,
+                    keyword.importance,
                     keyword.taxonomy_version,
                     _iso(keyword.extracted_at),
                 )

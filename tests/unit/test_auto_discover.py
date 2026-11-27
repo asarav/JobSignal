@@ -231,6 +231,12 @@ async def test_each_pass_publishes_started_and_completed_with_its_summary():
     assert status["last_summary"]["crawled"] == 1
     assert status["last_pass_at"] is not None
     assert status["next_pass_at"] is not None
+    assert status["initial_total"] >= 1
+    assert status["initial_done"] >= 1
+    assert status["initial_pending"] == 0
+    assert status["active_crawls"] == 0
+    assert status["phase"] in {"steady", "idle"}
+    assert "postings_found" in status and "last_error" in status
 
 
 @pytest.mark.asyncio

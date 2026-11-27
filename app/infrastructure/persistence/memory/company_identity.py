@@ -104,6 +104,7 @@ class InMemoryJobKeywordRepository:
                     "revision_hash": keyword.revision_hash,
                     "keyword_id": keyword.keyword_id,
                     "mentions": keyword.mentions,
+                    "importance": keyword.importance,
                     "taxonomy_version": keyword.taxonomy_version,
                     "extracted_at": _iso(keyword.extracted_at),
                 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { COUNTS_CHANGED_EVENT } from "../../hooks/useSetupStatus";
 import { workerClient } from "../../services/workerClient";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import { lastVisitCutoff, readLastVisit } from "./lastVisit";
 import type { WorkflowState } from "./nextStep";
 
@@ -43,6 +44,7 @@ export function useWorkflowState(): WorkflowSnapshot {
         const [ranked, saved, applications, resume, sources, runs] = await Promise.all([
           workerClient.rankedJobs({
             limit: 1,
+            ensure_fit: true,
             seen_since: lastVisitCutoff(Date.now(), readLastVisit()),
           }),
           workerClient.listSavedJobs({ view: "ready", limit: 1 }),
@@ -86,6 +88,8 @@ export function useWorkflowState(): WorkflowSnapshot {
     // full-list fetch on the screen that changed the data.
     window.dispatchEvent(new Event(COUNTS_CHANGED_EVENT));
   }, []);
+
+  useLiveRefresh(refresh);
 
   useEffect(() => {
     // A resume import or a profile save changes this state without navigating.

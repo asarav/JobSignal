@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Tabs } from "../../components/Tabs";
 import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
@@ -6,6 +7,7 @@ import { Copy } from "../../copy/copy";
 import { announceCountsChanged, useSetupStatus } from "../../hooks/useSetupStatus";
 import { pickResumeFile } from "../../services/filePicker";
 import { workerClient, WorkerError } from "../../services/workerClient";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import type {
   ResumeImportResponse,
   ResumeSetSkillStatusRequest,
@@ -63,6 +65,15 @@ type MatchResult = {
   dimension_coverage: number | null;
   dimensions?: Dimension[];
   explanations?: Explanation[];
+  location_text?: string;
+  workplace_type?: string;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  saved?: boolean;
+  outside_area?: boolean;
+  hidden_for_missing_skills?: boolean;
 };
 
 type SkillRow = {
@@ -195,6 +206,8 @@ type ContactForm = {
 };
 
 type PreferenceForm = {
+  homeLocation: string;
+  authorizedCountries: string;
   locations: string;
   workplaceTypes: string;
   remoteOk: boolean;
@@ -296,6 +309,21 @@ function parseMatchResults(rows: unknown[] | undefined): MatchResult[] {
       company_name: typeof row.company_name === "string" ? row.company_name : null,
       fit_score: numberOrNull(row.fit_score),
       dimension_coverage: numberOrNull(row.dimension_coverage),
+      location_text: typeof row.location_text === "string" ? row.location_text : "",
+      workplace_type: typeof row.workplace_type === "string" ? row.workplace_type : "",
+      required_skills: Array.isArray(row.required_skills)
+        ? row.required_skills.map(String)
+        : [],
+      preferred_skills: Array.isArray(row.preferred_skills)
+        ? row.preferred_skills.map(String)
+        : [],
+      missing_required_skills: Array.isArray(row.missing_required_skills)
+        ? row.missing_required_skills.map(String)
+        : [],
+      required_skill_coverage: numberOrNull(row.required_skill_coverage),
+      saved: Boolean(row.saved),
+      outside_area: Boolean(row.outside_area),
+      hidden_for_missing_skills: Boolean(row.hidden_for_missing_skills),
       dimensions: Array.isArray(row.dimensions)
         ? (row.dimensions as Dimension[]).map((dimension) => ({
             ...dimension,
@@ -322,6 +350,12 @@ export function ResumeRoute() {
   const [openVersionId, setOpenVersionId] = useState<string | null>(null);
   const [matchResults, setMatchResults] = useState<MatchResult[]>([]);
   const [matchSummary, setMatchSummary] = useState<MatchRunSummary | null>(null);
+  const [savedMatches, setSavedMatches] = useState<Set<string>>(new Set());
+  const [savingMatchId, setSavingMatchId] = useState<string | null>(null);
+  const [includeOutOfArea, setIncludeOutOfArea] = useState(false);
+  const [includeMissingSkills, setIncludeMissingSkills] = useState(false);
+  const [hiddenOutOfArea, setHiddenOutOfArea] = useState(0);
+  const [hiddenMissingSkills, setHiddenMissingSkills] = useState(0);
   const [weights, setWeights] = useState<Record<string, number>>(DEFAULT_WEIGHTS);
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [skillBusy, setSkillBusy] = useState<string | null>(null);
@@ -340,6 +374,8 @@ export function ResumeRoute() {
   const [certifications, setCertifications] = useState<ItemRow[]>([]);
   const [projects, setProjects] = useState<ItemRow[]>([]);
   const [preferences, setPreferences] = useState<PreferenceForm>({
+    homeLocation: "",
+    authorizedCountries: "",
     locations: "",
     workplaceTypes: "",
     remoteOk: false,
@@ -363,11 +399,21 @@ export function ResumeRoute() {
 
   const loadMatching = useCallback(async () => {
     try {
-      const [results, profile] = await Promise.all([
-        workerClient.getMatchingResults({ profile_id: "default" }),
+      await workerClient.runMatching({ profile_id: "default" });
+      const [results, profile, saved] = await Promise.all([
+        workerClient.getMatchingResults({
+          profile_id: "default",
+          limit: 100,
+          include_out_of_area: includeOutOfArea,
+          include_missing_skills: includeMissingSkills,
+        }),
         workerClient.getResumeProfile({ profile_id: "default" }),
+        workerClient.listSavedJobs({ view: "all", limit: 200 }),
       ]);
       setMatchResults(parseMatchResults(results.results));
+      setHiddenOutOfArea(results.hidden_out_of_area ?? 0);
+      setHiddenMissingSkills(results.hidden_missing_skills ?? 0);
+      setSavedMatches(new Set((saved.jobs ?? []).map((row) => row.job_id)));
       setWeights({ ...DEFAULT_WEIGHTS, ...(results.weights ?? {}) });
       const stored = profile.profile as {
         skills?: SkillRow[];
@@ -411,6 +457,10 @@ export function ResumeRoute() {
       setProfileOverrides(overrides);
       const prefs = (overrides.preferences ?? overrides) as Record<string, unknown>;
       setPreferences({
+        homeLocation: typeof prefs.home_location === "string" ? prefs.home_location : "",
+        authorizedCountries: Array.isArray(prefs.authorized_countries)
+          ? prefs.authorized_countries.join(", ")
+          : "",
         locations: Array.isArray(prefs.locations) ? prefs.locations.join(", ") : "",
         workplaceTypes: Array.isArray(prefs.workplace_types)
           ? prefs.workplace_types.join(", ")
@@ -423,12 +473,13 @@ export function ResumeRoute() {
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
     }
-  }, []);
+  }, [includeOutOfArea, includeMissingSkills]);
 
   useEffect(() => {
     void loadVersions();
     void loadMatching();
   }, [loadVersions, loadMatching]);
+  useLiveRefresh(() => void loadMatching());
 
   const chooseFile = async () => {
     setPicking(true);
@@ -554,6 +605,34 @@ export function ResumeRoute() {
     }
   };
 
+  const toggleMatchSaved = async (result: MatchResult) => {
+    const next = !savedMatches.has(result.job_id);
+    setSavingMatchId(result.job_id);
+    setSavedMatches((current) => {
+      const copy = new Set(current);
+      if (next) copy.add(result.job_id);
+      else copy.delete(result.job_id);
+      return copy;
+    });
+    try {
+      await workerClient.setJobUserState({
+        job_id: result.job_id,
+        state: next ? "saved" : "new",
+      });
+      announceCountsChanged();
+    } catch (exc) {
+      setSavedMatches((current) => {
+        const copy = new Set(current);
+        if (next) copy.delete(result.job_id);
+        else copy.add(result.job_id);
+        return copy;
+      });
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    } finally {
+      setSavingMatchId(null);
+    }
+  };
+
   const savePreferences = async () => {
     setBusy(true);
     setError(null);
@@ -565,6 +644,8 @@ export function ResumeRoute() {
         overrides: {
           ...profileOverrides,
           preferences: {
+            home_location: preferences.homeLocation.trim(),
+            authorized_countries: split(preferences.authorizedCountries),
             locations: split(preferences.locations),
             workplace_types: split(preferences.workplaceTypes),
             remote_ok: preferences.remoteOk,
@@ -1073,6 +1154,40 @@ export function ResumeRoute() {
         </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <label className="text-sm text-slate-700">
+            Home location
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              placeholder="Chicago, IL"
+              value={preferences.homeLocation}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  homeLocation: event.target.value,
+                }))
+              }
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              Used to check remote roles that are limited to a country.
+            </span>
+          </label>
+          <label className="text-sm text-slate-700">
+            Countries you can work in
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              placeholder="United States"
+              value={preferences.authorizedCountries}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  authorizedCountries: event.target.value,
+                }))
+              }
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              Comma-separated. Defaults to the country of your home location.
+            </span>
+          </label>
+          <label className="text-sm text-slate-700">
             Preferred locations
             <input
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
@@ -1201,14 +1316,61 @@ export function ResumeRoute() {
           Matching
           <InfoTip label="Matching">{Copy.tooltips.matchResults}</InfoTip>
         </h2>
-        <button
-          type="button"
-          onClick={() => void runMatching()}
-          disabled={busy}
-          className="mt-3 rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-        >
-          {busy ? "Matching…" : "Recompute matches"}
-        </button>
+        <div className="mt-3 flex flex-wrap items-center gap-4">
+          <button
+            type="button"
+            onClick={() => void runMatching()}
+            disabled={busy}
+            className="rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {busy ? "Matching…" : "Recompute matches"}
+          </button>
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={!includeOutOfArea}
+              onChange={(event) => setIncludeOutOfArea(!event.target.checked)}
+            />
+            Only roles in my area
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={!includeMissingSkills}
+              onChange={(event) => setIncludeMissingSkills(!event.target.checked)}
+            />
+            Only roles matching required skills
+          </label>
+        </div>
+        {(!includeOutOfArea && hiddenOutOfArea > 0) ||
+        (!includeMissingSkills && hiddenMissingSkills > 0) ? (
+          <p className="mt-2 text-xs text-slate-500">
+            {!includeOutOfArea && hiddenOutOfArea > 0
+              ? `${hiddenOutOfArea} outside your area hidden. `
+              : ""}
+            {!includeMissingSkills && hiddenMissingSkills > 0
+              ? `${hiddenMissingSkills} hidden for missing required skills. `
+              : ""}
+            {!includeOutOfArea && hiddenOutOfArea > 0 ? (
+              <button
+                type="button"
+                className="font-medium text-brand-700 underline"
+                onClick={() => setIncludeOutOfArea(true)}
+              >
+                Show outside area.
+              </button>
+            ) : null}{" "}
+            {!includeMissingSkills && hiddenMissingSkills > 0 ? (
+              <button
+                type="button"
+                className="font-medium text-brand-700 underline"
+                onClick={() => setIncludeMissingSkills(true)}
+              >
+                Show missing-skill roles.
+              </button>
+            ) : null}
+          </p>
+        ) : null}
         {matchSummary ? (
           matchSummary.available_jobs === 0 ? (
             <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -1234,9 +1396,19 @@ export function ResumeRoute() {
               <li key={result.result_id} className="rounded-lg border border-slate-200 p-3">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <div className="font-medium text-slate-900">
-                    {result.job_title ?? `Job ${result.job_id}`}
+                    <Link
+                      to={`/jobs/${result.job_id}`}
+                      className="hover:text-brand-700 hover:underline"
+                    >
+                      {result.job_title ?? `Job ${result.job_id}`}
+                    </Link>
                     {result.company_name ? (
-                      <span className="ml-2 text-xs font-normal text-slate-500">{result.company_name}</span>
+                      <Link
+                        to={`/jobs/${result.job_id}`}
+                        className="ml-2 text-xs font-normal text-slate-500 hover:text-brand-700 hover:underline"
+                      >
+                        {result.company_name}
+                      </Link>
                     ) : null}
                   </div>
                   <div className="text-xs text-slate-600">
@@ -1275,6 +1447,42 @@ export function ResumeRoute() {
                       </>
                     )}
                   </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
+                    {result.location_text || "Location not recorded"}
+                  </span>
+                  {result.required_skill_coverage !== null &&
+                  result.required_skill_coverage !== undefined ? (
+                    <span
+                      className={
+                        result.required_skill_coverage < 0.5
+                          ? "rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-800"
+                          : "rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-800"
+                      }
+                    >
+                      Required skills {Math.round(result.required_skill_coverage * 100)}%
+                    </span>
+                  ) : null}
+                  {(result.missing_required_skills ?? []).length > 0 ? (
+                    <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-800">
+                      Missing: {(result.missing_required_skills ?? []).join(", ")}
+                    </span>
+                  ) : null}
+                  <Link
+                    to={`/jobs/${result.job_id}`}
+                    className="rounded border border-slate-300 bg-white px-2 py-0.5 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    View job
+                  </Link>
+                  <button
+                    type="button"
+                    disabled={savingMatchId === result.job_id}
+                    onClick={() => void toggleMatchSaved(result)}
+                    className="rounded border border-slate-300 bg-white px-2 py-0.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {savedMatches.has(result.job_id) ? "Saved" : "Save for later"}
+                  </button>
                 </div>
                 <details className="mt-2 text-xs text-slate-600">
                   <summary className="cursor-pointer font-medium text-slate-700">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, buttonClass } from "../../components/Button";
 import { Disclosure } from "../../components/Disclosure";
@@ -10,6 +10,7 @@ import { FitPanel } from "./FitPanel";
 import { RiskPanel } from "./RiskPanel";
 import { isHttpUrl, openExternalUrl } from "../../services/openExternal";
 import { workerClient, WorkerError } from "../../services/workerClient";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import type {
   ApplicationsListResponseApplicationInfo,
   JobsGetDetailResponse,
@@ -84,34 +85,28 @@ export function JobDetailRoute() {
   const [tab, setTab] = useState("job");
   const [autofillOpen, setAutofillOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      if (!id) return;
-      try {
-        const [result, tracked, savedJobs] = await Promise.all([
-          workerClient.getJobDetail({ job_id: id }),
-          workerClient.listApplications(),
-          workerClient.listSavedJobs(),
-        ]);
-        if (!cancelled) {
-          setDetail(result);
-          setApplication(tracked.applications.find((row) => row.job_id === id) ?? null);
-          // One saved concept: the same job_user_state list Saved reads.
-          setSaved(savedJobs.jobs.some((row) => row.job_id === id));
-          setError(null);
-        }
-      } catch (exc) {
-        if (!cancelled) {
-          setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
-        }
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    if (!id) return;
+    try {
+      const [result, tracked, savedJobs] = await Promise.all([
+        workerClient.getJobDetail({ job_id: id }),
+        workerClient.listApplications(),
+        workerClient.listSavedJobs(),
+      ]);
+      setDetail(result);
+      setApplication(tracked.applications.find((row) => row.job_id === id) ?? null);
+      // One saved concept: the same job_user_state list Saved reads.
+      setSaved(savedJobs.jobs.some((row) => row.job_id === id));
+      setError(null);
+    } catch (exc) {
+      setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
+    }
   }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useLiveRefresh(() => void load());
 
   const track = async (status: string) => {
     if (!id) return;
@@ -150,6 +145,13 @@ export function JobDetailRoute() {
   };
 
   const job = detail?.job ?? {};
+  const requirements = (job.requirements ?? {}) as Record<string, unknown>;
+  const atsKeywords = Array.isArray(requirements.ats_keywords)
+    ? (requirements.ats_keywords as Record<string, unknown>[])
+    : [];
+  const requiredKeywords = atsKeywords.filter((row) => row.importance === "required");
+  const preferredKeywords = atsKeywords.filter((row) => row.importance === "preferred");
+  const mentionedKeywords = atsKeywords.filter((row) => row.importance === "mentioned");
   const originalUrl = text(job.canonical_url);
   const description = text(job.description_text);
   const salary = formatSalary(job);
@@ -288,6 +290,44 @@ export function JobDetailRoute() {
 
       {tab === "job" ? (
         <div className="space-y-4">
+          {atsKeywords.length > 0 ? (
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-base font-semibold text-slate-900">ATS keywords</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Exact wording from the posting, split by how strongly it was asked for.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                {[
+                  ["Required", requiredKeywords],
+                  ["Preferred", preferredKeywords],
+                  ["Mentioned", mentionedKeywords],
+                ].map(([label, rows]) => (
+                  <div key={String(label)}>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {String(label)}
+                    </h3>
+                    {(rows as Record<string, unknown>[]).length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-400">None detected</p>
+                    ) : (
+                      <ul className="mt-1 space-y-1 text-xs text-slate-700">
+                        {(rows as Record<string, unknown>[]).map((row, index) => (
+                          <li key={`${String(row.keyword_id)}-${index}`}>
+                            <span className="font-medium">{text(row.phrase, text(row.keyword_id))}</span>
+                            {typeof row.frequency === "number" && row.frequency > 1
+                              ? ` · ${row.frequency}×`
+                              : ""}
+                            {text(row.section) ? (
+                              <span className="text-slate-400"> · {text(row.section)}</span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-base font-semibold text-slate-900">Description</h2>
             <JobDescription value={description} />

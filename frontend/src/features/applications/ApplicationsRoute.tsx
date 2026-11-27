@@ -12,6 +12,7 @@ import { useToast } from "../../components/Toast";
 import { WorkflowNextStepBar } from "../../components/WorkflowNextStepBar";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import { useWorkflowState } from "../workflow/useWorkflowState";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import type {
   ApplicationsGetSuppressionsResponseSuppressionInfo,
   ApplicationsListResponseApplicationInfo,
@@ -253,6 +254,7 @@ export function ApplicationsRoute() {
   useEffect(() => {
     void load(0, false);
   }, [load]);
+  useLiveRefresh(() => void load(0, false));
 
   const loadMeta = useCallback(async () => {
     try {

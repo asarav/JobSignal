@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
 import { Tabs } from "../../components/Tabs";
 import { workerClient, WorkerError } from "../../services/workerClient";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import type {
   CompaniesListResponseCompanyInfo,
   KeywordsCoverageResponse,
@@ -62,6 +63,7 @@ export function KeywordsRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+  useLiveRefresh(() => void load());
 
   useEffect(() => {
     workerClient
@@ -174,6 +176,7 @@ export function KeywordsRoute() {
                 <th className="py-1">Skill</th>
                 <th>Postings</th>
                 <th>Share</th>
+                <th>Required</th>
                 <th>Note</th>
               </tr>
             </thead>
@@ -183,6 +186,13 @@ export function KeywordsRoute() {
                   <td className="py-2 font-medium text-slate-900">{keywordId(row)}</td>
                   <td>{row.jobs === null || row.jobs === undefined ? "—" : String(row.jobs)}</td>
                   <td>{share(row, Boolean(row.insufficient ?? small))}</td>
+                  <td className="text-xs text-slate-600">
+                    {Number(row.required_jobs ?? 0) > 0
+                      ? `${String(row.required_jobs)} posting${
+                          Number(row.required_jobs) === 1 ? "" : "s"
+                        }`
+                      : "—"}
+                  </td>
                   <td className="text-xs text-slate-400">
                     {row.insufficient || small ? "sample too small" : ""}
                   </td>
@@ -344,6 +354,24 @@ export function KeywordsRoute() {
                     <li key={index}>{keywordId(row as Row)}</li>
                   ))}
                   {(coverage.missing ?? []).length === 0 ? <li>Nothing missing.</li> : null}
+                </ul>
+              </div>
+              <div className="md:col-span-2">
+                <h3 className="text-sm font-semibold text-slate-700">
+                  Required in postings, not on your profile
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  These were written as requirements, not as nice-to-haves.
+                </p>
+                <ul className="mt-1 text-sm text-slate-700">
+                  {(coverage.missing_required ?? []).map((row, index) => (
+                    <li key={index}>
+                      {keywordId(row as Row)} · {String((row as Row).required_jobs ?? 0)} postings
+                    </li>
+                  ))}
+                  {(coverage.missing_required ?? []).length === 0 ? (
+                    <li>No required-keyword gap recorded.</li>
+                  ) : null}
                 </ul>
               </div>
             </div>

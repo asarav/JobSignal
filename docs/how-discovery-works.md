@@ -66,9 +66,10 @@ One pass:
    per pass and bounded by the global crawl concurrency cap. Harvested URLs
    never drive `not_seen`/removal: only a full listing can prove a job is gone.
 7. **Store the outcome.** Every crawl writes a `crawl_runs` row and publishes
-   `crawl.completed` / `crawl.failed`. New jobs land in the database and are
-   immediately searchable through your search profiles, with their hard
-   filters applied.
+   `crawl.started`, periodic `crawl.progress` (processed refs, total refs, new
+   and updated postings) and `crawl.completed` / `crawl.failed`. New jobs land
+   in the database and are immediately searchable through your search profiles,
+   with their hard filters applied.
 8. **Cold start.** A fresh install has no run state, so the worker first
    registers up to `discovery.bootstrap_seed_sources` (default 2,000) hiring
    seed boards — largest first, empty ones excluded — and then runs
@@ -98,6 +99,13 @@ longer contain them. Both paths share the registry and a due check, so a board
 that one just refreshed is not fetched again by the other. A restart of the app
 does not reset any of it: the last run time, the rotation cursor and every
 source schedule are stored in the app database.
+
+The app-wide activity bar and the Discover status card read the same live
+status: enabled boards, boards already crawled at least once, boards still
+waiting, active crawls, total postings and the last crawl error. They poll
+every two seconds while work is active and every twelve seconds when idle, and
+`crawl.*` / `discovery.*` events refresh them immediately. This is why the
+screen answers "is it crawling?" without running a pass or pressing Refresh.
 
 ## Sources, not seeds
 
@@ -268,6 +276,12 @@ advanced) and are validated when saved:
 
 To stop a specific provider or source, disable it in Settings → Sources /
 Plugins; nothing else changes.
+
+Every completed crawl, source completion, pass completion and verified posting
+also triggers the shared UI refresh. Home, Find jobs, Saved, Job detail,
+Applications, Keywords and Profile matches re-fetch after a short debounce; the
+Refresh buttons remain as a manual fallback. In a preview without an event
+bridge, the UI falls back to a five-second poll while discovery is active.
 
 ## Source lifecycle, crawl budgets and the crawl event log
 

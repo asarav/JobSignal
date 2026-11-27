@@ -475,6 +475,13 @@ class JobSummary(DTO):
     rank_score: float | None = None
     rank_reasons: list[str] = Field(default_factory=list)
     hidden_by_policy: bool = False
+    #: Section-aware requirements: required and preferred are different.
+    required_skills: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+    missing_required_skills: list[str] = Field(default_factory=list)
+    required_skill_coverage: float | None = None
+    #: Parsed country/region eligibility and its human-readable restriction.
+    location_scope: dict[str, Any] = Field(default_factory=dict)
 
 
 class CompanyInfo(DTO):
@@ -590,6 +597,9 @@ class RankedJobParams(DTO):
     #: a posting whose known location conflicts with the profile and relocation
     #: is off; unknown locations are always shown.
     include_out_of_area: bool = False
+    #: Reveal roles whose confidently extracted required skills are mostly
+    #: missing from the profile.  Jobs with no extracted requirements stay.
+    include_missing_skills: bool = False
     #: Compute missing fit for the ranking window (bounded).
     ensure_fit: bool = False
     #: Optional display filters applied after fit/risk are resolved.
@@ -613,6 +623,8 @@ class RankedJobListResult(DTO):
     hidden_by_policy: int = 0
     #: Rows withheld because their known location is outside the profile's area.
     outside_area: int = 0
+    #: Rows withheld because required-skill coverage was below the gate.
+    hidden_missing_skills: int = 0
     #: Whole-corpus counts, not the paged/ranked slice (dashboard headline).
     needs_attention: int = 0
     new_since: int | None = None
@@ -681,6 +693,16 @@ class MatchingRunResult(DTO):
 class MatchingResultsResult(DTO):
     results: list[dict[str, Any]] = Field(default_factory=list)
     weights: dict[str, float] = Field(default_factory=dict)
+    #: Counts the candidate can reveal with the opt-in flags.
+    hidden_out_of_area: int = 0
+    hidden_missing_skills: int = 0
+
+
+class MatchingResultsParams(DTO):
+    profile_id: str = "default"
+    limit: int = Field(default=50, ge=1, le=500)
+    include_out_of_area: bool = False
+    include_missing_skills: bool = False
 
 
 class MatchingWeightsResult(DTO):
@@ -863,6 +885,9 @@ class KeywordsCoverageResult(DTO):
     coverage_ratio: float | None = None
     covered: list[dict[str, Any]] = Field(default_factory=list)
     missing: list[dict[str, Any]] = Field(default_factory=list)
+    #: Required-keyword prevalence, so a nice-to-have is never shown as a must.
+    required_keywords: list[dict[str, Any]] = Field(default_factory=list)
+    missing_required: list[dict[str, Any]] = Field(default_factory=list)
     note: str = ""
 
 
@@ -965,6 +990,14 @@ class DiscoveryStatusResult(DTO):
     sources: int = 0
     enabled_sources: int = 0
     last_crawl_at: str | None = None
+    phase: Literal["seeding", "first_run", "steady", "idle"] = "idle"
+    initial_total: int = 0
+    initial_done: int = 0
+    initial_pending: int = 0
+    active_crawls: int = 0
+    queued_crawls: int = 0
+    postings_found: int = 0
+    last_error: str | None = None
     note: str = ""
 
 

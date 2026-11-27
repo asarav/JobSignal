@@ -31,3 +31,5 @@ class JobKeywordRecord:
     extracted_at: datetime
     mentions: int = 1
     evidence: Mapping[str, object] = field(default_factory=dict)
+    #: ``required`` / ``preferred`` / ``mentioned``; section-aware.
+    importance: str = "mentioned"

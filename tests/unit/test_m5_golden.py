@@ -136,7 +136,7 @@ async def test_golden_resume_and_jobs_produce_expected_dimensions(tmp_path: Path
     assert sparse_dims["compensation"]["score"] is None
     # Freshness falls back to first_seen_at, so it stays available.
     assert sparse_dims["freshness"]["available"] is True
-    assert sparse["dimension_coverage"] == pytest.approx(0.8)
+    assert sparse["dimension_coverage"] == pytest.approx(0.82)
     assert sparse["fit_score"] > 0.0
     assert any(
         explanation["reason_code"] == "dimension.unavailable"

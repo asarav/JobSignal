@@ -6,11 +6,11 @@ from typing import Any
 from app.application.commands.matching import MatchingUseCase
 from app.application.dto import (
     MatchingApplyWeightsParams,
+    MatchingResultsParams,
     MatchingRunParams,
     MatchingWeightHistoryParams,
     MatchingWeightProposalsParams,
     MatchingWeightsParams,
-    ResumeProfileParams,
 )
 from app.application.weight_proposals import WeightProposalService
 
@@ -26,8 +26,13 @@ class MatchingHandlers:
         )
         return {"results": results, **summary}
 
-    async def get_results(self, params: ResumeProfileParams) -> dict:
-        return await self._matching.get_results(params.profile_id)
+    async def get_results(self, params: MatchingResultsParams) -> dict:
+        return await self._matching.get_results(
+            params.profile_id,
+            limit=params.limit,
+            include_out_of_area=params.include_out_of_area,
+            include_missing_skills=params.include_missing_skills,
+        )
 
     async def update_weights(self, params: MatchingWeightsParams) -> dict:
         weights = await self._matching.update_weights(params.profile_id, params.weights)

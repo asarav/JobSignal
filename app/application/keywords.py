@@ -19,6 +19,7 @@ from app.domain.models.job_keyword import (
     JobKeywordRevisionRecord,
 )
 from app.domain.services.company_resolution import canonical_map
+from app.domain.services.job_requirements import analyze_job
 from app.domain.services.keywords import KeywordExtractor
 
 #: Below this many postings a prevalence or coverage row shows its count but no
@@ -68,9 +69,36 @@ class KeywordPersistenceService:
         if latest is not None and str(latest.get("revision_hash")) == revision_hash:
             return False
         text = extraction_text(job)
-        found = self._extractor.extract(text)
-        if not found:
-            found = []
+        requirements = job.get("requirements")
+        ats_rows = (
+            requirements.get("ats_keywords")
+            if isinstance(requirements, Mapping)
+            else None
+        )
+        importance: dict[str, str] = {}
+        mentions: dict[str, int] = {}
+        if isinstance(ats_rows, list) and ats_rows:
+            for item in ats_rows:
+                if not isinstance(item, Mapping):
+                    continue
+                keyword_id = str(item.get("keyword_id") or "")
+                if not keyword_id:
+                    continue
+                importance[keyword_id] = str(item.get("importance") or "mentioned")
+                mentions[keyword_id] = max(1, int(item.get("frequency") or 1))
+            found = sorted(importance)
+        else:
+            analysis = analyze_job(
+                str(job.get("title") or ""),
+                str(job.get("description_text") or ""),
+            )
+            importance = {
+                item.keyword_id: item.importance for item in analysis.ats_keywords
+            }
+            mentions = {
+                item.keyword_id: item.frequency for item in analysis.ats_keywords
+            }
+            found = sorted(importance) or self._extractor.extract(text)
         taxonomy_version = self._extractor.normalizer.taxonomy_version()
         revision = JobKeywordRevisionRecord(
             id=f"jkr_{self._container.ids.new_id()[:16]}",
@@ -80,7 +108,6 @@ class KeywordPersistenceService:
             extracted_at=now,
             keyword_count=len(found),
         )
-        mentions = _mention_counts(self._extractor, text)
         records = [
             JobKeywordRecord(
                 id=f"jk_{self._container.ids.new_id()[:16]}",
@@ -90,6 +117,7 @@ class KeywordPersistenceService:
                 taxonomy_version=taxonomy_version,
                 extracted_at=now,
                 mentions=mentions.get(keyword_id, 1),
+                importance=importance.get(keyword_id, "mentioned"),
             )
             for keyword_id in found
         ]
@@ -157,6 +185,8 @@ class KeywordInsightsService:
             )
             job_ids = await self._scope_job_ids(uow, resolved)
             mentions = await uow.keywords.keywords_with_mentions(job_ids)
+            revisions = await uow.keywords.latest_revisions_for_jobs(job_ids)
+            keyword_rows = await uow.keywords.keyword_rows_for_jobs(job_ids)
             await uow.commit()
         from app.application.intelligence import wilson_interval
 
@@ -165,6 +195,19 @@ class KeywordInsightsService:
         for values in mentions.values():
             for keyword_id in values:
                 counts[keyword_id] = counts.get(keyword_id, 0) + 1
+        latest_hashes = {
+            str(job_id): str(revision.get("revision_hash"))
+            for job_id, revision in revisions.items()
+        }
+        required_jobs: dict[str, set[str]] = {}
+        for row in keyword_rows:
+            job_id = str(row.get("job_id") or "")
+            if latest_hashes.get(job_id) != str(row.get("revision_hash") or ""):
+                continue
+            if str(row.get("importance") or "mentioned") == "required":
+                required_jobs.setdefault(str(row.get("keyword_id") or ""), set()).add(
+                    job_id
+                )
         rows = []
         for keyword_id, jobs in counts.items():
             if n_jobs > 0:
@@ -175,6 +218,12 @@ class KeywordInsightsService:
                 {
                     "keyword_id": keyword_id,
                     "jobs": jobs,
+                    "required_jobs": len(required_jobs.get(keyword_id, set())),
+                    "required_prevalence": (
+                        round(len(required_jobs.get(keyword_id, set())) / n_jobs, 4)
+                        if n_jobs
+                        else None
+                    ),
                     "n": n_jobs,
                     "prevalence": round(jobs / n_jobs, 4) if n_jobs else None,
                     "interval": [round(low, 4), round(high, 4)],
@@ -359,6 +408,10 @@ class KeywordInsightsService:
         top = [row for row in payload["keywords"] if isinstance(row, Mapping)]
         covered = [row for row in top if str(row["keyword_id"]) in skills]
         missing = [row for row in top if str(row["keyword_id"]) not in skills]
+        required = [row for row in top if int(str(row.get("required_jobs") or 0)) > 0]
+        missing_required = [
+            row for row in required if str(row["keyword_id"]) not in skills
+        ]
         ratio = len(covered) / len(top) if top else None
         return {
             **payload,
@@ -366,6 +419,8 @@ class KeywordInsightsService:
             "candidate_skills": len(skills),
             "covered": covered,
             "missing": missing,
+            "required_keywords": required,
+            "missing_required": missing_required,
             "coverage_ratio": round(ratio, 4) if ratio is not None else None,
             "note": (
                 "Coverage compares the most-mentioned keywords in scope with the "

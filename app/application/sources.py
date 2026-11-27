@@ -342,11 +342,34 @@ async def run_crawl(
                 {"run_id": run_id, "source_id": source.id, "refs_discovered": len(refs)},
                 task_id=run_id,
             )
+        processed = 0
+
+        def publish_progress() -> None:
+            if events is None:
+                return
+            events.publish(
+                "crawl.progress",
+                {
+                    "run_id": run_id,
+                    "source_id": source.id,
+                    "processed": processed,
+                    "refs_total": len(refs),
+                    "new": int(str(stats.get("new", 0))),
+                    "updated": int(str(stats.get("updated", 0))),
+                    "skipped": int(str(stats.get("skipped", 0))),
+                    "errors": int(str(stats.get("errors", 0))),
+                },
+                task_id=run_id,
+            )
+
         for ref in refs:
             ctx.cancel.throw_if_cancelled()
             if (clock_now() - started).total_seconds() >= max_duration_s:
                 stats["truncated"] = True
                 break
+            processed += 1
+            if processed % 10 == 0:
+                publish_progress()
             stats["discovered"] = int(str(stats.get("discovered", 0))) + 1
             # Incremental fetch skip: if the ATS says the posting's
             # updated_at hasn't changed since last crawl, reuse the stored
@@ -423,6 +446,7 @@ async def run_crawl(
             )
             stats[outcome] = int(str(stats[outcome])) + 1
             seen_ids.append(job_id)
+        publish_progress()
     except Exception as exc:  # noqa: BLE001 - isolate the failing source
         async with uow_factory() as uow:
             await uow.crawl_runs.finish(

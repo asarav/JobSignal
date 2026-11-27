@@ -955,7 +955,8 @@ interprets payloads; it enforces the generated allowlist and envelope size.
 
 Long-running work emits `task.queued`, `task.progress`, `task.completed`,
 `task.cancelled`, and `task.failed` events with an optional `task_id`.
-Crawls emit `crawl.started`, `crawl.completed`, and `crawl.failed`.
+Crawls emit `crawl.started`, periodic `crawl.progress` (processed/total refs and
+new/updated counts), `crawl.completed`, and `crawl.failed`.
 
 ## Settings model
 

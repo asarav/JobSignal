@@ -361,6 +361,16 @@ class ResumeUseCase:
             await uow.commit()
 
     async def update_overrides(self, profile_id: str, overrides: dict[str, Any]) -> None:
+        preferences = overrides.get("preferences")
+        if isinstance(preferences, dict):
+            locations = preferences.get("locations")
+            if not preferences.get("home_location") and isinstance(locations, list) and locations:
+                preferences["home_location"] = str(locations[0])
+            if not preferences.get("authorized_countries"):
+                from app.domain.services.location_scope import canonical_country
+
+                country = canonical_country(str(preferences.get("home_location") or ""))
+                preferences["authorized_countries"] = [country or "United States"]
         async with self._container.uow_factory() as uow:
             await uow.resumes.update_overrides(profile_id, overrides)
             await uow.commit()

@@ -12,6 +12,7 @@ import { useToast } from "../../components/Toast";
 import { WorkflowNextStepBar } from "../../components/WorkflowNextStepBar";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import { useWorkflowState } from "../workflow/useWorkflowState";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import type { JobsListSavedResponseJobSummary } from "../../types/generated";
 
 type SavedView = "ready" | "all";
@@ -169,6 +170,7 @@ export function SavedRoute() {
   useEffect(() => {
     void load(0, false);
   }, [load]);
+  useLiveRefresh(() => void load(0, false));
 
   const markApplied = async (job: JobsListSavedResponseJobSummary) => {
     setBusyId(job.job_id);

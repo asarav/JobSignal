@@ -335,6 +335,15 @@ def normalize_job(
     seniority = infer_seniority(title)
     salary = parse_salary(payload)
     posted_at = parse_posted_at(payload)
+    from app.domain.services.job_requirements import analyze_job
+
+    location_text = ", ".join(location.raw for location in locations if location.raw)
+    requirements = analyze_job(
+        title,
+        description_text,
+        location_text=location_text,
+        workplace_type=workplace.value,
+    )
 
     found: list[str] = ["title", "canonical_url"]
     confidence: dict[str, float] = {"title": 0.9, "canonical_url": 1.0}
@@ -393,14 +402,15 @@ def normalize_job(
         original_urls=[raw.ref.url],
         department=None,
         seniority=seniority,
-        required_skills=requirement_skills(description_text),
-        preferred_skills=[],
+        required_skills=list(requirements.required_skills),
+        preferred_skills=list(requirements.preferred_skills),
         extraction_status=status,
         extraction_confidence=round(completeness, 2),
         field_confidence=confidence,
         provenance=provenance,
         posting_status_hint=PostingStatus.ACTIVE,
         fetched_at=now,
+        requirements=requirements.to_dict(),
     )
 
 

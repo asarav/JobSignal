@@ -14,6 +14,7 @@ import { lastVisitCutoff, readLastVisit } from "../workflow/lastVisit";
 import { CollectJobsAction } from "../workflow/CollectJobsAction";
 import { DiscoveryStatus } from "../discover/DiscoveryStatus";
 import { workerClient, WorkerError } from "../../services/workerClient";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import type {
   ApplicationsListResponseApplicationSummary,
   JobsRankedResponseJobSummary,
@@ -117,6 +118,7 @@ export function HomeRoute() {
         workerClient.rankedJobs({
           limit: 3,
           include_hidden: false,
+          ensure_fit: true,
           window: 500,
           seen_since: lastVisitCutoff(Date.now(), lastVisit),
         }),
@@ -149,6 +151,7 @@ export function HomeRoute() {
   useEffect(() => {
     void load();
   }, [load]);
+  useLiveRefresh(load);
 
   const workflowState: WorkflowState = {
     hasResume,
@@ -170,8 +173,13 @@ export function HomeRoute() {
   const queueClear = newSinceCount === 0 && readyToApply === 0 && (summary.follow_up ?? 0) === 0;
 
   const stateLine = (() => {
-    if (!hasResume || !hasSources) {
-      return "Nothing collected yet. Start with your profile and a source.";
+    if (!hasSources) {
+      return "No sources yet. Add a company careers page or job board to start collecting postings.";
+    }
+    if (!hasResume) {
+      return totalMatches > 0
+        ? `${totalMatches} matches collected. Import a resume to rank them against your experience.`
+        : "No matches yet. Import a resume so fit scores can rank the postings you collect.";
     }
     if (newSinceCount === 0) {
       return lastVisit === null

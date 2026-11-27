@@ -1,7 +1,7 @@
 {
   "complete": {
     "title": "Senior Backend Engineer",
-    "description": "We are hiring a Senior Backend Engineer to build Python services on AWS with PostgreSQL and Docker. You will own data pipelines and partner with product teams.",
+    "description": "We are hiring a Senior Backend Engineer.\n\nRequirements:\n- Python\n- SQL\n- AWS\n- PostgreSQL\n\nNice to have:\n- Docker\n- Kubernetes\n\nResponsibilities:\n- Build services and own data pipelines with product teams.",
     "seniority": "senior",
     "required_skills": ["python", "sql", "aws"],
     "preferred_skills": ["docker", "kubernetes"],

@@ -371,7 +371,9 @@ class AutoDiscoverUseCase:
         )
         sources = await self._registry.list_sources()
         async with self._container.uow_factory() as uow:
-            runs = await uow.crawl_runs.list(limit=1)
+            runs = await uow.crawl_runs.list(limit=500)
+            started = await uow.crawl_runs.last_started_by_source()
+            postings_found = await uow.jobs.count()
             await uow.commit()
         last_crawl: str | None = None
         if runs:
@@ -379,12 +381,36 @@ class AutoDiscoverUseCase:
             raw = row.get("finished_at") or row.get("started_at")
             last_crawl = raw if isinstance(raw, str) else None
         raw_summary = state.get("last_summary")
+        enabled = [
+            source
+            for source in sources
+            if source.enabled and self._registry.connector_for(source.connector_id)
+        ]
+        initial_total = len(enabled)
+        initial_done = sum(1 for source in enabled if source.id in started)
+        initial_pending = max(0, initial_total - initial_done)
+        active_crawls = sum(1 for run in runs if run.get("status") == "running")
+        last_error = next(
+            (str(run.get("error")) for run in runs if run.get("error")),
+            None,
+        )
         # While boards are waiting for their first crawl the worker passes
         # again within seconds, not after a full interval.
-        if await self.pending_initial_crawls() > 0 and last is not None:
+        if initial_pending > 0 and last is not None:
             next_at = last + timedelta(seconds=AUTO_DISCOVER_CATCH_UP_PAUSE_S)
+        running = self._run_lock.locked()
+        if initial_total == 0:
+            phase = "seeding" if running else "idle"
+        elif initial_pending == initial_total:
+            phase = "seeding"
+        elif initial_pending > 0 or active_crawls > 0:
+            phase = "first_run"
+        elif running:
+            phase = "steady"
+        else:
+            phase = "idle"
         return {
-            "running": self._run_lock.locked(),
+            "running": running,
             "interval_minutes": max(1, round(interval_s / 60)),
             "last_pass_at": last.isoformat() if last is not None else None,
             "next_pass_at": next_at.isoformat(),
@@ -394,6 +420,14 @@ class AutoDiscoverUseCase:
             "sources": len(sources),
             "enabled_sources": sum(1 for source in sources if source.enabled),
             "last_crawl_at": last_crawl,
+            "phase": phase,
+            "initial_total": initial_total,
+            "initial_done": initial_done,
+            "initial_pending": initial_pending,
+            "active_crawls": active_crawls,
+            "queued_crawls": initial_pending,
+            "postings_found": postings_found,
+            "last_error": last_error,
             "note": (
                 "A pass is bounded and repeats in the background, so more "
                 "postings keep arriving over time."

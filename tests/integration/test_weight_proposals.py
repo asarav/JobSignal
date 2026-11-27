@@ -160,7 +160,7 @@ async def test_manual_weight_edits_are_recorded_too() -> None:
 
     assert len(history["versions"]) == 1
     assert history["versions"][0]["source"] == "manual"
-    assert history["versions"][0]["weights"]["skills_resume"] == pytest.approx(0.48)
+    assert history["versions"][0]["weights"]["skills_resume"] == pytest.approx(0.521739130435)
 
 
 @pytest.mark.asyncio

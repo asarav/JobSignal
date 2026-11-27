@@ -9,9 +9,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.application.container import Container
+from app.application.requirements import ensure_requirements, location_text
 from app.domain.models.fit_weight import FitWeightVersionRecord
 from app.domain.models.matching import ScoringConfig
 from app.domain.services.keywords import normalize_skill_ids
+from app.domain.services.location_prefs import job_in_area
 from app.domain.services.matching import (
     DEFAULT_WEIGHTS,
     CompensationStrategy,
@@ -22,6 +24,7 @@ from app.domain.services.matching import (
     SkillsResumeStrategy,
     WeightedScoringModel,
     normalize_weights,
+    required_skill_coverage,
 )
 
 _STRATEGIES = [
@@ -117,7 +120,7 @@ class MatchingUseCase:
             scored = 0
             reused = 0
             for job in jobs:
-                job_dict = dict(job)
+                job_dict = await ensure_requirements(uow, job)
                 job_id = str(job_dict.get("id"))
                 input_hash = _input_hash(job_dict, profile_hash, weights)
                 existing = await uow.matches.find_result(profile_id, job_id, input_hash)
@@ -186,13 +189,40 @@ class MatchingUseCase:
         return results, summary
 
     async def get_results(
-        self, profile_id: str = "default", limit: int = 50
+        self,
+        profile_id: str = "default",
+        limit: int = 50,
+        *,
+        include_out_of_area: bool = False,
+        include_missing_skills: bool = False,
     ) -> dict[str, Any]:
         async with self._container.uow_factory() as uow:
             rows = await uow.matches.list_results(profile_id, limit=limit)
             stored_weights = await uow.matches.get_weights(profile_id)
             weights = normalize_weights(dict(stored_weights or DEFAULT_WEIGHTS))
+            overrides = await uow.resumes.get_overrides(profile_id)
+            preferences = overrides.get("preferences")
+            if not isinstance(preferences, dict):
+                preferences = dict(overrides)
+            profile = await uow.resumes.get_profile(profile_id)
+            version_id = (
+                str(profile.get("active_resume_version_id") or "") if profile else ""
+            )
+            skills = [
+                str(row["keyword_id"])
+                for row in await uow.resumes.get_skills(version_id)
+            ] if version_id else []
+            statuses = await uow.resumes.get_skill_status(profile_id)
+            for key in normalize_skill_ids(overrides.get("skills_added")):
+                if key not in skills:
+                    skills.append(key)
+            candidate = SimpleNamespace(skills=skills, skill_status=dict(statuses))
+            saved_states = await uow.job_user_state.get_many(
+                [str(row.get("job_id")) for row in rows]
+            )
             results: list[dict[str, Any]] = []
+            hidden_out_of_area = 0
+            hidden_missing_skills = 0
             for row in rows:
                 result = dict(row)
                 result_id = str(result["id"])
@@ -206,9 +236,58 @@ class MatchingUseCase:
                     _explanation_row(explanation)
                     for explanation in await uow.matches.list_explanations(result_id)
                 ]
+                job = await uow.jobs.get(str(result.get("job_id")))
+                if job is None:
+                    continue
+                job = await ensure_requirements(uow, job)
+                requirements = job.get("requirements")
+                requirements = requirements if isinstance(requirements, dict) else {}
+                coverage, missing = required_skill_coverage(
+                    candidate, job.get("required_skills") or []
+                )
+                scope = requirements.get("location_scope")
+                scope = scope if isinstance(scope, dict) else {}
+                verdict = job_in_area(
+                    location_text(job),
+                    str(job.get("workplace_type") or "unknown"),
+                    preferences,
+                    requirements,
+                )
+                if verdict is False:
+                    hidden_out_of_area += 1
+                    if not include_out_of_area:
+                        continue
+                if coverage is not None and coverage < 0.5:
+                    if not include_missing_skills:
+                        hidden_missing_skills += 1
+                        continue
+                result.update(
+                    {
+                        "job_title": result.get("job_title") or job.get("title"),
+                        "job_url": result.get("job_url")
+                        or job.get("canonical_url"),
+                        "location_text": location_text(job),
+                        "workplace_type": job.get("workplace_type") or "unknown",
+                        "required_skills": list(job.get("required_skills") or []),
+                        "preferred_skills": list(job.get("preferred_skills") or []),
+                        "missing_required_skills": missing,
+                        "required_skill_coverage": coverage,
+                        "location_scope": scope,
+                        "saved": saved_states.get(str(result.get("job_id"))) == "saved",
+                        "outside_area": verdict is False,
+                        "hidden_for_missing_skills": (
+                            coverage is not None and coverage < 0.5
+                        ),
+                    }
+                )
                 results.append(result)
             await uow.commit()
-        return {"results": results, "weights": weights}
+        return {
+            "results": results,
+            "weights": weights,
+            "hidden_out_of_area": hidden_out_of_area,
+            "hidden_missing_skills": hidden_missing_skills,
+        }
 
     async def update_weights(
         self, profile_id: str, weights: dict[str, Any]

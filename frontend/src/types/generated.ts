@@ -421,6 +421,13 @@ export interface CompaniesGetDetailResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/companies/companies_get_merge_history_request.json
@@ -602,6 +609,14 @@ export interface DiscoveryGetStatusResponse {
   sources?: number;
   enabled_sources?: number;
   last_crawl_at?: string | null;
+  phase?: "seeding" | "first_run" | "steady" | "idle";
+  initial_total?: number;
+  initial_done?: number;
+  initial_pending?: number;
+  active_crawls?: number;
+  queued_crawls?: number;
+  postings_found?: number;
+  last_error?: string | null;
   note?: string;
 }
 
@@ -740,6 +755,13 @@ export interface JobsListDuplicatesResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/jobs/jobs_list_request.json
@@ -789,6 +811,13 @@ export interface JobsListResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/jobs/jobs_list_saved_request.json
@@ -835,6 +864,13 @@ export interface JobsListSavedResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/jobs/jobs_list_seen_request.json
@@ -875,6 +911,13 @@ export interface JobsListSeenResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/jobs/jobs_merge_request.json
@@ -900,6 +943,7 @@ export interface JobsRankedRequest {
   include_suppressed?: boolean;
   include_hidden?: boolean;
   include_out_of_area?: boolean;
+  include_missing_skills?: boolean;
   ensure_fit?: boolean;
   min_fit?: number | null;
   risk_classes?: string[];
@@ -919,6 +963,7 @@ export interface JobsRankedResponse {
   window_truncated?: boolean;
   hidden_by_policy?: number;
   outside_area?: number;
+  hidden_missing_skills?: number;
   needs_attention?: number;
   new_since?: number | null;
 }
@@ -952,6 +997,13 @@ export interface JobsRankedResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/jobs/jobs_search_request.json
@@ -995,6 +1047,13 @@ export interface JobsSearchResponseJobSummary {
   rank_score?: number | null;
   rank_reasons?: string[];
   hidden_by_policy?: boolean;
+  required_skills?: string[];
+  preferred_skills?: string[];
+  missing_required_skills?: string[];
+  required_skill_coverage?: number | null;
+  location_scope?: {
+    [k: string]: unknown;
+  };
 }
 
 // schemas/ipc/jobs/jobs_set_user_state_request.json
@@ -1070,6 +1129,12 @@ export interface KeywordsCoverageResponse {
     [k: string]: unknown;
   }[];
   missing?: {
+    [k: string]: unknown;
+  }[];
+  required_keywords?: {
+    [k: string]: unknown;
+  }[];
+  missing_required?: {
     [k: string]: unknown;
   }[];
   note?: string;
@@ -1161,6 +1226,9 @@ export interface MatchingApplyWeightProposalResponse {
 // schemas/ipc/matching/matching_get_results_request.json
 export interface MatchingGetResultsRequest {
   profile_id?: string;
+  limit?: number;
+  include_out_of_area?: boolean;
+  include_missing_skills?: boolean;
 }
 
 // schemas/ipc/matching/matching_get_results_response.json
@@ -1171,6 +1239,8 @@ export interface MatchingGetResultsResponse {
   weights?: {
     [k: string]: number;
   };
+  hidden_out_of_area?: number;
+  hidden_missing_skills?: number;
 }
 
 // schemas/ipc/matching/matching_get_weight_history_request.json

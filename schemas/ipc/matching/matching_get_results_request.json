@@ -4,6 +4,20 @@
     "profile_id": {
       "default": "default",
       "type": "string"
+    },
+    "limit": {
+      "default": 50,
+      "maximum": 500,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "include_out_of_area": {
+      "default": false,
+      "type": "boolean"
+    },
+    "include_missing_skills": {
+      "default": false,
+      "type": "boolean"
     }
   },
   "title": "MatchingGetResultsRequest",

@@ -11,6 +11,7 @@ import { RiskBadge } from "../../components/RiskBadge";
 import { ScoreMeter } from "../../components/ScoreMeter";
 import { Tabs } from "../../components/Tabs";
 import { useToast } from "../../components/Toast";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import { WorkflowNextStepBar } from "../../components/WorkflowNextStepBar";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import { CollectJobsAction } from "../workflow/CollectJobsAction";
@@ -128,7 +129,11 @@ export function DiscoverRoute() {
   const [includeOutsideArea, setIncludeOutsideArea] = useState(
     params.get("outside") === "1",
   );
+  const [includeMissingSkills, setIncludeMissingSkills] = useState(
+    params.get("missing") === "1",
+  );
   const [outsideArea, setOutsideArea] = useState(0);
+  const [hiddenMissingSkills, setHiddenMissingSkills] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(params.get("filters") === "1");
   const [pageSize, setPageSize] = useState(25);
   const [jobs, setJobs] = useState<JobRow[]>([]);
@@ -170,6 +175,7 @@ export function DiscoverRoute() {
     if (sort !== "rank") next.set("sort", sort);
     if (includeHidden) next.set("hidden", "1");
     if (includeOutsideArea) next.set("outside", "1");
+    if (includeMissingSkills) next.set("missing", "1");
     if (filtersOpen) next.set("filters", "1");
     if (selectedProfile) next.set("profile", selectedProfile);
     if (preset === "new") next.set("new", "1");
@@ -186,6 +192,7 @@ export function DiscoverRoute() {
     sort,
     includeHidden,
     includeOutsideArea,
+    includeMissingSkills,
     filtersOpen,
     selectedProfile,
     setParams,
@@ -206,6 +213,7 @@ export function DiscoverRoute() {
     setSort((params.get("sort") as (typeof SORTS)[number]["value"]) || "rank");
     setIncludeHidden(params.get("hidden") === "1");
     setIncludeOutsideArea(params.get("outside") === "1");
+    setIncludeMissingSkills(params.get("missing") === "1");
     setFiltersOpen(params.get("filters") === "1");
     setSelectedProfile(params.get("profile") ?? "");
   }, [params]);
@@ -224,6 +232,8 @@ export function DiscoverRoute() {
             include_hidden: includeHidden,
             include_suppressed: includeHidden,
             include_out_of_area: includeOutsideArea,
+            include_missing_skills: includeMissingSkills,
+            ensure_fit: true,
             search_profile_id: selectedProfile || undefined,
             min_fit: preset === "fit" ? 0.75 : undefined,
             risk_classes:
@@ -236,6 +246,7 @@ export function DiscoverRoute() {
           setTotal(result.total ?? rows.length);
           setHiddenCount(result.hidden_by_policy ?? 0);
           setOutsideArea(result.outside_area ?? 0);
+          setHiddenMissingSkills(result.hidden_missing_skills ?? 0);
         } else {
           const result = await workerClient.listJobs({
             query: query.trim() || undefined,
@@ -248,6 +259,7 @@ export function DiscoverRoute() {
           setTotal(result.total ?? rows.length);
           setHiddenCount(0);
           setOutsideArea(0);
+          setHiddenMissingSkills(0);
         }
         setError(null);
       } catch (exc) {
@@ -267,6 +279,7 @@ export function DiscoverRoute() {
       sort,
       includeHidden,
       includeOutsideArea,
+      includeMissingSkills,
       selectedProfile,
       preset,
       pageSize,
@@ -276,6 +289,7 @@ export function DiscoverRoute() {
   useEffect(() => {
     void load(0, false);
   }, [load]);
+  useLiveRefresh(() => void load(0, false));
 
   const applyProfile = (profileId: string) => {
     setSelectedProfile(profileId);
@@ -563,6 +577,16 @@ export function DiscoverRoute() {
                 Only my area (from my preferences)
               </label>
             ) : null}
+            {view === "best" ? (
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={!includeMissingSkills}
+                  onChange={(event) => setIncludeMissingSkills(!event.target.checked)}
+                />
+                Only roles matching required skills
+              </label>
+            ) : null}
             <div className="flex items-end gap-2 sm:col-span-2">
               <input
                 value={profileName}
@@ -624,14 +648,30 @@ export function DiscoverRoute() {
               {view === "best" && hiddenCount > 0
                 ? ` ${hiddenCount} hidden by the selected policy.`
                 : ""}
-              {view === "best" && outsideArea > 0
+              {view === "best" && outsideArea > 0 && !includeOutsideArea
                 ? ` ${outsideArea} outside your area hidden.`
+                : ""}
+              {view === "best" &&
+              hiddenMissingSkills > 0 &&
+              !includeMissingSkills
+                ? ` ${hiddenMissingSkills} hidden for missing required skills.`
                 : ""}
               {view === "best" && outsideArea > 0 && !includeOutsideArea ? (
                 <button
                   type="button"
                   className="ml-1 font-medium text-brand-700 underline"
                   onClick={() => setIncludeOutsideArea(true)}
+                >
+                  Show them
+                </button>
+              ) : null}{" "}
+              {view === "best" &&
+              hiddenMissingSkills > 0 &&
+              !includeMissingSkills ? (
+                <button
+                  type="button"
+                  className="ml-1 font-medium text-brand-700 underline"
+                  onClick={() => setIncludeMissingSkills(true)}
                 >
                   Show them
                 </button>

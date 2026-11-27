@@ -91,6 +91,7 @@ from app.application.dto import (
     KeywordsTrendsResult,
     MatchingApplyWeightsParams,
     MatchingApplyWeightsResult,
+    MatchingResultsParams,
     MatchingResultsResult,
     MatchingRunParams,
     MatchingRunResult,
@@ -270,7 +271,7 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("resume.set_skill_status", ResumeSkillStatusParams, OkResult),
     MethodSpec("matching.run", MatchingRunParams, MatchingRunResult,
                timeout_s=MATCHING_TIMEOUT_S),
-    MethodSpec("matching.get_results", ResumeProfileParams, MatchingResultsResult),
+    MethodSpec("matching.get_results", MatchingResultsParams, MatchingResultsResult),
     MethodSpec("matching.update_weights", MatchingWeightsParams, MatchingWeightsResult),
     MethodSpec(
         "matching.get_weight_proposals",

@@ -71,6 +71,8 @@ class KeywordExtractor:
             # word-boundary-ish match
             pattern = r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])"
             for match in re.finditer(pattern, text_lower):
+                if alias == "go" and _is_english_go(text_lower, match.start(), match.end()):
+                    continue
                 found.append((sid, match.start(), match.end()))
         found.sort(key=lambda item: (item[1], -(item[2] - item[1])))
         # One ref per span: the longest alias wins where aliases overlap.
@@ -88,3 +90,10 @@ class KeywordExtractor:
             if frm in found and strength >= 0.5:
                 found.add(to)
         return sorted(found)
+
+
+def _is_english_go(text: str, start: int, end: int) -> bool:
+    """Whether ``go`` is ordinary prose ("go-to-market") rather than the language."""
+    if (start and text[start - 1] == "-") or (end < len(text) and text[end] == "-"):
+        return True
+    return bool(re.match(r"\s+to\b", text[end:]))

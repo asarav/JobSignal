@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, cast
 
 from app.application.container import Container
@@ -17,10 +18,13 @@ from app.application.dto import (
     RankedJobListResult,
     RankedJobParams,
 )
+from app.application.requirements import ensure_requirements
 from app.domain.models.common import PortError
 from app.domain.models.enums import RiskClass
 from app.domain.services.company_resolution import canonical_map
+from app.domain.services.job_requirements import plain_description
 from app.domain.services.location_prefs import job_in_area
+from app.domain.services.matching import required_skill_coverage
 from app.domain.services.ranking import (
     DEFAULT_POLICY,
     explain,
@@ -155,6 +159,30 @@ class JobsUseCase:
                 offset=0,
                 exclude_job_ids=hidden,
             )
+            rows = [await ensure_requirements(uow, row) for row in rows]
+            candidate_profile = await uow.resumes.get_profile("default")
+            active_version = (
+                str(candidate_profile.get("active_resume_version_id") or "")
+                if candidate_profile
+                else ""
+            )
+            base_skills = (
+                [
+                    str(row["keyword_id"])
+                    for row in await uow.resumes.get_skills(active_version)
+                ]
+                if active_version
+                else []
+            )
+            added = overrides.get("skills_added")
+            if isinstance(added, (list, tuple)):
+                for value in added:
+                    if str(value) not in base_skills:
+                        base_skills.append(str(value))
+            candidate = SimpleNamespace(
+                skills=base_skills,
+                skill_status=dict(await uow.resumes.get_skill_status("default")),
+            )
             summaries = [_summary(row) for row in rows]
             await _enrich(uow, summaries)
             await _attach_fit(uow, summaries, profile_id)
@@ -212,14 +240,26 @@ class JobsUseCase:
         # preference.  An explicit location filter already narrows the page, and
         # unknown/missing locations are never treated as a mismatch.
         outside_area = 0
+        hidden_missing_skills = 0
         if not params.include_out_of_area and not filters.get("location"):
             kept: list[JobSummary] = []
             for item in visible:
                 verdict = job_in_area(
-                    item.location_text, item.workplace_type, preferences_for_area
+                    item.location_text,
+                    item.workplace_type,
+                    preferences_for_area,
+                    item.location_scope,
                 )
                 if verdict is False:
                     outside_area += 1
+                    restriction = str(
+                        item.location_scope.get("restriction_text") or ""
+                    )
+                    if restriction:
+                        item.rank_reasons = [
+                            *item.rank_reasons,
+                            f"Remote, but restricted to {restriction}.",
+                        ]
                     continue
                 if verdict is None and preferences_for_area.get("locations"):
                     item.rank_reasons = [
@@ -228,6 +268,22 @@ class JobsUseCase:
                     ]
                 kept.append(item)
             visible = kept
+
+        gated: list[JobSummary] = []
+        for item in visible:
+            coverage, missing = required_skill_coverage(
+                candidate, item.required_skills
+            )
+            item.required_skill_coverage = (
+                round(coverage, 4) if coverage is not None else None
+            )
+            item.missing_required_skills = missing
+            if coverage is not None and coverage < 0.5:
+                if not params.include_missing_skills:
+                    hidden_missing_skills += 1
+                    continue
+            gated.append(item)
+        visible = gated
 
         if params.sort == "fit":
             visible.sort(key=lambda item: (-(item.fit_score or -1), item.title))
@@ -257,6 +313,7 @@ class JobsUseCase:
             window_truncated=len(summaries) >= params.window,
             hidden_by_policy=hidden_count,
             outside_area=outside_area,
+            hidden_missing_skills=hidden_missing_skills,
             needs_attention=needs_attention,
             new_since=new_since,
         )
@@ -301,9 +358,19 @@ class JobsUseCase:
             observations = await uow.observations.list_for_job(job_id)
             relations = await uow.jobs.list_relations(job_id)
             reposts = await uow.dedup.list_repost_events(job_id)
+            company_id = str(row.get("company_id") or "")
+            company = await uow.companies.get(company_id) if company_id else None
             await uow.commit()
+        detail = _jsonable(row)
+        detail["description_text"] = plain_description(
+            str(row.get("description_text") or "")
+        )
+        detail["company_name"] = (
+            str(company.get("canonical_name") or "") if company else ""
+        )
+        detail["location_text"] = _location_text(row)
         return JobDetailResult(
-            job=_jsonable(row),
+            job=detail,
             snapshots=[_jsonable(item) for item in snapshots],
             observations=[_jsonable(item) for item in observations],
             relations=[_jsonable(item) for item in relations],
@@ -563,6 +630,9 @@ def _summary(
         reason=reason,
         related_job_ids=list(related_job_ids),
         location_text=_location_text(row),
+        required_skills=[str(value) for value in row.get("required_skills") or []],
+        preferred_skills=[str(value) for value in row.get("preferred_skills") or []],
+        location_scope=_location_scope(row),
         workplace_type=str(row.get("workplace_type") or "unknown"),
         salary_min=_salary_value(row, "min_amount"),
         salary_max=_salary_value(row, "max_amount"),
@@ -588,6 +658,14 @@ def _location_text(row: Mapping[str, Any]) -> str:
     if isinstance(first, Mapping):
         return str(first.get("raw") or first.get("city") or "")
     return str(first)
+
+
+def _location_scope(row: Mapping[str, Any]) -> dict[str, Any]:
+    requirements = row.get("requirements")
+    if not isinstance(requirements, Mapping):
+        return {}
+    scope = requirements.get("location_scope")
+    return dict(scope) if isinstance(scope, Mapping) else {}
 
 
 def _salary_payload(row: Mapping[str, Any]) -> Mapping[str, Any]:

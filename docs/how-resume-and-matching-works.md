@@ -98,15 +98,49 @@ replaced rather than shown with the new weights.
 
 | Dimension | Weight | What it does |
 |---|---:|---|
-| Skills & resume alignment | 0.35 | 70% evidence/status-weighted required+preferred coverage, 30% resume/job term overlap |
-| Experience & seniority | 0.20 | Seniority ladder distance (50%), stated `N+ years` requirement (30%), title overlap (20%); missing parts are dropped and the rest renormalized |
-| Responsibilities alignment | 0.20 | Term overlap between the job description and the resume text; unavailable without both |
-| Location & workplace | 0.10 | Remote/hybrid/onsite preference (60%) and preferred locations vs. job locations (40%); unavailable without either |
-| Compensation | 0.10 | Posted range against `desired_salary_min` / `desired_salary_target`; neutral when no target is set, unavailable without a salary |
+| Skills & resume alignment | 0.45 | 80% required coverage + 20% preferred coverage when both exist, with lexical overlap capped at 10%; missing required skills are named |
+| Experience & seniority | 0.18 | Seniority ladder distance (50%), stated `N+ years` requirement (30%), title overlap (20%); missing parts are dropped and the rest renormalized |
+| Responsibilities alignment | 0.14 | Term overlap between the job description and the resume text; unavailable without both |
+| Location & workplace | 0.10 | Remote/hybrid/onsite preference and a parsed country/region eligibility check; a known foreign restriction scores zero |
+| Compensation | 0.08 | Posted range against `desired_salary_min` / `desired_salary_target`; neutral when no target is set, unavailable without a salary |
 | Freshness | 0.05 | `exp(−ln2 · age_days / 14)` from `posted_at` (falling back to first seen); unavailable without a date |
 
 The fit score is a **heuristic ordering signal, not a probability of an
-interview**.
+interview**. Skills carry more weight than before because required coverage is
+the part of a posting that cannot be inferred from adjacent prose; the lexical
+term overlap contributes at most 10% when requirements exist.
+
+## Requirements and ATS keywords
+
+A posting is analyzed section by section. Skills under **Requirements**,
+**Minimum qualifications**, **Must have**, **What you'll need** or **Who you
+are** are required. Skills under **Nice to have**, **Preferred**, **Bonus** or
+**A plus** are preferred. Responsibility and benefits text is not a requirement.
+Inline cues ("must have", "required", "proficient with", and the preferred
+cues) override the section. A skill with no section or cue is **mentioned**, not
+required, so the app never invents a hard requirement.
+
+The same analysis returns exact ATS keywords with their canonical skill id,
+importance, frequency and source section. Job detail shows them grouped
+Required / Preferred / Mentioned, and Keyword Insights uses the same importance
+for required-keyword prevalence and coverage.
+
+A job with confidently extracted required skills is withheld from Best matches
+and Profile matches when coverage is below 50%. The list shows how many were
+hidden and offers an opt-in to reveal them. A job with no extracted
+requirements is never hidden for missing skills.
+
+## Location eligibility
+
+Remote does not mean worldwide. The analyzer reads structured location forms
+("Remote - India", "Remote (US)", "India - Remote") and prose restrictions
+("must be located in Africa", "open only to candidates in ...", "authorized to
+work in ...", "remote within ..."). A known country or region restriction is a
+hard visibility rule for both Find jobs and Profile matches; an unknown
+restriction stays unknown and is kept. Profile preferences record a home
+location and authorized countries (defaulting to the country of the saved
+locations, e.g. Chicago/IL → United States). Relocation or the "show outside my
+area" opt-in reveals excluded roles.
 
 ## Invalidation and explanations
 

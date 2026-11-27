@@ -109,6 +109,18 @@ class JobRepository(Protocol):
 
     async def get(self, job_id: str) -> Mapping[str, object] | None: ...
 
+    async def update_requirements(
+        self,
+        job_id: str,
+        requirements: Mapping[str, object],
+        requirements_hash: str,
+        *,
+        required_skills: Sequence[str] = (),
+        preferred_skills: Sequence[str] = (),
+    ) -> None:
+        """Persist analyzer output for an existing posting."""
+        ...
+
     async def find_by_canonical_url(self, canonical_url: str) -> str | None: ...
 
     async def find_by_source_posting(

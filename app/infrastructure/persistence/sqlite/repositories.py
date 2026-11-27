@@ -366,6 +366,8 @@ class SqliteJobRepository:
             preferred_skills = list(job.preferred_skills)
             extraction_status = job.extraction_status.value
             extraction_confidence = job.extraction_confidence
+            requirements = dict(job.requirements)
+            requirements_hash = str(requirements.get("analysis_hash") or "")
             field_confidence = dict(job.field_confidence)
             provenance = [dataclasses.asdict(p) for p in job.provenance]
             posting_status = job.posting_status_hint.value
@@ -396,6 +398,8 @@ class SqliteJobRepository:
             preferred_skills = list(getattr(job, "preferred_skills", []))
             extraction_status = "complete"
             extraction_confidence = 1.0
+            requirements = dict(getattr(job, "requirements", {}) or {})
+            requirements_hash = str(requirements.get("analysis_hash") or "")
             field_confidence = {}
             provenance = []
             posting_status = getattr(job, "posting_status", "active")
@@ -417,16 +421,16 @@ class SqliteJobRepository:
                   required_skills_json, preferred_skills_json, extraction_status,
                   extraction_confidence, field_confidence_json, provenance_json,
                   posting_status, content_hash, first_seen_at, last_seen_at, fetched_at,
-                   updated_at_hint,
+                   updated_at_hint, requirements_json, requirements_hash,
                   created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO NOTHING""",
                 (job_id, company_id, title, normalized_title, title_family, description_text, description_html,
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, canonical_url, json.dumps(original_urls), department,
                  json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
                  json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, now, fetched_at,
-                 updated_at_hint,
+                 updated_at_hint, json.dumps(requirements), requirements_hash,
                  now, now),
             )
         else:
@@ -437,13 +441,15 @@ class SqliteJobRepository:
                   source_posting_id=?, original_urls_json=?, department=?,
                   required_skills_json=?, preferred_skills_json=?, extraction_status=?,
                   extraction_confidence=?, field_confidence_json=?, provenance_json=?,
-                  posting_status=?, content_hash=?, last_seen_at=?, fetched_at=?, updated_at_hint=?, updated_at=?
+                  posting_status=?, content_hash=?, last_seen_at=?, fetched_at=?, updated_at_hint=?,
+                  requirements_json=?, requirements_hash=?, updated_at=?
                 WHERE canonical_url=?""",
                 (company_id, title, normalized_title, title_family, description_text, description_html,
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, json.dumps(original_urls), department,
                  json.dumps(required_skills), json.dumps(preferred_skills), extraction_status, extraction_confidence,
-                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, fetched_at, updated_at_hint, now, canonical_url),
+                 json.dumps(field_confidence), json.dumps(provenance, default=str), posting_status, content_hash, now, fetched_at, updated_at_hint,
+                 json.dumps(requirements), requirements_hash, now, canonical_url),
             )
 
     async def get(self, job_id):
@@ -451,6 +457,30 @@ class SqliteJobRepository:
         cur = await self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
         row = await cur.fetchone()
         return self._row(row) if row else None
+
+    async def update_requirements(
+        self,
+        job_id: str,
+        requirements: Mapping[str, object],
+        requirements_hash: str,
+        *,
+        required_skills: Sequence[str] = (),
+        preferred_skills: Sequence[str] = (),
+    ) -> None:
+        """Persist a fresh analyzer result without touching the posting body."""
+        await self._conn.execute(
+            """UPDATE jobs SET requirements_json=?, requirements_hash=?,
+                 required_skills_json=?, preferred_skills_json=?, updated_at=?
+               WHERE id=?""",
+            (
+                json.dumps(dict(requirements)),
+                requirements_hash,
+                json.dumps(list(required_skills)),
+                json.dumps(list(preferred_skills)),
+                self._ts(),
+                job_id,
+            ),
+        )
 
     async def find_by_canonical_url(self, canonical_url):
         self._conn.row_factory = aiosqlite.Row
@@ -705,6 +735,8 @@ class SqliteJobRepository:
             "department": row["department"],
             "required_skills": json.loads(row["required_skills_json"] or "[]"),
             "preferred_skills": json.loads(row["preferred_skills_json"] or "[]"),
+            "requirements": json.loads(row["requirements_json"] or "{}"),
+            "requirements_hash": row["requirements_hash"],
             "extraction_status": row["extraction_status"],
             "extraction_confidence": row["extraction_confidence"],
             "field_confidence": json.loads(row["field_confidence_json"] or "{}"),

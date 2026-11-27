@@ -70,7 +70,7 @@ async def test_export_then_import_round_trips_in_both_stores(tmp_path) -> None:
         counts = await store.table_counts()
         for name, count in expected.items():
             assert counts[name] == count
-    assert version == 18
+    assert version == 19
     assert (await memory_target.export_tables())[0]["companies"]["rows"] == [
         ["co_a", "Acme"]
     ]
@@ -80,7 +80,7 @@ async def test_export_then_import_round_trips_in_both_stores(tmp_path) -> None:
 async def test_the_sqlite_schema_version_is_read_from_migrations(tmp_path) -> None:
     db = await _seeded_sqlite(tmp_path)
     store = SqliteBackupStore(db, data_dir=tmp_path)
-    assert await store.schema_version() == 18
+    assert await store.schema_version() == 19
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from typing import Any
 from app.domain.models.common import Explanation, Reason
 from app.domain.models.matching import DimensionScore, MatchContext, MatchScore, ScoringConfig
 from app.domain.ports.matching import MatchingStrategy, ScoringModel
+from app.domain.services.location_scope import candidate_countries, scope_allows
 
 DIMENSIONS = [
     "skills_resume",
@@ -38,11 +39,13 @@ SKILL_STATUS_STRENGTH = {
     "not_relevant": None,
 }
 DEFAULT_WEIGHTS = {
-    "skills_resume": 0.35,
-    "experience_seniority": 0.20,
-    "responsibilities": 0.20,
+    # Skills carry the strongest signal, and lexical overlap no longer props up
+    # a posting whose required stack is absent.
+    "skills_resume": 0.45,
+    "experience_seniority": 0.18,
+    "responsibilities": 0.14,
     "location_workplace": 0.10,
-    "compensation": 0.10,
+    "compensation": 0.08,
     "freshness": 0.05,
 }
 SENIORITY_RANK = {
@@ -119,19 +122,57 @@ def normalize_weights(weights: Mapping[str, object]) -> dict[str, float]:
     total = sum(merged.values())
     if total <= 0:
         return dict(DEFAULT_WEIGHTS)
-    return {dimension: merged[dimension] / total for dimension in DIMENSIONS}
+    # Round once so a value read back from JSON compares equal to the value
+    # returned by the update that wrote it.
+    return {
+        dimension: round(merged[dimension] / total, 12) for dimension in DIMENSIONS
+    }
+
+
+def skill_strength(profile: Any, skill: object) -> float:
+    """How strongly the candidate covers one skill, including overrides."""
+    cand_skills = set(getattr(profile, "skills", []) or [])
+    evidence = getattr(profile, "skill_evidence", None) or {}
+    statuses = getattr(profile, "skill_status", None) or {}
+    status = statuses.get(str(skill)) if isinstance(statuses, Mapping) else None
+    if status in SKILL_STATUS_STRENGTH:
+        override = SKILL_STATUS_STRENGTH[status]
+        return float(override) if override is not None else 0.0
+    if skill not in cand_skills:
+        return 0.0
+    if isinstance(evidence, Mapping) and skill in evidence:
+        return EVIDENCE_STRENGTH.get(str(evidence[skill]), 0.8)
+    return 1.0
+
+
+def required_skill_coverage(
+    profile: Any, required: Sequence[object]
+) -> tuple[float | None, list[str]]:
+    """Coverage of confidently extracted required skills, or ``None``.
+
+    ``None`` means there is nothing to gate on; a job with no required skills
+    must never be hidden for missing them.
+    """
+    statuses = getattr(profile, "skill_status", None) or {}
+    active = [
+        str(skill)
+        for skill in required
+        if statuses.get(str(skill)) != "not_relevant"
+    ]
+    if not active:
+        return None, []
+    missing = [skill for skill in active if skill_strength(profile, skill) == 0.0]
+    return 1.0 - len(missing) / len(active), missing
 
 
 class SkillsResumeStrategy(MatchingStrategy):
     id = "match.skills_resume"
-    version = "1.2.0"
+    version = "1.3.0"
     dimension = "skills_resume"
 
     def score(  # type: ignore[override]
         self, profile: Any, job: Mapping[str, Any], ctx: MatchContext
     ) -> DimensionScore:
-        cand_skills = set(getattr(profile, "skills", []) or [])
-        evidence = getattr(profile, "skill_evidence", None) or {}
         statuses = getattr(profile, "skill_status", None) or {}
         req = _as_list(job.get("required_skills"))
         pref = _as_list(job.get("preferred_skills"))
@@ -139,21 +180,10 @@ class SkillsResumeStrategy(MatchingStrategy):
         req = [skill for skill in req if skill not in excluded]
         pref = [skill for skill in pref if skill not in excluded]
 
-        def strength(skill: object) -> float:
-            status = statuses.get(str(skill)) if isinstance(statuses, Mapping) else None
-            if status in SKILL_STATUS_STRENGTH:
-                override = SKILL_STATUS_STRENGTH[status]
-                return float(override) if override is not None else 0.0
-            if skill not in cand_skills:
-                return 0.0
-            if isinstance(evidence, Mapping) and skill in evidence:
-                return EVIDENCE_STRENGTH.get(str(evidence[skill]), 0.8)
-            return 1.0
-
         def coverage(skills: list[object]) -> float:
             if not skills:
                 return 1.0
-            return sum(strength(skill) for skill in skills) / len(skills)
+            return sum(skill_strength(profile, skill) for skill in skills) / len(skills)
 
         cov_req = coverage(req)
         cov_pref = coverage(pref)
@@ -162,11 +192,11 @@ class SkillsResumeStrategy(MatchingStrategy):
             _tokens(job.get("description_text")),
         )
         if req and pref:
-            score = 0.70 * (0.80 * cov_req + 0.20 * cov_pref) + 0.30 * lexical
+            score = 0.90 * (0.80 * cov_req + 0.20 * cov_pref) + 0.10 * lexical
         elif req:
-            score = 0.70 * cov_req + 0.30 * lexical
+            score = 0.90 * cov_req + 0.10 * lexical
         elif pref:
-            score = 0.70 * cov_pref + 0.30 * lexical
+            score = 0.90 * cov_pref + 0.10 * lexical
         else:
             score = lexical
         available = bool(req or pref or lexical)
@@ -177,9 +207,13 @@ class SkillsResumeStrategy(MatchingStrategy):
                 available=False,
                 summary="no skills or text to compare",
                 reasons=[Reason(code="skills.unavailable", message="no skill or text data")],
-                weight=0.35,
+                weight=0.45,
             )
-        missing = [skill for skill in req if strength(skill) == 0 and skill not in excluded]
+        missing = [
+            skill
+            for skill in req
+            if skill_strength(profile, skill) == 0 and skill not in excluded
+        ]
         reasons: list[Reason] = []
         if missing:
             shown = ", ".join(str(skill) for skill in missing[:6])
@@ -208,9 +242,9 @@ class SkillsResumeStrategy(MatchingStrategy):
             self,
             score=score,
             available=True,
-            summary="skills coverage and text overlap",
+            summary="required and preferred skills coverage",
             reasons=reasons,
-            weight=0.35,
+            weight=0.45,
         )
 
 
@@ -279,7 +313,7 @@ class ExperienceSeniorityStrategy(MatchingStrategy):
                 available=False,
                 summary="no experience data",
                 reasons=[Reason(code="experience.unavailable", message="no stated experience")],
-                weight=0.20,
+                weight=0.18,
             )
         score = sum(value * weight for value, weight in parts) / sum(
             weight for _value, weight in parts
@@ -290,7 +324,7 @@ class ExperienceSeniorityStrategy(MatchingStrategy):
             available=True,
             summary="seniority, years and title fit",
             reasons=reasons,
-            weight=0.20,
+            weight=0.18,
         )
 
 
@@ -312,7 +346,7 @@ class ResponsibilitiesStrategy(MatchingStrategy):
                 available=False,
                 summary="no responsibilities text",
                 reasons=[Reason(code="responsibilities.unavailable", message="missing text")],
-                weight=0.20,
+                weight=0.14,
             )
         score = _overlap(job_tokens, resume_tokens)
         return _dimension(
@@ -326,7 +360,7 @@ class ResponsibilitiesStrategy(MatchingStrategy):
                     message=f"{score:.0%} of job terms appear in the resume",
                 )
             ],
-            weight=0.20,
+            weight=0.14,
         )
 
 
@@ -360,6 +394,26 @@ class LocationWorkplaceStrategy(MatchingStrategy):
         workplace_score = 0.7
         if workplace == "remote":
             workplace_score = 1.0 if remote_ok else 0.2
+            requirements = job.get("requirements")
+            scope = (
+                requirements.get("location_scope")
+                if isinstance(requirements, Mapping)
+                else {}
+            )
+            allowed = scope_allows(scope, candidate_countries(preferences))
+            if allowed is False:
+                workplace_score = 0.0
+                restriction = (
+                    str(scope.get("restriction_text") or "another country")
+                    if isinstance(scope, Mapping)
+                    else "another country"
+                )
+                reasons.append(
+                    Reason(
+                        code="location.restricted",
+                        message=f"remote, but restricted to {restriction}",
+                    )
+                )
         elif wanted_types:
             workplace_score = 1.0 if workplace in wanted_types else 0.3
         reasons.append(
@@ -411,7 +465,7 @@ class CompensationStrategy(MatchingStrategy):
                 available=False,
                 summary="no salary data",
                 reasons=[Reason(code="compensation.unavailable", message="salary not listed")],
-                weight=0.10,
+                weight=0.08,
             )
         low = low if low is not None else high
         high = high if high is not None else low
@@ -426,7 +480,7 @@ class CompensationStrategy(MatchingStrategy):
                 available=True,
                 summary="salary listed, no target",
                 reasons=[Reason(code="compensation.no_target", message="no salary target set")],
-                weight=0.10,
+                weight=0.08,
             )
         target = target if target is not None else minimum
         minimum = minimum if minimum is not None else target
@@ -449,7 +503,7 @@ class CompensationStrategy(MatchingStrategy):
                     message=f"posted {low:g}–{high:g}; target {target:g}",
                 )
             ],
-            weight=0.10,
+            weight=0.08,
         )
 
 
@@ -489,7 +543,7 @@ class FreshnessStrategy(MatchingStrategy):
 
 class WeightedScoringModel(ScoringModel):
     id = "fit.weighted_v1"
-    version = "1.1.0"
+    version = "1.2.0"
 
     def evaluate(  # type: ignore[override]
         self,

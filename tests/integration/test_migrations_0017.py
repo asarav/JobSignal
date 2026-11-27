@@ -43,8 +43,8 @@ async def test_upgrade_adds_append_only_weight_history(tmp_path) -> None:
         )
         await conn.commit()
 
-    assert await migrate(db) == 18
-    assert await migrate(db) == 18
+    assert await migrate(db) == 19
+    assert await migrate(db) == 19
 
     async with aiosqlite.connect(db) as conn:
         cur = await conn.execute(

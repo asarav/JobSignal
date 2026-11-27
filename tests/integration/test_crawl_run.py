@@ -17,7 +17,7 @@ from app.infrastructure.http.policy_client import PolicyHttpClient
 from app.infrastructure.persistence.memory import InMemoryUnitOfWorkFactory
 from app.plugins.ats.greenhouse import GreenhouseConnector
 from app.plugins.ats.posting_check import invalid_posting
-from tests.support.fakes import FakeClock, FakeHttpClient
+from tests.support.fakes import FakeClock, FakeEventPublisher, FakeHttpClient
 
 
 def _board_http() -> FakeHttpClient:
@@ -95,6 +95,55 @@ class _DeadPostingConnector:
 
     async def fetch_job(self, ref: RawJobRef, source: SourceConfig, ctx: ExecutionContext):
         return Err(invalid_posting(self.id, ref.url, "page says 'job not found'"))
+
+
+class _ManyPostingsConnector(_StaticConnector):
+    """Ten refs, which is the first point the crawler reports progress."""
+
+    async def list_jobs(self, source: SourceConfig, ctx: ExecutionContext):
+        async def gen():
+            for number in range(1, 11):
+                yield RawJobRef(
+                    source_id=source.id,
+                    url=f"https://example.com/jobs/{number}",
+                    source_posting_id=str(number),
+                )
+
+        return gen()
+
+
+@pytest.mark.asyncio
+async def test_crawl_reports_progress_with_counts_and_total():
+    factory = InMemoryUnitOfWorkFactory()
+    clock = FakeClock()
+    source = SourceConfig(
+        id="s1",
+        url="https://example.com/careers",
+        kind="ats",
+        connector_id="ats.static",
+    )
+    async with factory() as uow:
+        await uow.sources.add(source)
+        await uow.commit()
+    events = FakeEventPublisher()
+
+    await run_crawl(
+        source=source,
+        connector=_ManyPostingsConnector("Backend Engineer", "Requirements:\n- Python"),  # type: ignore[arg-type]
+        uow_factory=factory,
+        http=PolicyHttpClient(transport=FakeHttpClient()),
+        clock_now=clock.now,
+        events=events,
+    )
+
+    progress = [event for event in events.events if event["topic"] == "crawl.progress"]
+    assert progress
+    payload = progress[-1]["payload"]
+    assert payload["processed"] == 10
+    assert payload["refs_total"] == 10
+    started = [event for event in events.events if event["topic"] == "crawl.started"]
+    assert started and payload["run_id"] == started[0]["payload"]["run_id"]
+    assert {"new", "updated", "skipped", "errors"} <= set(payload)
 
 
 @pytest.mark.asyncio

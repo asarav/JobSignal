@@ -60,6 +60,10 @@
       "default": false,
       "type": "boolean"
     },
+    "include_missing_skills": {
+      "default": false,
+      "type": "boolean"
+    },
     "ensure_fit": {
       "default": false,
       "type": "boolean"

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Navigation } from "./Navigation";
+import { DiscoveryActivity } from "../features/discover/DiscoveryActivity";
 
 /** Persistent sidebar on wide screens; a disclosure menu on narrow ones. */
 export function AppShell({ children }: { children: ReactNode }) {
@@ -17,8 +18,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-canvas text-slate-900 lg:flex">
       <aside className="hidden w-60 shrink-0 bg-ink-900 lg:block">
-        <div className="sticky top-0 h-screen">
+        <div className="sticky top-0 flex h-screen flex-col">
           <Navigation />
+          <div className="mt-auto">
+            <DiscoveryActivity tone="dark" />
+          </div>
         </div>
       </aside>
 
@@ -39,6 +43,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           {menuOpen ? "Close menu" : "Menu"}
         </button>
       </header>
+      <div className="bg-ink-900 lg:hidden">
+        <DiscoveryActivity tone="dark" />
+      </div>
       {menuOpen ? (
         <div
           id="mobile-nav"

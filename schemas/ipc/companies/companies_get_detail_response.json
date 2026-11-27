@@ -329,6 +329,39 @@
         "hidden_by_policy": {
           "default": false,
           "type": "boolean"
+        },
+        "required_skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "preferred_skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "missing_required_skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_skill_coverage": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_scope": {
+          "additionalProperties": true,
+          "type": "object"
         }
       },
       "required": [

@@ -11,6 +11,7 @@ from app.domain.models.context import ExecutionContext
 from app.domain.models.http import HttpRequest
 from app.domain.models.job import RawJob, RawJobRef
 from app.domain.models.source import ConnectorCapabilities, MatchResult, PageSniff, SourceConfig
+from app.domain.services.job_requirements import plain_description
 from app.plugins.ats.schema import listing_items
 
 
@@ -69,7 +70,7 @@ class GreenhouseConnector:
                         RawJob(
                             ref=ref,
                             title=data.get("title"),
-                            body_text=data.get("content"),
+                            body_text=plain_description(data.get("content") or ""),
                             body_html=data.get("content"),
                             payload=data,
                         )
@@ -88,7 +89,7 @@ class GreenhouseConnector:
                             RawJob(
                                 ref=ref,
                                 title=job.get("title"),
-                                body_text=job.get("content"),
+                                body_text=plain_description(job.get("content") or ""),
                                 body_html=job.get("content"),
                                 payload=job,
                             )

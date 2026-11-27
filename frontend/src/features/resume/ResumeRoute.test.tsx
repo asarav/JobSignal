@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResumeRoute } from "./ResumeRoute";
 
@@ -7,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   listSources: vi.fn(),
   getMatchingResults: vi.fn(),
   getResumeProfile: vi.fn(),
+  listSavedJobs: vi.fn(),
+  setJobUserState: vi.fn(),
   runMatching: vi.fn(),
 }));
 
@@ -26,6 +29,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.listResumeVersions.mockResolvedValue({ versions: [] });
   mocks.listSources.mockResolvedValue({ sources: [] });
+  mocks.listSavedJobs.mockResolvedValue({ jobs: [], total: 0 });
+  mocks.setJobUserState.mockResolvedValue({});
   mocks.runMatching.mockResolvedValue({
     results: [],
     available_jobs: 0,
@@ -51,7 +56,11 @@ describe("ResumeRoute matching run feedback", () => {
     });
     mocks.getMatchingResults.mockResolvedValue({ weights: {}, results: [] });
 
-    render(<ResumeRoute />);
+    render(
+      <MemoryRouter>
+        <ResumeRoute />
+      </MemoryRouter>,
+    );
     fireEvent.click(screen.getByRole("tab", { name: "Matches" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Recompute matches" }),
@@ -67,7 +76,11 @@ describe("ResumeRoute matching run feedback", () => {
   it("explains an empty corpus instead of showing a zero-job success", async () => {
     mocks.getMatchingResults.mockResolvedValue({ weights: {}, results: [] });
 
-    render(<ResumeRoute />);
+    render(
+      <MemoryRouter>
+        <ResumeRoute />
+      </MemoryRouter>,
+    );
     fireEvent.click(screen.getByRole("tab", { name: "Matches" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Recompute matches" }),
@@ -91,6 +104,9 @@ describe("ResumeRoute missing fit data", () => {
           job_id: "job_1",
           job_title: "Data Engineer",
           company_name: "Acme",
+          location_text: "Remote (US)",
+          workplace_type: "remote",
+          missing_required_skills: ["rust"],
           fit_score: null,
           dimension_coverage: null,
           dimensions: [
@@ -106,7 +122,11 @@ describe("ResumeRoute missing fit data", () => {
       ],
     });
 
-    render(<ResumeRoute />);
+    render(
+      <MemoryRouter>
+        <ResumeRoute />
+      </MemoryRouter>,
+    );
 
     expect(screen.getByRole("tab", { name: "Profile details" })).toBeTruthy();
     const badge = await screen.findByText("Not assessed yet");
@@ -117,5 +137,18 @@ describe("ResumeRoute missing fit data", () => {
     expect(card?.textContent).toBeTruthy();
     expect(card?.textContent).not.toContain("0.00");
     expect(card?.textContent).not.toMatch(/(^|[^\d])0%/);
+
+    const view = screen.getAllByRole("link", { name: "View job" })[0];
+    expect(view.getAttribute("href")).toBe("/jobs/job_1");
+    expect(screen.getByText("Remote (US)")).toBeTruthy();
+    expect(screen.getByText("Missing: rust")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save for later" }));
+    await waitFor(() =>
+      expect(mocks.setJobUserState).toHaveBeenCalledWith({
+        job_id: "job_1",
+        state: "saved",
+      }),
+    );
   });
 });

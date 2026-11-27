@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/Toast";
 import { DiscoveryStatus } from "./DiscoveryStatus";
+import { resetDiscoveryStatusForTests } from "../../hooks/useDiscoveryStatus";
 
 const mocks = vi.hoisted(() => ({
   getDiscoveryStatus: vi.fn(),
@@ -16,6 +17,7 @@ let handler: Handler | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetDiscoveryStatusForTests();
   handler = null;
   mocks.getDiscoveryStatus.mockResolvedValue({
     running: false,
@@ -61,9 +63,7 @@ describe("DiscoveryStatus", () => {
 
     expect(onJobsChanged).toHaveBeenCalled();
     expect(
-      await screen.findByText(
-        /Discovery pass finished: 2 new boards · 3 boards crawled · 142 postings found/,
-      ),
+      await screen.findByText(/Last pass: 2 new boards · 3 boards crawled · 142 postings found/),
     ).toBeTruthy();
   });
 

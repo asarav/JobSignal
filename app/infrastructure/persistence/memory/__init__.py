@@ -289,6 +289,12 @@ class InMemoryJobRepository:
             "seniority": scalar("seniority"),
             "salary": getattr(job, "salary", None),
             "posted_at": getattr(job, "posted_at", None),
+            "required_skills": list(getattr(job, "required_skills", []) or []),
+            "preferred_skills": list(getattr(job, "preferred_skills", []) or []),
+            "requirements": dict(getattr(job, "requirements", {}) or {}),
+            "requirements_hash": str(
+                dict(getattr(job, "requirements", {}) or {}).get("analysis_hash") or ""
+            ),
             "first_seen_at": getattr(job, "fetched_at", None)
             or updated_at_hint
             or "2026-01-01T00:00:00Z",
@@ -298,6 +304,23 @@ class InMemoryJobRepository:
 
     async def get(self, job_id: str) -> Mapping[str, object] | None:
         return self._store.get(job_id)
+
+    async def update_requirements(
+        self,
+        job_id: str,
+        requirements: Mapping[str, object],
+        requirements_hash: str,
+        *,
+        required_skills: Sequence[str] = (),
+        preferred_skills: Sequence[str] = (),
+    ) -> None:
+        job = self._store.get(job_id)
+        if job is None:
+            return
+        job["requirements"] = dict(requirements)
+        job["requirements_hash"] = requirements_hash
+        job["required_skills"] = list(required_skills)
+        job["preferred_skills"] = list(preferred_skills)
 
     async def find_by_canonical_url(self, canonical_url: str) -> str | None:
         for jid, j in self._store.items():

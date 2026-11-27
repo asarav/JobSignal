@@ -55,6 +55,51 @@
       ],
       "default": null
     },
+    "phase": {
+      "default": "idle",
+      "enum": [
+        "seeding",
+        "first_run",
+        "steady",
+        "idle"
+      ],
+      "type": "string"
+    },
+    "initial_total": {
+      "default": 0,
+      "type": "integer"
+    },
+    "initial_done": {
+      "default": 0,
+      "type": "integer"
+    },
+    "initial_pending": {
+      "default": 0,
+      "type": "integer"
+    },
+    "active_crawls": {
+      "default": 0,
+      "type": "integer"
+    },
+    "queued_crawls": {
+      "default": 0,
+      "type": "integer"
+    },
+    "postings_found": {
+      "default": 0,
+      "type": "integer"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "note": {
       "default": "",
       "type": "string"

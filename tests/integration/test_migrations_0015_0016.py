@@ -68,12 +68,12 @@ async def test_upgrade_applies_only_the_new_migrations(tmp_path) -> None:
     version = await migrate(db)
     again = await migrate(db)
 
-    assert version == 18
-    assert again == 18
+    assert version == 19
+    assert again == 19
 
     async with aiosqlite.connect(db) as conn:
         cur = await conn.execute("SELECT MAX(version) FROM schema_migrations")
-        assert (await cur.fetchone())[0] == 18
+        assert (await cur.fetchone())[0] == 19
         cur = await conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )
