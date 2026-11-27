@@ -46,6 +46,7 @@ from app.infrastructure.clock import SystemClock
 from app.infrastructure.http import PolicyHttpClient
 from app.infrastructure.http.policy_client import RateLimiter
 from app.infrastructure.ids import UlidGenerator
+from app.infrastructure.persistence.sqlite.adoption import adopt_previous_install
 from app.infrastructure.persistence.sqlite.uow import SqliteUnitOfWorkFactory
 from app.plugins.registry import PluginRegistry
 from app.worker.composition_root import build_container
@@ -664,6 +665,8 @@ async def main() -> int:
 
     data_dir = Path(args.data_dir).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
+    # A previous install's database is copied in before anything opens this one.
+    adoption = adopt_previous_install(data_dir)
 
     clock = SystemClock()
     ids = UlidGenerator()
@@ -691,6 +694,17 @@ async def main() -> int:
         log_dir=data_dir / "logs",
     )
     logger = container.logger
+    if adoption.adopted:
+        logger.info(
+            "data.adopted",
+            source=str(adoption.source),
+            schema_version=adoption.schema_version,
+            previous_removed=adoption.removed,
+        )
+        if not adoption.removed:
+            logger.warning(
+                "data.adopted_previous_kept", source=str(adoption.source)
+            )
     registry = container.registry
     await registry.load_state()
     await registry.persist_state()

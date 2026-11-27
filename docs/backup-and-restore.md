@@ -62,12 +62,40 @@ records a baseline in `app_settings` and writes nothing; after
 Both settings live in `AppConfig` and are validated like every other section.
 The history table records automatic exports alongside manual ones.
 
+## Upgrading and reinstalling
+
+You do not need a backup to keep your data across versions. The database lives
+in the OS app data directory and the installer only replaces binaries, so
+installing a newer build over an older one keeps every row; the new build
+forward-migrates the existing file on start, after writing a snapshot to
+`<data dir>/backups`.
+
+If the app data location itself changes — an older build that used a different
+bundle identifier, or a reinstall that starts in a fresh directory while the old
+one is still on disk — the worker copies the previous database into place before
+opening it. The copy is checked with `PRAGMA quick_check`, must be a Job Signal
+database, and must not come from a newer build. Its row counts for the core
+tables are then compared with the source, and only when they match is the
+previous data folder deleted, so one live copy remains.
+`<data dir>/adoption.json` records where the rows came from and whether the old
+folder was removed. A refused database is never deleted, and a folder that
+cannot be removed (a locked file, a permission problem) is kept with a logged
+warning instead of failing startup.
+
+A directory named by `LODESTAR_DATA_DIR`, and the development launcher's
+`.lodestar-data`, are never adopted into: an explicit data directory always wins.
+
+Downgrades are refused. If the database reports a schema newer than the build
+ships, the worker stops with the two schema numbers and the path to
+`<data dir>/backups` instead of reading columns it does not understand.
+
 ## Damaged databases
 
 Startup runs `PRAGMA quick_check` after applying migrations. If SQLite reports
 damage, the worker stops before serving requests and names this document's
-restore steps. Restore the newest usable file from `<data dir>/backups` into an
-empty data directory; the worker will not write into a damaged database.
+restore steps. Restore the newest usable file from `<data dir>/backups` — either a
+pre-migration `.bak` snapshot or an exported `.json` archive — into an empty
+data directory; the worker will not write into a damaged database.
 
 ## Notes
 

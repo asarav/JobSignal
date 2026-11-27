@@ -63,10 +63,17 @@ async def apply_pragmas(conn: aiosqlite.Connection) -> None:
 
 
 async def backup_database(db_path: Path) -> Path | None:
+    """Snapshot the database into ``backups/`` before migrations run.
+
+    The snapshot sits beside the JSON archives, which is where the integrity
+    error tells users to look for a copy they can restore.
+    """
     if not db_path.exists():
         return None
+    folder = db_path.parent / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    dest = db_path.with_suffix(db_path.suffix + f".{stamp}.bak")
+    dest = folder / f"{db_path.stem}-{stamp}.bak"
     shutil.copy2(db_path, dest)
     return dest
 
@@ -113,6 +120,20 @@ async def _migrate(db_path: Path) -> int:
         await conn.commit()
         cur = await conn.execute("SELECT version, checksum FROM schema_migrations")
         applied = {int(row[0]): str(row[1]) for row in await cur.fetchall()}
+        shipped = max(
+            (int(path.name.split("_", 1)[0]) for path in files),
+            default=0,
+        )
+        newer = sorted(version for version in applied if version > shipped)
+        if newer:
+            # An older build cannot know what a newer migration changed. Refuse
+            # rather than write into a schema it was not written for.
+            raise RuntimeError(
+                "this data directory was written by a newer version of Job "
+                f"Signal (schema {newer[-1]}, this build ships schema {shipped}). "
+                "Reinstall the newer version, or restore a copy from "
+                f"{db_path.parent / 'backups'}."
+            )
         pending = []
         for path in files:
             version = int(path.name.split("_", 1)[0])

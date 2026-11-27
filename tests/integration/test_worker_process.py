@@ -10,11 +10,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import site
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from app.infrastructure.persistence.sqlite.migrator import migrate
 
 ROOT = Path(__file__).resolve().parents[2]
 TIMEOUT = 20.0
@@ -83,15 +86,20 @@ class WorkerProcess:
         self._stderr_task.cancel()
 
 
-def _env() -> dict[str, str]:
+def _env(overrides: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
+    # An explicit data directory disables adoption; a test must not inherit one.
+    env.pop("LODESTAR_DATA_DIR", None)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
     env["PYTHONIOENCODING"] = "utf-8"
+    env.update(overrides or {})
     return env
 
 
-async def spawn_worker(data_dir: Path) -> WorkerProcess:
+async def spawn_worker(
+    data_dir: Path, env_extra: dict[str, str] | None = None
+) -> WorkerProcess:
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -100,7 +108,7 @@ async def spawn_worker(data_dir: Path) -> WorkerProcess:
         str(data_dir),
         "--no-background-discovery",
         cwd=str(ROOT),
-        env=_env(),
+        env=_env(env_extra),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -453,3 +461,54 @@ async def test_resume_parse_skill_status_and_keywords(tmp_path):
         assert "aws" in keywords["result"]["keywords"]
     finally:
         await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_first_launch_adopts_the_previous_installs_database(tmp_path):
+    """A renamed identifier or a fresh install picks up the rows on disk."""
+    appdata = tmp_path / "appdata"
+    legacy_worker = appdata / "com.jobsignal.app" / "worker"
+    legacy_worker.mkdir(parents=True)
+    legacy_db = legacy_worker / "lodestar.sqlite"
+    await migrate(legacy_db)
+    conn = sqlite3.connect(legacy_db)
+    try:
+        conn.execute("CREATE TABLE adoption_probe(value TEXT NOT NULL)")
+        conn.execute("INSERT INTO adoption_probe(value) VALUES ('carried over')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    target = appdata / "com.jobsignal.desktop" / "worker"
+    # Changing APPDATA also moves Python's user site-packages on Windows, which
+    # is where this environment installs third-party packages; keep it on the
+    # path so the child can still import the worker's dependencies.
+    user_site = site.getusersitepackages()
+    python_path = os.pathsep.join(
+        [str(ROOT), *([user_site] if Path(user_site).is_dir() else [])]
+    )
+    worker = await spawn_worker(
+        target,
+        env_extra={
+            "APPDATA": str(appdata),
+            "XDG_DATA_HOME": str(appdata),
+            "HOME": str(appdata / "home"),
+            "PYTHONPATH": python_path,
+        },
+    )
+    try:
+        health = await worker.request("system.health")
+        assert health["ok"] is True
+        assert Path(health["result"]["data_dir"]).resolve() == target.resolve()
+        assert health["result"]["schema_version"] >= 19
+    finally:
+        await worker.close()
+
+    adopted = sqlite3.connect(target / "lodestar.sqlite")
+    try:
+        row = adopted.execute("SELECT value FROM adoption_probe").fetchone()
+    finally:
+        adopted.close()
+    assert row == ("carried over",)
+    assert (target / "adoption.json").is_file()
+    assert not legacy_worker.exists(), "the previous data folder is retired"

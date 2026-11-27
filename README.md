@@ -515,6 +515,15 @@ and [ADR-0014](docs/adr/0014-associations-and-weight-history.md).
   stored `ETag`, fall back to `If-Modified-Since`, and on a `304` record a
   revalidation that reuses the previous classification instead of refetching.
   See [ADR-0016](docs/adr/0016-conditional-endpoint-requests.md).
+- **Data carries over across installs.** The database is not inside the
+  installer: it lives in the OS app data directory, so installing a new version
+  replaces binaries only and the existing file is forward-migrated on start.
+  When the app data location itself moves — an older build that used a different
+  bundle identifier, or a reinstall that starts in a fresh directory — the
+  worker copies the previous database in before it opens one, verifies the copy,
+  and removes the old folder so a single live copy remains. A database written
+  by a newer build is refused instead of read. See
+  [ADR-0018](docs/adr/0018-adopt-previous-install-data.md).
 - **Integrity before use.** Startup runs `PRAGMA quick_check` after migrations.
   A damaged file blocks startup with backup guidance instead of accepting
   writes; `tests/integration/test_sqlite_integrity.py` truncates a database and
@@ -646,6 +655,8 @@ Architecture decisions from the later milestones:
 - [ADR-0016](docs/adr/0016-conditional-endpoint-requests.md) — conditional
   endpoint requests
 - [ADR-0017](docs/adr/0017-delete-all-local-data.md) — typed delete-all-data
+- [ADR-0018](docs/adr/0018-adopt-previous-install-data.md) — carrying data
+  across installs
 
 ### Dependency rule
 
