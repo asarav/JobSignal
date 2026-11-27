@@ -6,6 +6,14 @@
         "$ref": "#/$defs/SourcesListResponseSourceInfo"
       },
       "type": "array"
+    },
+    "total": {
+      "default": 0,
+      "type": "integer"
+    },
+    "truncated": {
+      "default": false,
+      "type": "boolean"
     }
   },
   "required": [

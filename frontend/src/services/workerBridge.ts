@@ -807,6 +807,25 @@ class PreviewBridge implements WorkerBridge {
         return response({ ok: true });
       case "discovery.auto_discover":
         return response({ discovered: 0, registered: 0, crawled: 0, failed: 0 });
+      case "discovery.get_status":
+        return response({
+          running: false,
+          interval_minutes: 60,
+          last_pass_at: "2026-11-21T07:30:00Z",
+          next_pass_at: "2026-11-21T08:30:00Z",
+          last_summary: {
+            discovered: 0,
+            registered: 0,
+            crawled: 1,
+            failed: 0,
+            postings_harvested: 0,
+          },
+          sources: previewSources().length,
+          enabled_sources: previewSources().filter((source) => source.enabled !== false)
+            .length,
+          last_crawl_at: "2026-11-21T08:00:00Z",
+          note: "Preview mode does not fetch the network.",
+        });
       case "tasks.list":
         return response({ tasks: this.tasks });
       case "resume.list_versions":

@@ -51,6 +51,8 @@ import type {
   DiagnosticsSleepResponse,
   DiscoveryAutoDiscoverRequest,
   DiscoveryAutoDiscoverResponse,
+  DiscoveryGetStatusRequest,
+  DiscoveryGetStatusResponse,
   DiscoveryRunRequest,
   DiscoveryRunResponse,
   Envelope,
@@ -216,6 +218,7 @@ export type WorkerMethod =
   | "search_profiles.delete"
   | "discovery.run"
   | "discovery.auto_discover"
+  | "discovery.get_status"
   | "applications.list"
   | "applications.create"
   | "applications.update_status"
@@ -499,6 +502,12 @@ export class WorkerClient {
 
   autoDiscover(request: DiscoveryAutoDiscoverRequest = {}): Promise<DiscoveryAutoDiscoverResponse> {
     return this.request("discovery.auto_discover", { ...request });
+  }
+
+  getDiscoveryStatus(
+    request: DiscoveryGetStatusRequest = {},
+  ): Promise<DiscoveryGetStatusResponse> {
+    return this.request("discovery.get_status", { ...request });
   }
 
   importResume(request: ResumeImportRequest): Promise<ResumeImportResponse> {

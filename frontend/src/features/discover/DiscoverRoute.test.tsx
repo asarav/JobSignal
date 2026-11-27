@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscoverRoute } from "./DiscoverRoute";
@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   listSources: vi.fn(),
   addSource: vi.fn(),
   runDiscovery: vi.fn(),
+  autoDiscover: vi.fn(),
+  getDiscoveryStatus: vi.fn(),
+  onEvent: vi.fn(),
   getJobDetail: vi.fn(),
 }));
 
@@ -65,6 +68,24 @@ beforeEach(() => {
   mocks.listSources.mockResolvedValue({ sources: [] });
   mocks.addSource.mockResolvedValue({ source_id: "source_1" });
   mocks.runDiscovery.mockResolvedValue({ ok: true });
+  mocks.autoDiscover.mockResolvedValue({
+    registered: 2,
+    crawled: 3,
+    postings_harvested: 40,
+    failed: 0,
+  });
+  mocks.getDiscoveryStatus.mockResolvedValue({
+    running: false,
+    interval_minutes: 60,
+    last_pass_at: "2026-11-21T07:30:00Z",
+    next_pass_at: "2026-11-21T08:30:00Z",
+    last_summary: {},
+    sources: 4,
+    enabled_sources: 4,
+    last_crawl_at: null,
+    note: "",
+  });
+  mocks.onEvent.mockResolvedValue(() => undefined);
   mocks.getJobDetail.mockResolvedValue({
     job: { description_text: "Build Python and SQL pipelines." },
   });
@@ -110,17 +131,37 @@ describe("Find jobs", () => {
     );
   });
 
-  it("offers one add-and-crawl action when nothing has been collected", async () => {
+  it("offers a full discovery pass when nothing has been collected", async () => {
     mocks.rankedJobs.mockResolvedValue({ jobs: [], total: 0, hidden_by_policy: 0 });
     renderFind();
 
+    // The empty-state action is the one next to the add-a-board input; the
+    // discovery strip above it has the same label by design.
+    const container = (await screen.findByLabelText("Career page or job board URL"))
+      .closest("div.w-full");
+    expect(container).not.toBeNull();
+    fireEvent.click(
+      within(container as HTMLElement).getByRole("button", {
+        name: "Find new jobs everywhere",
+      }),
+    );
+
+    await waitFor(() => expect(mocks.autoDiscover).toHaveBeenCalled());
     expect(
-      await screen.findByRole("button", { name: "Add source and crawl" }),
+      await screen.findByText(/2 new boards, 3 boards crawled, 40 postings found/),
     ).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Career page or job board URL"), {
+  });
+
+  it("can still add one named board and crawl it", async () => {
+    mocks.rankedJobs.mockResolvedValue({ jobs: [], total: 0, hidden_by_policy: 0 });
+    renderFind();
+
+    fireEvent.change(await screen.findByLabelText("Career page or job board URL"), {
       target: { value: "https://example.test/jobs" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add source and crawl" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add one board and crawl it" }),
+    );
 
     await waitFor(() =>
       expect(mocks.addSource).toHaveBeenCalledWith({
@@ -129,6 +170,23 @@ describe("Find jobs", () => {
       }),
     );
     expect(mocks.runDiscovery).toHaveBeenCalledWith({ source_id: "source_1" });
+  });
+
+  it("filters to the profile area by default and can widen it", async () => {
+    renderFind();
+    await screen.findByText("Data Engineer");
+    expect(mocks.rankedJobs).toHaveBeenLastCalledWith(
+      expect.objectContaining({ include_out_of_area: false }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    fireEvent.click(screen.getByLabelText("Only my area (from my preferences)"));
+
+    await waitFor(() =>
+      expect(mocks.rankedJobs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ include_out_of_area: true }),
+      ),
+    );
   });
 
   it("pages ranked results and resets the offset when a preset changes", async () => {
@@ -268,6 +326,6 @@ describe("Find jobs", () => {
         }),
       ),
     );
-    expect(screen.queryByRole("button", { name: /Add source and crawl/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Add one board and crawl/ })).toBeNull();
   });
 });

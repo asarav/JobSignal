@@ -98,6 +98,7 @@ async def spawn_worker(data_dir: Path) -> WorkerProcess:
         "app.worker.main",
         "--data-dir",
         str(data_dir),
+        "--no-background-discovery",
         cwd=str(ROOT),
         env=_env(),
         stdin=asyncio.subprocess.PIPE,

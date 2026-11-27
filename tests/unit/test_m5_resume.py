@@ -232,6 +232,25 @@ def test_education_entries() -> None:
     assert entry["field"] == "Physics"
 
 
+def test_education_entries_drop_decorative_punctuation() -> None:
+    # Resume lines often end a degree with "— •"; that must not become the
+    # degree, field or institution, and the next line is the institution.
+    entries = extract_education_entries(
+        "M.S. of Technology — \u2022\nUniversity of Michigan 2019 - 2021\n"
+    )
+    assert len(entries) == 1
+    assert entries[0]["degree"] == "M.S. of Technology"
+    assert entries[0]["institution"] == "University of Michigan"
+    assert entries[0]["field"] == ""
+
+    inline = extract_education_entries(
+        "B.S., Japanese Language. — University of Michigan"
+    )[0]
+    assert inline["degree"] == "B.S."
+    assert inline["field"] == "Japanese Language."
+    assert inline["institution"] == "University of Michigan"
+
+
 def test_profile_items_keep_bullets_with_their_entry() -> None:
     items = extract_profile_items("AWS Certified Solutions Architect\n- Renewed 2025\n")
     assert items == [

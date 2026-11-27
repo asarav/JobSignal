@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -117,6 +118,119 @@ def _wire(
             provider,
         )
     return container, _build_discovery(container)
+
+
+class _SeedProvider:
+    """A discovery provider whose whole catalogue is handed out offline."""
+
+    id = "discovery.seed"
+
+    def __init__(self, sources: list[DiscoveredSource]) -> None:
+        self.sources = sources
+        self.catalog = SimpleNamespace(total=len(sources))
+
+    def seed_candidates(self) -> Iterator[DiscoveredSource]:
+        return iter(self.sources)
+
+
+@pytest.mark.asyncio
+async def test_startup_seed_import_registers_the_whole_catalogue_once():
+    seed = _SeedProvider(
+        [
+            replace(
+                _candidate("https://boards.greenhouse.io/a", "ats.greenhouse"),
+                observed_postings=12,
+            ),
+            replace(
+                _candidate("https://jobs.lever.co/b", "ats.lever"),
+                observed_postings=4,
+            ),
+            replace(
+                _candidate("https://jobs.ashbyhq.com/c", "ats.ashby"),
+                observed_postings=0,
+            ),
+        ]
+    )
+    _, wiring = _wire({"discovery.seed": seed}, clock=FakeClock())
+    use_case = wiring.auto_discover_use_case
+
+    assert await use_case.import_seed() == 3
+    sources = await wiring.registry.list_sources()
+    assert len(sources) == 3
+    statuses = sorted(str(source.schedule.get("probe_status")) for source in sources)
+    assert statuses == ["hiring", "hiring", "live_empty"]
+
+    # A completed sweep for the same manifest is not repeated on the next launch.
+    assert await use_case.import_seed() == 0
+    assert len(await wiring.registry.list_sources()) == 3
+
+
+@pytest.mark.asyncio
+async def test_catch_up_runs_a_pass_inside_the_normal_interval():
+    _, wiring = _wire({"discovery.fake": _Provider([])}, clock=FakeClock())
+    use_case = wiring.auto_discover_use_case
+
+    assert await use_case.run() is not None
+    assert await use_case.run_if_due(3600.0) is None
+    assert await use_case.run_if_due(3600.0, catch_up=True) is not None
+
+
+@pytest.mark.asyncio
+async def test_backlog_batch_crawls_each_never_attempted_board_once():
+    _, wiring = _wire({}, clock=FakeClock())
+    for url in (
+        "https://boards.greenhouse.io/acme",
+        "https://jobs.lever.co/acme",
+        "https://jobs.ashbyhq.com/acme",
+    ):
+        await wiring.registry.add(url)
+
+    crawled, failed = await wiring.auto_discover_use_case.crawl_backlog_batch(
+        limit=10
+    )
+    assert crawled + failed == 3
+    # Every selected board writes its crawl run at start, so the next batch
+    # has nothing left even if the crawl itself failed.
+    assert await wiring.auto_discover_use_case.crawl_backlog_batch(limit=10) == (
+        0,
+        0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_initial_crawls_finds_an_uncrawled_board():
+    _, wiring = _wire({}, clock=FakeClock())
+    await wiring.registry.add("https://boards.greenhouse.io/acme")
+
+    assert await wiring.auto_discover_use_case.pending_initial_crawls() == 1
+
+
+@pytest.mark.asyncio
+async def test_each_pass_publishes_started_and_completed_with_its_summary():
+    provider = _Provider(["https://jobs.example.com/a"])
+    container, wiring = _wire({"discovery.fake": provider}, clock=FakeClock())
+
+    await wiring.auto_discover_use_case.run()
+
+    topics = [event["topic"] for event in container.events.events]
+    assert topics[0] == "discovery.pass_started"
+    completed = [
+        event
+        for event in container.events.events
+        if event["topic"] == "discovery.pass_completed"
+    ]
+    assert len(completed) == 1
+    payload = completed[0]["payload"]
+    assert payload["registered"] == 1
+    assert payload["crawled"] == 1
+    assert payload["started_at"] and payload["finished_at"]
+
+    # The same summary is what the Discover status strip reads back later.
+    status = await wiring.auto_discover_use_case.status()
+    assert status["last_summary"]["registered"] == 1
+    assert status["last_summary"]["crawled"] == 1
+    assert status["last_pass_at"] is not None
+    assert status["next_pass_at"] is not None
 
 
 @pytest.mark.asyncio

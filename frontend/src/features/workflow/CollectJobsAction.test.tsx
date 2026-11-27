@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CollectJobsAction } from "./CollectJobsAction";
 
 const mocks = vi.hoisted(() => ({
-  listSources: vi.fn(),
   addSource: vi.fn(),
   runDiscovery: vi.fn(),
+  autoDiscover: vi.fn(),
 }));
 
 vi.mock("../../services/workerClient", () => ({
@@ -22,20 +22,38 @@ vi.mock("../../services/workerClient", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.listSources.mockResolvedValue({ sources: [] });
   mocks.addSource.mockResolvedValue({ source_id: "s1", url: "https://example.test/jobs" });
   mocks.runDiscovery.mockResolvedValue({ ok: true });
+  mocks.autoDiscover.mockResolvedValue({
+    discovered: 4,
+    registered: 2,
+    crawled: 3,
+    failed: 0,
+    postings_harvested: 40,
+  });
 });
 
 describe("CollectJobsAction", () => {
-  it("adds a source and immediately crawls it, then reports completion", async () => {
+  it("runs one pass over every board and reports its counts", async () => {
     const onComplete = vi.fn();
     render(<CollectJobsAction onComplete={onComplete} />);
 
-    fireEvent.change(await screen.findByLabelText("Career page or job board URL"), {
+    fireEvent.click(screen.getByRole("button", { name: "Find new jobs everywhere" }));
+
+    await waitFor(() => expect(mocks.autoDiscover).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/2 new boards, 3 boards crawled, 40 postings found/),
+    ).toBeInTheDocument();
+    expect(onComplete).toHaveBeenCalled();
+  });
+
+  it("adds one known board and crawls just that board", async () => {
+    render(<CollectJobsAction />);
+
+    fireEvent.change(screen.getByLabelText("Career page or job board URL"), {
       target: { value: "https://example.test/jobs" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add source and crawl" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add one board and crawl it" }));
 
     await waitFor(() =>
       expect(mocks.addSource).toHaveBeenCalledWith({
@@ -44,22 +62,6 @@ describe("CollectJobsAction", () => {
       }),
     );
     expect(mocks.runDiscovery).toHaveBeenCalledWith({ source_id: "s1" });
-    expect(await screen.findByText(/Source added and crawled/)).toBeInTheDocument();
-    expect(onComplete).toHaveBeenCalled();
-  });
-
-  it("crawls an existing source instead of asking for another", async () => {
-    mocks.listSources.mockResolvedValue({
-      sources: [{ source_id: "s1", url: "https://boards.example/acme" }],
-    });
-    render(<CollectJobsAction />);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Crawl https://boards.example/acme" }),
-    );
-    await waitFor(() =>
-      expect(mocks.runDiscovery).toHaveBeenCalledWith({ source_id: "s1" }),
-    );
-    expect(mocks.addSource).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Board added and crawled/)).toBeInTheDocument();
   });
 });

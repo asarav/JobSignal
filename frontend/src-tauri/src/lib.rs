@@ -638,16 +638,34 @@ fn spawn_sidecar(path: &Path, data_dir: &Path) -> std::io::Result<Child> {
         data_dir.display(),
         data_dir.display()
     );
-    Command::new(path)
+    let mut command = Command::new(path);
+    command
         .arg("--data-dir")
         .arg(data_dir)
         .current_dir(data_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
+        .kill_on_drop(true);
+    hide_console(&mut command);
+    command.spawn()
 }
+
+/// Keep a console-subsystem child from opening its own console window.
+///
+/// The app itself is a GUI process on Windows, so an unadorned spawn of the
+/// Python worker (or its frozen sidecar) allocates a visible command prompt in
+/// addition to the app.  `CREATE_NO_WINDOW` suppresses it; stdin/stdout/stderr
+/// stay piped exactly as before.
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.as_std_mut().creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
 
 fn spawn_worker(data_dir: &Path, worker_override: Option<&Path>) -> std::io::Result<Child> {
     if let Some(worker) = worker_override {
@@ -686,6 +704,7 @@ fn spawn_worker(data_dir: &Path, worker_override: Option<&Path>) -> std::io::Res
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    hide_console(&mut command);
 
     if let Some(root) = repo_root() {
         let mut paths = vec![root.clone()];

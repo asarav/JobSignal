@@ -111,6 +111,19 @@ async def test_rendered_dom_respects_robots():
 
 
 @pytest.mark.asyncio
+async def test_rendered_dom_skips_when_the_connector_returned_markup():
+    from app.plugins.extraction.rendered_dom import RenderedDomStrategy
+
+    provider = FakeBrowserProvider(html=HTML_RENDERED)
+    strategy = RenderedDomStrategy(browser=provider)
+    target = _target(url="https://example.com/jobs/42", html=HTML_RENDERED)
+
+    # The connector already fetched the posting: a second browser render would
+    # only add a round trip and contend with concurrent crawls.
+    assert strategy.can_attempt(target) is False
+
+
+@pytest.mark.asyncio
 async def test_rendered_dom_is_skipped_without_a_browser():
     from app.plugins.extraction.rendered_dom import RenderedDomStrategy
 

@@ -38,10 +38,13 @@ bare year. Text such as "Python 3 - 5 years" is not treated as a date range.
 | `inferred` | Implied by the taxonomy (e.g. Django ⇒ Python) or mentioned only in the summary | 0.5 |
 | `limited` | A single weak mention elsewhere in the resume | 0.3 |
 
-A per-skill **user status** overrides the parser evidence: `have_experience`
-counts 1.0, `learning` 0.4, `no_experience` 0, and `not_relevant` removes the
-skill from both numerator and denominator. Set it on the Resume screen; the
-next run recomputes because the status is part of the input hash.
+A per-skill **user status** overrides the parser evidence:
+`extensive_experience` counts 1.0, `have_experience` 0.9, `learning` 0.4,
+`no_experience` 0, and `not_relevant` removes the skill from both numerator and
+denominator. The extra expert level is a real answer rather than a label:
+choosing it scores above "have experience", so existing have-experience answers
+are rescaled from 1.0 to 0.9. Set it on the Resume screen; the next run
+recomputes because the status is part of the input hash.
 
 ## Manual corrections
 

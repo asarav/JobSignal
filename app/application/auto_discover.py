@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -40,6 +41,7 @@ from app.application.container import Container
 from app.application.dto import AutoDiscoverResult
 from app.application.sources import (
     DEFAULT_CRAWL_INTERVAL_S,
+    FALLBACK_CONNECTOR_ID,
     SourceRegistry,
     run_crawl,
     verify_posting,
@@ -72,9 +74,33 @@ AUTO_DISCOVER_POLL_S = 60.0
 #: indexes.  Override with ``discovery.auto_discover_interval_minutes``.
 AUTO_DISCOVER_INTERVAL_S = 3600.0
 
-#: Grace period after worker start before the first pass (seconds). Keeps app
-#: launch snappy and off the network while the UI is still coming up.
-AUTO_DISCOVER_STARTUP_DELAY_S = 60.0
+#: Grace period after worker start before the first pass (seconds).  Zero:
+#: discovery and crawling begin as soon as the worker is ready, not after the
+#: first minute.  The loop still yields to the IPC server between passes.
+AUTO_DISCOVER_STARTUP_DELAY_S = 0.0
+
+#: Pause between catch-up passes while any enabled board has never been
+#: crawled.  Much shorter than the normal hourly cadence so a new install works
+#: through its seed instead of waiting an interval per sixty boards.
+AUTO_DISCOVER_CATCH_UP_PAUSE_S = 10.0
+
+#: Sources whose tier is re-decided in one pass.  The registry can hold the
+#: whole seed; rotating a window keeps a pass from touching tens of thousands of
+#: rows while still covering every board over a handful of passes.
+DEFAULT_TIER_SOURCES_PER_PASS = 2_000
+
+#: Boards one catch-up pass may start.  The shared crawl gate still limits how
+#: many requests are in flight, and the configured per-pass cap always applies
+#: when it is larger; this only shortens the first sweep of a fresh seed.
+DEFAULT_CATCH_UP_CRAWL_SOURCES_PER_RUN = 240
+
+#: Boards selected per continuous backlog batch.  Deliberately larger than the
+#: crawl gate so the gate always has queued work instead of idling between
+#: batches; the gate and per-origin rate limits decide the real request rate.
+DEFAULT_BACKLOG_BATCH = 400
+
+#: Settings key for the background full-seed import marker.
+SEED_IMPORT_STATE_KEY = "seed_import_state"
 
 #: Caps that keep one pass bounded as the discovered source list grows.
 DEFAULT_MAX_NEW_SOURCES_PER_RUN = 200
@@ -185,10 +211,18 @@ class AutoDiscoverUseCase:
         self._http = http
         self._crawl_gate = crawl_gate
         self._board_probe = BoardProbe(http)
+        #: Serializes source-crawl selection between a pass and the startup
+        #: backlog drain so the same board is not started twice.
+        self._crawl_lock = asyncio.Lock()
         #: Config can be refreshed by the worker after a settings update; the
         #: container itself is immutable and fixed at startup.
         self._config: Any = container.config
         self._pass_cache: dict[object, object] = {}
+        #: Cached answer for the never-crawled check; the seed can hold tens of
+        #: thousands of rows and the worker asks every few seconds while it
+        #: catches up, so a full scan runs at most once a minute.
+        self._pending_checked_at: float | None = None
+        self._pending_value = 0
         #: Per-connector slice weights for this pass (user interest + yield).
         self._pass_weights: dict[str, float] = {}
         # Continuous passes can overlap with a manual ``discovery.auto_discover``
@@ -199,13 +233,19 @@ class AutoDiscoverUseCase:
         """Adopt freshly stored settings without rebuilding the worker."""
         self._config = config
 
-    async def run(self) -> AutoDiscoverResult:
+    async def run(self, *, catch_up: bool = False) -> AutoDiscoverResult:
         """Run one bounded pass; concurrent callers wait for the current one."""
         async with self._run_lock:
-            return await self._run_once()
+            return await self._run_once(catch_up=catch_up)
 
-    async def _run_once(self) -> AutoDiscoverResult:
+    async def _run_once(self, *, catch_up: bool = False) -> AutoDiscoverResult:
         """Discover career sites, harvest/verify postings, then crawl what is due."""
+        started_at = self._container.clock.now().isoformat()
+        # The UI subscribes to this so a background pass is visible while it
+        # works, not only after it finishes.
+        self._container.events.publish(
+            "discovery.pass_started", {"started_at": started_at}
+        )
         state = await self._state()
         cursor = _as_int(state.get("rotation_cursor"), 0)
         # Board discovery and the funnel walk the same index slices; one cache
@@ -242,16 +282,26 @@ class AutoDiscoverUseCase:
         if self._funnel_enabled():
             postings_verified = await self._verify_postings(postings)
             try:
+                # With the full seed registered, tiering every board every pass
+                # would dominate the pass.  A rotating window keeps each pass
+                # bounded and still re-decides every board within a few passes.
+                enabled = await self._registry.list_sources(enabled_only=True)
+                start = _as_int(state.get("tier_cursor"), 0)
+                tier_sources = _rotating_window(
+                    enabled, start, DEFAULT_TIER_SOURCES_PER_PASS
+                )
+                if enabled:
+                    state["tier_cursor"] = (
+                        start + len(tier_sources)
+                    ) % len(enabled)
                 tiers_changed = len(
-                    await TierService(self._container).assign(
-                        await self._registry.list_sources(enabled_only=True)
-                    )
+                    await TierService(self._container).assign(tier_sources)
                 )
             except Exception as exc:  # noqa: BLE001 - tiering must not abort a pass
                 self._container.logger.warning(
                     "discovery.tiering_failed", error=str(exc)
                 )
-        crawled, failed = await self._crawl_due()
+        crawled, failed = await self._crawl_due(catch_up=catch_up)
 
         # A provider that failed to answer holds the cursor, so the same
         # slice range is retried next pass instead of being skipped forever.
@@ -265,7 +315,6 @@ class AutoDiscoverUseCase:
         state["index_day"] = today
         state["index_slices"] = slices
         state["last_run_at"] = self._container.clock.now().isoformat()
-        await self._save_state(state)
 
         result = AutoDiscoverResult(
             discovered=len(discovered),
@@ -280,6 +329,16 @@ class AutoDiscoverUseCase:
             dead=registration.dead,
             empty=registration.empty,
             queued=registration.queued,
+        )
+        state["last_summary"] = result.model_dump()
+        await self._save_state(state)
+        self._container.events.publish(
+            "discovery.pass_completed",
+            {
+                "started_at": started_at,
+                "finished_at": self._container.clock.now().isoformat(),
+                **result.model_dump(),
+            },
         )
         self._container.logger.info(
             "discovery.auto_discover.completed",
@@ -299,10 +358,79 @@ class AutoDiscoverUseCase:
         )
         return result
 
+    async def status(self) -> dict[str, Any]:
+        """Report the background cadence without running or spending a pass."""
+        state = await self._state()
+        interval_s = self._interval_seconds()
+        last = _parse_ts(state.get("last_run_at"))
+        now = _as_utc(self._container.clock.now())
+        next_at = (
+            last + timedelta(seconds=interval_s)
+            if last is not None
+            else now + timedelta(seconds=AUTO_DISCOVER_STARTUP_DELAY_S)
+        )
+        sources = await self._registry.list_sources()
+        async with self._container.uow_factory() as uow:
+            runs = await uow.crawl_runs.list(limit=1)
+            await uow.commit()
+        last_crawl: str | None = None
+        if runs:
+            row = runs[0]
+            raw = row.get("finished_at") or row.get("started_at")
+            last_crawl = raw if isinstance(raw, str) else None
+        raw_summary = state.get("last_summary")
+        # While boards are waiting for their first crawl the worker passes
+        # again within seconds, not after a full interval.
+        if await self.pending_initial_crawls() > 0 and last is not None:
+            next_at = last + timedelta(seconds=AUTO_DISCOVER_CATCH_UP_PAUSE_S)
+        return {
+            "running": self._run_lock.locked(),
+            "interval_minutes": max(1, round(interval_s / 60)),
+            "last_pass_at": last.isoformat() if last is not None else None,
+            "next_pass_at": next_at.isoformat(),
+            "last_summary": dict(raw_summary)
+            if isinstance(raw_summary, dict)
+            else {},
+            "sources": len(sources),
+            "enabled_sources": sum(1 for source in sources if source.enabled),
+            "last_crawl_at": last_crawl,
+            "note": (
+                "A pass is bounded and repeats in the background, so more "
+                "postings keep arriving over time."
+            ),
+        }
+
+    def _interval_seconds(self) -> float:
+        """Pause between automatic passes, from the same settings the loop uses."""
+        settings = self._settings()
+        minutes = settings.get("auto_discover_interval_minutes")
+        if (
+            isinstance(minutes, (int, float))
+            and not isinstance(minutes, bool)
+            and minutes > 0
+        ):
+            return float(minutes) * 60.0
+        hours = settings.get("auto_discover_interval_hours")
+        if (
+            isinstance(hours, (int, float))
+            and not isinstance(hours, bool)
+            and hours > 0
+        ):
+            return float(hours) * 3600.0
+        return AUTO_DISCOVER_INTERVAL_S
+
     async def run_if_due(
-        self, interval_s: float = AUTO_DISCOVER_INTERVAL_S
+        self,
+        interval_s: float = AUTO_DISCOVER_INTERVAL_S,
+        *,
+        catch_up: bool = False,
     ) -> AutoDiscoverResult | None:
-        """Run only when the last completed run is older than ``interval_s``.
+        """Run when the last completed run is older than ``interval_s``.
+
+        ``catch_up`` skips the interval: the worker sets it while boards are
+        still waiting for their first crawl, so a launch works through the
+        backlog instead of crawling sixty boards and then idling for an hour.
+        Its own budgets and the shared crawl gate still bound every pass.
 
         On a cold start (no state at all) several passes run back-to-back so
         a fresh install registers the bundled seed list immediately instead
@@ -314,9 +442,9 @@ class AutoDiscoverUseCase:
             if self._warmup_passes() <= 1:
                 return await self.run()
             return await self.run_warmup()
-        if now - last < timedelta(seconds=interval_s):
+        if not catch_up and now - last < timedelta(seconds=interval_s):
             return None
-        return await self.run()
+        return await self.run(catch_up=catch_up)
 
     async def run_warmup(self) -> AutoDiscoverResult:
         """Run back-to-back passes; for cold starts only.
@@ -328,7 +456,10 @@ class AutoDiscoverUseCase:
         """
         passes = self._warmup_passes()
         total = AutoDiscoverResult()
-        bootstrapped = await self._bootstrap_seed()
+        # Serialized with the startup seed import: both decide what is new from
+        # an identity snapshot, so running them together could add a board twice.
+        async with self._run_lock:
+            bootstrapped = await self._bootstrap_seed()
         if bootstrapped:
             total.registered += bootstrapped
         for index in range(passes):
@@ -774,6 +905,166 @@ class AutoDiscoverUseCase:
                 taken.add(ident)
         return taken
 
+    async def import_seed(self) -> int:
+        """Register every board in the bundled seed, before the first crawl.
+
+        It shares the pass lock, so a bootstrap or a live-discovery pass cannot
+        register the same board from a stale identity snapshot at the same
+        time.  A completed sweep is nearly free on later launches.
+        """
+        async with self._run_lock:
+            return await self._import_seed_locked()
+
+    async def _import_seed_locked(self) -> int:
+        """Register every board in the bundled seed, in the background.
+
+        The cold-start bootstrap fills the first minutes with the largest
+        hiring boards; this sweep continues with the rest of the catalogue so
+        a launch reaches the whole seed instead of the slow ``seed_boards_per
+        pass`` tail.  It is idempotent and resumable: known and archived boards
+        are skipped, and a marker recording the manifest total skips a sweep
+        that already finished for the same seed.  Registration is offline; the
+        crawl itself stays bounded by the normal per-pass budgets.
+        """
+        provider: Any = None
+        for entry in self._container.registry.list_by_kind("discovery"):
+            if not self._container.registry.is_enabled(str(entry.manifest.id)):
+                continue
+            if callable(getattr(entry.instance, "seed_candidates", None)):
+                provider = entry.instance
+                break
+        if provider is None:
+            return 0
+        catalog = getattr(provider, "catalog", None)
+        total = int(getattr(catalog, "total", 0) or 0)
+        marker = await self._seed_import_state()
+        if total > 0 and marker.get("total") == total and marker.get("completed_at"):
+            return 0
+        taken = await self._taken_identities()
+        registered = 0
+        seen = 0
+        failed_batches = 0
+        batch: list[SourceConfig] = []
+
+        async def flush() -> None:
+            """Insert one batch in a single transaction."""
+            nonlocal registered, failed_batches
+            if not batch:
+                return
+            try:
+                async with self._container.uow_factory() as uow:
+                    for item in batch:
+                        await uow.sources.add(item)
+                    await uow.commit()
+            except Exception as exc:  # noqa: BLE001 - retry this batch next launch
+                failed_batches += 1
+                self._container.logger.warning(
+                    "discovery.seed_import_batch_failed",
+                    size=len(batch),
+                    error=str(exc),
+                )
+            else:
+                registered += len(batch)
+                self._container.logger.info(
+                    "discovery.seed_import.progress",
+                    registered=registered,
+                    seen=seen,
+                    total=total,
+                )
+            batch.clear()
+            # Let the IPC server, the crawl pass and the UI breathe.
+            await asyncio.sleep(0)
+
+        for source in provider.seed_candidates():
+            seen += 1
+            ident = identity_key(source.ats_hint, source.url, source.tenant_key)
+            if ident is None or ident in taken:
+                continue
+            connector_id = source.ats_hint or self._registry.classify(source.url)
+            connector_id = connector_id or FALLBACK_CONNECTOR_ID
+            postings = source.observed_postings
+            status = None if postings is None else (
+                "hiring" if postings > 0 else "live_empty"
+            )
+            schedule: dict[str, object] = {"interval_s": self._default_interval_s()}
+            if status is not None:
+                schedule["probe_status"] = status
+            if postings is not None:
+                schedule["observed_postings"] = postings
+            batch.append(
+                SourceConfig(
+                    id=f"src_{uuid.uuid4().hex[:12]}",
+                    url=source.url,
+                    kind=(
+                        "ats"
+                        if connector_id != FALLBACK_CONNECTOR_ID
+                        else "career_site"
+                    ),
+                    connector_id=connector_id,
+                    ats_tenant_key=source.tenant_key,
+                    schedule=schedule,
+                )
+            )
+            taken.add(ident)
+            if len(batch) >= 500:
+                await flush()
+        await flush()
+        if failed_batches == 0:
+            await self._save_seed_import_state(
+                {
+                    "total": total,
+                    "registered": registered,
+                    "completed_at": self._container.clock.now().isoformat(),
+                }
+            )
+        self._container.logger.info(
+            "discovery.seed_import.completed",
+            registered=registered,
+            failed_batches=failed_batches,
+            total=total,
+        )
+        return registered
+
+    async def pending_initial_crawls(self, *, max_age_s: float = 60.0) -> int:
+        """Enabled boards that have never had a crawl attempt.
+
+        While this is non-zero the worker runs passes back-to-back instead of
+        waiting for the normal interval, so a freshly imported seed starts
+        producing postings immediately.  Dead boards and the probation queue
+        of verified-empty jobs are excluded: they are crawled on the normal
+        cadence, and counting them would never let catch-up finish.
+        """
+        now = asyncio.get_running_loop().time()
+        if (
+            self._pending_checked_at is not None
+            and now - self._pending_checked_at < max_age_s
+        ):
+            return self._pending_value
+        async with self._container.uow_factory() as uow:
+            started = await uow.crawl_runs.last_started_by_source()
+        pending = 0
+        for source in await self._registry.list_sources(enabled_only=True):
+            if source.id in started:
+                continue
+            if source.schedule.get("probe_status") in {"dead", "live_empty"}:
+                continue
+            if self._registry.connector_for(source.connector_id) is None:
+                continue
+            pending += 1
+        self._pending_value = pending
+        self._pending_checked_at = now
+        return pending
+
+    async def _seed_import_state(self) -> dict[str, object]:
+        async with self._container.uow_factory() as uow:
+            stored = await uow.settings.get(SEED_IMPORT_STATE_KEY) or {}
+        return dict(stored)
+
+    async def _save_seed_import_state(self, state: dict[str, object]) -> None:
+        async with self._container.uow_factory() as uow:
+            await uow.settings.put(SEED_IMPORT_STATE_KEY, dict(state))
+            await uow.commit()
+
     async def _bootstrap_seed(self) -> int:
         """Register the largest hiring seed boards on a cold start.
 
@@ -955,36 +1246,69 @@ class AutoDiscoverUseCase:
 
     # --------------------------------------------------------------------- crawl
 
-    async def _crawl_due(self) -> tuple[int, int]:
+    async def crawl_backlog_batch(
+        self, limit: int = DEFAULT_BACKLOG_BATCH
+    ) -> tuple[int, int]:
+        """Crawl a batch of boards that have never had a crawl attempt.
+
+        The worker calls this back-to-back while a fresh seed is being worked
+        through, so the shared crawl gate stays busy instead of being fed a
+        small bite every few seconds.  Each batch is larger than the gate on
+        purpose: the gate (and the per-origin rate limiter) still decide how
+        many requests actually run, while there is always work queued.
+        """
+        async with self._crawl_lock:
+            budget = max(1, int(limit))
+            due = await self._due_sources(budget, never_started_only=True)
+            selected = [
+                source
+                for source in due
+                if source.schedule.get("probe_status") not in {"dead", "live_empty"}
+                and self._registry.connector_for(source.connector_id) is not None
+            ][:budget]
+            if not selected:
+                return 0, 0
+            outcomes = await asyncio.gather(
+                *(self._crawl_one(source) for source in selected)
+            )
+        crawled = sum(1 for ok in outcomes if ok)
+        return crawled, len(outcomes) - crawled
+
+    async def _crawl_due(self, *, catch_up: bool = False) -> tuple[int, int]:
         """Crawl the sources that are due; returns ``(crawled, failed)``.
 
         Crawls run concurrently up to the shared crawl gate, so a pass of
         sixty boards takes minutes rather than an hour of serial requests.
+        A catch-up pass may start more boards, but never fewer than the
+        configured budget, and the gate still bounds the requests in flight.
         """
         budget = self._setting_int(
             "max_crawl_sources_per_run", DEFAULT_MAX_CRAWL_SOURCES_PER_RUN
         )
+        if catch_up:
+            budget = max(budget, DEFAULT_CATCH_UP_CRAWL_SOURCES_PER_RUN)
         empty_cap = self._setting_int(
             "empty_crawl_sources_per_pass", DEFAULT_EMPTY_CRAWL_SOURCES_PER_PASS
         )
-        # Ask for more than the budget because dead and empty sources are
-        # filtered out below; then take normal sources first and let only a few
-        # empty ones through.
-        due = await self._due_sources(budget + empty_cap + 20)
-        normal: list[SourceConfig] = []
-        empties: list[SourceConfig] = []
-        for source in due:
-            status = source.schedule.get("probe_status")
-            if status == "dead":
-                continue
-            if status == "live_empty":
-                empties.append(source)
-            else:
-                normal.append(source)
-        selected = (normal[:budget] + empties[:empty_cap])[: budget + empty_cap]
-        outcomes = await asyncio.gather(
-            *(self._crawl_one(source) for source in selected)
-        )
+        async with self._crawl_lock:
+            # Ask for more than the budget because dead and empty sources are
+            # filtered out below; then take normal sources first and let only a
+            # few empty ones through.
+            due = await self._due_sources(budget + empty_cap + 20)
+            normal: list[SourceConfig] = []
+            empties: list[SourceConfig] = []
+            for source in due:
+                status = source.schedule.get("probe_status")
+                if status == "dead":
+                    continue
+                if status == "live_empty":
+                    empties.append(source)
+                else:
+                    normal.append(source)
+            selected = (normal[:budget] + empties[:empty_cap])[: budget + empty_cap]
+            outcomes = await asyncio.gather(
+                *(self._crawl_one(source) for source in selected)
+            )
         crawled = sum(1 for ok in outcomes if ok)
         return crawled, len(outcomes) - crawled
 
@@ -1054,7 +1378,9 @@ class AutoDiscoverUseCase:
                 "discovery.crawl_outcome_failed", source_id=source.id, error=str(exc)
             )
 
-    async def _due_sources(self, limit: int) -> list[SourceConfig]:
+    async def _due_sources(
+        self, limit: int, *, never_started_only: bool = False
+    ) -> list[SourceConfig]:
         """Enabled sources whose own interval has elapsed, stalest first."""
         now = _as_utc(self._container.clock.now())
         async with self._container.uow_factory() as uow:
@@ -1062,6 +1388,8 @@ class AutoDiscoverUseCase:
         pending: list[tuple[datetime, SourceConfig]] = []
         for source in await self._registry.list_sources(enabled_only=True):
             started = _parse_ts(last_started.get(source.id))
+            if never_started_only and started is not None:
+                continue
             interval = self._effective_interval_s(source)
             if started is not None and (now - started).total_seconds() < interval:
                 continue
@@ -1369,6 +1697,21 @@ def _source_interval_s(source: SourceConfig) -> float:
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return DEFAULT_CRAWL_INTERVAL_S
     return max(0.0, float(raw))
+
+
+def _rotating_window(
+    items: Sequence[SourceConfig], start: int, limit: int
+) -> list[SourceConfig]:
+    """A bounded, wrapping slice of the registry for per-pass work."""
+    if limit <= 0 or not items:
+        return []
+    if len(items) <= limit:
+        return list(items)
+    position = start % len(items)
+    window = list(items[position : position + limit])
+    if len(window) < limit:
+        window.extend(items[: limit - len(window)])
+    return window
 
 
 def _as_int(value: object, default: int) -> int:

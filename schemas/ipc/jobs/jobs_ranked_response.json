@@ -31,6 +31,10 @@
       "default": 0,
       "type": "integer"
     },
+    "outside_area": {
+      "default": 0,
+      "type": "integer"
+    },
     "needs_attention": {
       "default": 0,
       "type": "integer"

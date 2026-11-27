@@ -121,6 +121,15 @@ class PlaywrightBrowserProvider:
         self._robots_cache[host] = allowed
         return allowed.is_allowed(parsed.path or "/")
 
+    async def close_session(self, session_id: str) -> None:
+        page = self._pages.pop(session_id, None)
+        if page is None:
+            return
+        try:
+            await page.close()
+        except Exception:  # noqa: BLE001 - closing must never fail a request
+            pass
+
     async def close_all(self) -> None:
         for page in list(self._pages.values()):
             try:

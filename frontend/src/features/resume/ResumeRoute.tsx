@@ -3,6 +3,7 @@ import { Tabs } from "../../components/Tabs";
 import { InfoTip } from "../../components/InfoTip";
 import { PageHeader } from "../../components/PageHeader";
 import { Copy } from "../../copy/copy";
+import { announceCountsChanged, useSetupStatus } from "../../hooks/useSetupStatus";
 import { pickResumeFile } from "../../services/filePicker";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
@@ -79,12 +80,108 @@ type ExperienceRow = {
 };
 
 type EducationRow = {
-  institution?: string | null;
-  degree?: string | null;
-  field?: string | null;
-  start_date?: string | null;
-  end_date?: string | null;
+  institution: string;
+  degree: string;
+  field: string;
+  start: string;
+  end: string;
 };
+
+type MatchRunSummary = {
+  available_jobs?: number;
+  considered?: number;
+  scored?: number;
+  reused?: number;
+  truncated?: boolean;
+};
+
+const MONTH_NAMES = [
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "may",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "oct",
+  "nov",
+  "dec",
+];
+
+/** True for the ways a resume writes "still there" as an end date. */
+function isPresent(value: string): boolean {
+  const text = (value ?? "").trim().toLowerCase();
+  return ["present", "current", "now", "today"].includes(text);
+}
+
+/** Read a stored date as an `<input type="month">` value (YYYY-MM). */
+function monthValue(value: string): string {
+  const text = (value ?? "").trim();
+  if (!text || isPresent(text)) return "";
+  let match = /^(\d{4})-(\d{2})$/.exec(text);
+  if (match) return `${match[1]}-${match[2]}`;
+  match = /^(\d{1,2})\/(\d{4})$/.exec(text);
+  if (match) {
+    const month = Number(match[1]);
+    return month >= 1 && month <= 12
+      ? `${match[2]}-${String(month).padStart(2, "0")}`
+      : "";
+  }
+  match = /^([A-Za-z]+)\.?\s*,?\s*(\d{4})$/.exec(text);
+  if (match) {
+    const index = MONTH_NAMES.indexOf(match[1].slice(0, 3).toLowerCase());
+    if (index >= 0) return `${match[2]}-${String(index + 1).padStart(2, "0")}`;
+  }
+  match = /^(\d{4})$/.exec(text);
+  if (match) return `${match[1]}-01`;
+  return "";
+}
+
+/** Keep an unreadable stored date as text instead of silently dropping it. */
+function storedDate(value: string): string {
+  const text = (value ?? "").trim();
+  if (!text) return "";
+  return monthValue(text) || text;
+}
+
+/** Total years across merged ranges, matching the backend's calculation. */
+function yearsFromExperience(rows: ExperienceRow[]): number | null {
+  const now = Date.now();
+  const ranges: Array<[number, number]> = [];
+  for (const row of rows) {
+    const start = monthValue(row.start);
+    if (!/^\d{4}-\d{2}$/.test(start)) continue;
+    const startAt = Date.parse(`${start}-01T00:00:00Z`);
+    let endAt: number;
+    if (isPresent(row.end)) {
+      endAt = now;
+    } else {
+      const end = monthValue(row.end);
+      if (!/^\d{4}-\d{2}$/.test(end)) continue;
+      endAt = Date.parse(`${end}-01T00:00:00Z`);
+    }
+    if (Number.isFinite(startAt) && Number.isFinite(endAt) && endAt >= startAt) {
+      ranges.push([startAt, endAt]);
+    }
+  }
+  if (ranges.length === 0) return null;
+  ranges.sort((left, right) => left[0] - right[0]);
+  let total = 0;
+  let [currentStart, currentEnd] = ranges[0];
+  for (const [start, end] of ranges.slice(1)) {
+    if (start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, end);
+      continue;
+    }
+    total += currentEnd - currentStart;
+    currentStart = start;
+    currentEnd = end;
+  }
+  total += currentEnd - currentStart;
+  return Math.round((total / (365.25 * 86_400_000)) * 10) / 10;
+}
 
 type ItemRow = { name?: string | null; details?: string | null };
 
@@ -132,10 +229,61 @@ function toExperienceRows(value: unknown): ExperienceRow[] {
     return {
       employer: pick("employer"),
       title: pick("title"),
-      start: pick("start", "start_date"),
-      end: pick("end", "end_date"),
+      start: storedDate(pick("start", "start_date")),
+      end: isPresent(pick("end", "end_date"))
+        ? "present"
+        : storedDate(pick("end", "end_date")),
     };
   });
+}
+
+/** Parser entries use start/end; stored rows use start_date/end_date. */
+function toEducationRows(value: unknown): EducationRow[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((raw) => {
+    const row = (raw ?? {}) as Record<string, unknown>;
+    const pick = (...keys: string[]): string => {
+      for (const key of keys) {
+        if (typeof row[key] === "string") return row[key] as string;
+      }
+      return "";
+    };
+    const end = pick("end", "end_date");
+    return {
+      institution: pick("institution"),
+      degree: pick("degree"),
+      field: pick("field"),
+      start: storedDate(pick("start", "start_date")),
+      end: isPresent(end) ? "present" : storedDate(end),
+    };
+  });
+}
+
+function MonthInput({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const normalized = /^\d{4}-\d{2}$/.test(value) ? value : "";
+  const unreadable = value.trim() !== "" && normalized === "";
+  return (
+    <input
+      type={unreadable ? "text" : "month"}
+      className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
+      aria-label={ariaLabel}
+      title={
+        unreadable
+          ? "This stored value is not a month; edit it or pick one from the calendar."
+          : undefined
+      }
+      value={unreadable ? value : normalized}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
 }
 
 function parseMatchResults(rows: unknown[] | undefined): MatchResult[] {
@@ -162,6 +310,7 @@ function parseMatchResults(rows: unknown[] | undefined): MatchResult[] {
 }
 
 export function ResumeRoute() {
+  const setup = useSetupStatus();
   const [tab, setTab] = useState("resume");
   const [filePath, setFilePath] = useState("");
   const [label, setLabel] = useState("Imported");
@@ -172,6 +321,7 @@ export function ResumeRoute() {
   const [versions, setVersions] = useState<ResumeVersionRow[]>([]);
   const [openVersionId, setOpenVersionId] = useState<string | null>(null);
   const [matchResults, setMatchResults] = useState<MatchResult[]>([]);
+  const [matchSummary, setMatchSummary] = useState<MatchRunSummary | null>(null);
   const [weights, setWeights] = useState<Record<string, number>>(DEFAULT_WEIGHTS);
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [skillBusy, setSkillBusy] = useState<string | null>(null);
@@ -225,7 +375,7 @@ export function ResumeRoute() {
         contact?: Record<string, unknown>;
         contact_json?: string;
         experience?: unknown;
-        education?: EducationRow[];
+        education?: unknown;
         certifications?: ItemRow[];
         projects?: ItemRow[];
       } | null | undefined;
@@ -246,7 +396,7 @@ export function ResumeRoute() {
         website: storedContact.website ?? "",
       });
       setExperience(toExperienceRows(stored?.experience));
-      setEducation(Array.isArray(stored?.education) ? stored.education : []);
+      setEducation(toEducationRows(stored?.education));
       setCertifications(Array.isArray(stored?.certifications) ? stored.certifications : []);
       setProjects(Array.isArray(stored?.projects) ? stored.projects : []);
       let overrides: Record<string, unknown> = {};
@@ -303,6 +453,7 @@ export function ResumeRoute() {
       const r = await workerClient.importResume({ file_path: filePath.trim(), label });
       setImportResult(r);
       setFilePath("");
+      announceCountsChanged();
       await loadVersions();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -328,7 +479,8 @@ export function ResumeRoute() {
     setBusy(true);
     setError(null);
     try {
-      await workerClient.runMatching({ profile_id: "default", job_ids: [] });
+      const run = await workerClient.runMatching({ profile_id: "default" });
+      setMatchSummary(run);
       await loadMatching();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -346,7 +498,7 @@ export function ResumeRoute() {
         weights,
       });
       setWeights({ ...DEFAULT_WEIGHTS, ...(response.weights ?? {}) });
-      await workerClient.runMatching({ profile_id: "default", job_ids: [] });
+      await workerClient.runMatching({ profile_id: "default" });
       await loadMatching();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -369,7 +521,8 @@ export function ResumeRoute() {
           skill.keyword_id === keywordId ? { ...skill, status } : skill,
         ),
       );
-      await workerClient.runMatching({ profile_id: "default", job_ids: [] });
+      announceCountsChanged();
+      await workerClient.runMatching({ profile_id: "default" });
       await loadMatching();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -391,7 +544,8 @@ export function ResumeRoute() {
       await workerClient.updateResumeOverrides({ profile_id: "default", overrides });
       setProfileOverrides(overrides);
       setNewSkill("");
-      await workerClient.runMatching({ profile_id: "default", job_ids: [] });
+      announceCountsChanged();
+      await workerClient.runMatching({ profile_id: "default" });
       await loadMatching();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -422,7 +576,8 @@ export function ResumeRoute() {
           },
         },
       });
-      await workerClient.runMatching({ profile_id: "default", job_ids: [] });
+      announceCountsChanged();
+      await workerClient.runMatching({ profile_id: "default" });
       await loadMatching();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -440,9 +595,21 @@ export function ResumeRoute() {
         .map((row) => ({
           employer: row.employer.trim(),
           title: row.title.trim(),
-          start: row.start.trim(),
-          end: row.end.trim(),
+          start: storedDate(row.start),
+          end: isPresent(row.end) ? "present" : storedDate(row.end),
         }));
+      const educationRows = education
+        .filter(
+          (row) => row.institution.trim() || row.degree.trim() || row.field.trim(),
+        )
+        .map((row) => ({
+          institution: row.institution.trim(),
+          degree: row.degree.trim(),
+          field: row.field.trim(),
+          start: storedDate(row.start),
+          end: isPresent(row.end) ? "present" : storedDate(row.end),
+        }));
+      const years = yearsFromExperience(experience);
       const overrides = {
         ...profileOverrides,
         contact: Object.fromEntries(
@@ -450,10 +617,13 @@ export function ResumeRoute() {
         ),
         experience: rows,
         titles: rows.map((row) => row.title).filter(Boolean),
+        education: educationRows,
+        ...(years !== null ? { years_experience_total: years } : {}),
       };
       await workerClient.updateResumeOverrides({ profile_id: "default", overrides });
       setProfileOverrides(overrides);
-      await workerClient.runMatching({ profile_id: "default", job_ids: [] });
+      announceCountsChanged();
+      await workerClient.runMatching({ profile_id: "default" });
       await loadMatching();
     } catch (exc) {
       setError(exc instanceof WorkerError ? `${exc.code}: ${exc.message}` : String(exc));
@@ -468,6 +638,12 @@ export function ResumeRoute() {
     );
   };
 
+  const updateEducation = (index: number, patch: Partial<EducationRow>) => {
+    setEducation((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)),
+    );
+  };
+
   const totalWeight = Object.values(weights).reduce((sum, value) => sum + value, 0) || 1;
 
   return (
@@ -476,6 +652,13 @@ export function ResumeRoute() {
         title="Profile"
         description="Your resume and preferences power fit scores. Everything stays on this computer."
       />
+
+      {setup.checked && setup.missing.length > 0 ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Setup still needed: {setup.missing.join(", ")}. Matching needs a resume,
+          and discovery needs at least one job source.
+        </p>
+      ) : null}
 
       <Tabs
         label="Profile sections"
@@ -658,19 +841,29 @@ export function ResumeRoute() {
                 value={row.title}
                 onChange={(event) => updateExperience(index, { title: event.target.value })}
               />
-              <input
-                className="rounded border border-slate-300 px-2 py-1 text-sm"
-                placeholder="Start (Jan 2020)"
+              <MonthInput
+                ariaLabel={`Experience start ${index + 1}`}
                 value={row.start}
-                onChange={(event) => updateExperience(index, { start: event.target.value })}
+                onChange={(value) => updateExperience(index, { start: value })}
               />
-              <div className="flex gap-2">
-                <input
-                  className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
-                  placeholder="End (Present)"
-                  value={row.end}
-                  onChange={(event) => updateExperience(index, { end: event.target.value })}
+              <div className="flex flex-wrap items-center gap-2">
+                <MonthInput
+                  ariaLabel={`Experience end ${index + 1}`}
+                  value={isPresent(row.end) ? "" : row.end}
+                  onChange={(value) => updateExperience(index, { end: value })}
                 />
+                <label className="flex items-center gap-1 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={isPresent(row.end)}
+                    onChange={(event) =>
+                      updateExperience(index, {
+                        end: event.target.checked ? "present" : "",
+                      })
+                    }
+                  />
+                  Present
+                </label>
                 <button
                   type="button"
                   className="rounded border border-slate-300 px-2 text-xs text-slate-700 hover:bg-slate-50"
@@ -707,19 +900,87 @@ export function ResumeRoute() {
           </button>
         </div>
 
-        {education.length > 0 ? (
-          <div className="mt-4">
-            <h3 className="text-sm font-semibold text-slate-900">Education</h3>
-            <ul className="mt-1 list-disc pl-5 text-xs text-slate-600">
-              {education.map((row, index) => (
-                <li key={index}>
-                  {[row.degree, row.field].filter(Boolean).join(", ")}
-                  {row.institution ? ` — ${row.institution}` : ""}
-                </li>
-              ))}
-            </ul>
+        <div className="mt-4">
+          <h3 className="text-sm font-semibold text-slate-900">Education</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Parsed from your resume and editable here. A saved row overrides the parse for
+            matching; the file itself is never changed.
+          </p>
+          <div className="mt-2 space-y-2">
+            {education.map((row, index) => (
+              <div key={index} className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <input
+                  className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  aria-label={`Education institution ${index + 1}`}
+                  placeholder="Institution"
+                  value={row.institution}
+                  onChange={(event) =>
+                    updateEducation(index, { institution: event.target.value })
+                  }
+                />
+                <input
+                  className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  aria-label={`Education degree ${index + 1}`}
+                  placeholder="Degree (B.S.)"
+                  value={row.degree}
+                  onChange={(event) => updateEducation(index, { degree: event.target.value })}
+                />
+                <input
+                  className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  aria-label={`Education field ${index + 1}`}
+                  placeholder="Field (Computer Science)"
+                  value={row.field}
+                  onChange={(event) => updateEducation(index, { field: event.target.value })}
+                />
+                <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-3">
+                  <MonthInput
+                    ariaLabel={`Education start ${index + 1}`}
+                    value={row.start}
+                    onChange={(value) => updateEducation(index, { start: value })}
+                  />
+                  <MonthInput
+                    ariaLabel={`Education end ${index + 1}`}
+                    value={isPresent(row.end) ? "" : row.end}
+                    onChange={(value) => updateEducation(index, { end: value })}
+                  />
+                  <label className="flex items-center gap-1 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={isPresent(row.end)}
+                      onChange={(event) =>
+                        updateEducation(index, {
+                          end: event.target.checked ? "present" : "",
+                        })
+                      }
+                    />
+                    In progress
+                  </label>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-300 px-2 text-xs text-slate-700 hover:bg-slate-50"
+                    onClick={() =>
+                      setEducation((current) => current.filter((_, i) => i !== index))
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        ) : null}
+          <button
+            type="button"
+            className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            onClick={() =>
+              setEducation((current) => [
+                ...current,
+                { institution: "", degree: "", field: "", start: "", end: "" },
+              ])
+            }
+          >
+            Add education
+          </button>
+        </div>
         {certifications.length > 0 || projects.length > 0 ? (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {certifications.length > 0 ? (
@@ -784,6 +1045,7 @@ export function ResumeRoute() {
                   onChange={(event) => void changeSkillStatus(skill.keyword_id, event.target.value)}
                 >
                   <option value="" disabled>Not set</option>
+                  <option value="extensive_experience">Extensive experience (expert)</option>
                   <option value="have_experience">Have experience</option>
                   <option value="learning">Learning</option>
                   <option value="no_experience">No experience</option>
@@ -947,6 +1209,25 @@ export function ResumeRoute() {
         >
           {busy ? "Matching…" : "Recompute matches"}
         </button>
+        {matchSummary ? (
+          matchSummary.available_jobs === 0 ? (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              Nothing has been collected yet, so there is nothing to score. On Find
+              jobs, use “Find new jobs everywhere”, then recompute.
+            </p>
+          ) : (
+            <p className="mt-3 text-xs text-slate-600">
+              Scored {matchSummary.scored ?? 0} of {matchSummary.considered ?? 0} jobs
+              {matchSummary.reused
+                ? ` (${matchSummary.reused} unchanged and reused)`
+                : ""}
+              .{" "}
+              {matchSummary.truncated
+                ? `The run covers the ${matchSummary.considered ?? 0} most recent of ${matchSummary.available_jobs ?? 0} stored jobs.`
+                : ""}
+            </p>
+          )
+        ) : null}
         {matchResults.length > 0 ? (
           <ul className="mt-3 space-y-3">
             {matchResults.map((result) => (

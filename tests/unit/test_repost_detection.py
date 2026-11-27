@@ -331,6 +331,29 @@ async def test_a_new_skill_in_the_requirements_is_a_material_change():
         assert events[0]["material"] == 1
 
 
+def test_posted_date_reset_compares_naive_and_aware_values_as_utc():
+    from app.application.dedup import _posted_date_reset
+    from app.domain.models.identity import JobFingerprintSet
+
+    def finger(posted_at: str) -> JobFingerprintSet:
+        return JobFingerprintSet(
+            url_key=posted_at,
+            ats_key=None,
+            company_id=None,
+            title_key="engineer",
+            title_family=None,
+            location_key=None,
+            desc_exact_hash="same",
+            posted_at=posted_at,
+        )
+
+    # A date-only value parses naive; the previous row's value may be aware.
+    assert _posted_date_reset(finger("2026-11-01"), finger("2026-11-15T00:00:00Z"))
+    assert not _posted_date_reset(
+        finger("2026-11-15T00:00:00Z"), finger("2026-11-01")
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_later_posting_date_on_identical_content_is_a_reset():
     factory = InMemoryUnitOfWorkFactory()

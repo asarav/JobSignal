@@ -50,6 +50,25 @@ def test_shards_are_written_hiring_first_and_empty_last(tmp_path: Path) -> None:
     assert catalog.bootstrap(5)[-1].url.endswith("/c"), "bootstrap only returns hiring boards"
 
 
+def test_seed_candidates_include_every_board_not_only_the_bootstrap(tmp_path: Path) -> None:
+    write_seed_shards(
+        tmp_path,
+        [
+            _record("ats.greenhouse", "https://boards.greenhouse.io/a", 0),
+            _record("ats.greenhouse", "https://boards.greenhouse.io/b", 40),
+        ],
+        generated_at="2026-11-22T00:00:00Z",
+    )
+    provider = AtsDirectoryProvider.from_directory(tmp_path)
+
+    candidates = list(provider.seed_candidates())
+    assert [source.url for source in candidates] == [
+        "https://boards.greenhouse.io/b",
+        "https://boards.greenhouse.io/a",
+    ]
+    assert [source.observed_postings for source in candidates] == [40, 0]
+
+
 def test_a_shard_is_verified_against_its_manifest_checksum(tmp_path: Path) -> None:
     write_seed_shards(tmp_path, [_record("ats.lever", "https://jobs.lever.co/acme", 3)])
     shard = tmp_path / "boards" / "ats-lever.ndjson"

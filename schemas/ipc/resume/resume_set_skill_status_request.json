@@ -10,6 +10,7 @@
     },
     "status": {
       "enum": [
+        "extensive_experience",
         "have_experience",
         "learning",
         "no_experience",

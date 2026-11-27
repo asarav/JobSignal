@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   listResumeVersions: vi.fn(),
   listSources: vi.fn(),
   listCrawlRuns: vi.fn(),
+  getDiscoveryStatus: vi.fn(),
+  onEvent: vi.fn(),
 }));
 
 vi.mock("../../services/workerClient", () => ({
@@ -81,6 +83,18 @@ beforeEach(() => {
   mocks.listResumeVersions.mockResolvedValue({ versions: [] });
   mocks.listSources.mockResolvedValue({ sources: [] });
   mocks.listCrawlRuns.mockResolvedValue({ runs: [] });
+  mocks.getDiscoveryStatus.mockResolvedValue({
+    running: false,
+    interval_minutes: 60,
+    last_pass_at: null,
+    next_pass_at: null,
+    last_summary: {},
+    sources: 0,
+    enabled_sources: 0,
+    last_crawl_at: null,
+    note: "",
+  });
+  mocks.onEvent.mockResolvedValue(() => undefined);
 });
 
 describe("HomeRoute", () => {

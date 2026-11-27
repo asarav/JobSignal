@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.domain.models.identity import IdentityDecision, JobFingerprintSet
@@ -246,6 +246,12 @@ def _posted_date_reset(
         after = datetime.fromisoformat(incoming.posted_at.replace("Z", "+00:00"))
     except ValueError:
         return False
+    # A date-only posted value parses without a timezone; compare both sides as
+    # UTC instead of letting aware/naive subtraction raise.
+    if before.tzinfo is None:
+        before = before.replace(tzinfo=UTC)
+    if after.tzinfo is None:
+        after = after.replace(tzinfo=UTC)
     return after > before
 
 

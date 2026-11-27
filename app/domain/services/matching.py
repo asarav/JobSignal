@@ -26,9 +26,13 @@ EVIDENCE_STRENGTH = {
     "inferred": 0.5,
     "limited": 0.3,
 }
-#: Spec sec 11.3: user status overrides evidence.
+#: Spec sec 11.3: user status overrides evidence.  An explicit expert-level
+#: answer scores above a plain "have experience", so the extra option changes
+#: coverage rather than being cosmetic; existing have-experience answers are
+#: rescaled from 1.0 to 0.9.
 SKILL_STATUS_STRENGTH = {
-    "have_experience": 1.0,
+    "extensive_experience": 1.0,
+    "have_experience": 0.9,
     "learning": 0.4,
     "no_experience": 0.0,
     "not_relevant": None,

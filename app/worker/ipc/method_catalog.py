@@ -62,6 +62,7 @@ from app.application.dto import (
     CrawlRunListResult,
     DiscoveryRunParams,
     DiscoveryRunResult,
+    DiscoveryStatusResult,
     EmptyParams,
     EndpointVerifyResult,
     FetchUrlParams,
@@ -305,6 +306,7 @@ MILESTONE_METHODS: tuple[MethodSpec, ...] = (
         AutoDiscoverResult,
         timeout_s=DISCOVERY_TIMEOUT_S,
     ),
+    MethodSpec("discovery.get_status", EmptyParams, DiscoveryStatusResult),
     # M7: applications, suppression and user job state
     MethodSpec("applications.create", ApplicationCreateParams, ApplicationInfo),
     MethodSpec("applications.update_status", ApplicationStatusParams, ApplicationInfo),

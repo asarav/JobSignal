@@ -12,6 +12,7 @@ import { SearchPlan } from "../../components/SearchPlan";
 import { nextStep, type WorkflowState } from "../workflow/nextStep";
 import { lastVisitCutoff, readLastVisit } from "../workflow/lastVisit";
 import { CollectJobsAction } from "../workflow/CollectJobsAction";
+import { DiscoveryStatus } from "../discover/DiscoveryStatus";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import type {
   ApplicationsListResponseApplicationSummary,
@@ -204,6 +205,9 @@ export function HomeRoute() {
           }
         />
         <p className="mt-2 text-sm text-slate-600">{stateLine}</p>
+        <div className="mt-1">
+          <DiscoveryStatus compact onJobsChanged={load} />
+        </div>
       </div>
 
       {error ? (

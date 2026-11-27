@@ -14,6 +14,7 @@ import { useToast } from "../../components/Toast";
 import { WorkflowNextStepBar } from "../../components/WorkflowNextStepBar";
 import { workerClient, WorkerError } from "../../services/workerClient";
 import { CollectJobsAction } from "../workflow/CollectJobsAction";
+import { DiscoveryStatus } from "./DiscoveryStatus";
 import { useWorkflowState } from "../workflow/useWorkflowState";
 import { lastVisitCutoff, readLastVisit } from "../workflow/lastVisit";
 import type { SearchProfilesListResponseSearchProfileInfo } from "../../types/generated";
@@ -124,6 +125,10 @@ export function DiscoverRoute() {
     (params.get("sort") as (typeof SORTS)[number]["value"]) || "rank",
   );
   const [includeHidden, setIncludeHidden] = useState(params.get("hidden") === "1");
+  const [includeOutsideArea, setIncludeOutsideArea] = useState(
+    params.get("outside") === "1",
+  );
+  const [outsideArea, setOutsideArea] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(params.get("filters") === "1");
   const [pageSize, setPageSize] = useState(25);
   const [jobs, setJobs] = useState<JobRow[]>([]);
@@ -164,6 +169,7 @@ export function DiscoverRoute() {
     if (policy !== "deprioritize") next.set("policy", policy);
     if (sort !== "rank") next.set("sort", sort);
     if (includeHidden) next.set("hidden", "1");
+    if (includeOutsideArea) next.set("outside", "1");
     if (filtersOpen) next.set("filters", "1");
     if (selectedProfile) next.set("profile", selectedProfile);
     if (preset === "new") next.set("new", "1");
@@ -179,6 +185,7 @@ export function DiscoverRoute() {
     policy,
     sort,
     includeHidden,
+    includeOutsideArea,
     filtersOpen,
     selectedProfile,
     setParams,
@@ -198,6 +205,7 @@ export function DiscoverRoute() {
     setPolicy(params.get("policy") ?? "deprioritize");
     setSort((params.get("sort") as (typeof SORTS)[number]["value"]) || "rank");
     setIncludeHidden(params.get("hidden") === "1");
+    setIncludeOutsideArea(params.get("outside") === "1");
     setFiltersOpen(params.get("filters") === "1");
     setSelectedProfile(params.get("profile") ?? "");
   }, [params]);
@@ -215,6 +223,7 @@ export function DiscoverRoute() {
             sort: preset === "fit" ? "fit" : sort,
             include_hidden: includeHidden,
             include_suppressed: includeHidden,
+            include_out_of_area: includeOutsideArea,
             search_profile_id: selectedProfile || undefined,
             min_fit: preset === "fit" ? 0.75 : undefined,
             risk_classes:
@@ -226,6 +235,7 @@ export function DiscoverRoute() {
           setJobs((current) => (append ? [...current, ...rows] : rows));
           setTotal(result.total ?? rows.length);
           setHiddenCount(result.hidden_by_policy ?? 0);
+          setOutsideArea(result.outside_area ?? 0);
         } else {
           const result = await workerClient.listJobs({
             query: query.trim() || undefined,
@@ -237,6 +247,7 @@ export function DiscoverRoute() {
           setJobs((current) => (append ? [...current, ...rows] : rows));
           setTotal(result.total ?? rows.length);
           setHiddenCount(0);
+          setOutsideArea(0);
         }
         setError(null);
       } catch (exc) {
@@ -255,6 +266,7 @@ export function DiscoverRoute() {
       policy,
       sort,
       includeHidden,
+      includeOutsideArea,
       selectedProfile,
       preset,
       pageSize,
@@ -407,6 +419,8 @@ export function DiscoverRoute() {
         </div>
       ) : null}
 
+      <DiscoveryStatus onJobsChanged={() => void load(0, false)} />
+
       <div className="rounded-lg border border-line bg-white p-3 shadow-card">
         <div className="flex flex-wrap items-center gap-2">
           <input
@@ -539,6 +553,16 @@ export function DiscoverRoute() {
               />
               Include hidden and suppressed
             </label>
+            {view === "best" ? (
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={!includeOutsideArea}
+                  onChange={(event) => setIncludeOutsideArea(!event.target.checked)}
+                />
+                Only my area (from my preferences)
+              </label>
+            ) : null}
             <div className="flex items-end gap-2 sm:col-span-2">
               <input
                 value={profileName}
@@ -600,6 +624,18 @@ export function DiscoverRoute() {
               {view === "best" && hiddenCount > 0
                 ? ` ${hiddenCount} hidden by the selected policy.`
                 : ""}
+              {view === "best" && outsideArea > 0
+                ? ` ${outsideArea} outside your area hidden.`
+                : ""}
+              {view === "best" && outsideArea > 0 && !includeOutsideArea ? (
+                <button
+                  type="button"
+                  className="ml-1 font-medium text-brand-700 underline"
+                  onClick={() => setIncludeOutsideArea(true)}
+                >
+                  Show them
+                </button>
+              ) : null}
             </p>
           </div>
 

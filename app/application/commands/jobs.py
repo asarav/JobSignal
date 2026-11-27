@@ -20,6 +20,7 @@ from app.application.dto import (
 from app.domain.models.common import PortError
 from app.domain.models.enums import RiskClass
 from app.domain.services.company_resolution import canonical_map
+from app.domain.services.location_prefs import job_in_area
 from app.domain.services.ranking import (
     DEFAULT_POLICY,
     explain,
@@ -117,6 +118,13 @@ class JobsUseCase:
                 or (profile.hard_filters if profile else {})
                 or {}
             )
+            # The candidate's own area, independent of which saved search is in
+            # use: a saved search must not silently widen relocation rules.
+            overrides = await uow.resumes.get_overrides("default")
+            raw_preferences = overrides.get("preferences")
+            preferences_for_area = (
+                raw_preferences if isinstance(raw_preferences, dict) else overrides
+            )
             hidden = (
                 []
                 if params.include_suppressed
@@ -200,6 +208,27 @@ class JobsUseCase:
             allowed_risk = set(params.risk_classes)
             visible = [item for item in visible if item.risk_class in allowed_risk]
 
+        # Area is a visibility rule, not only a score: relocation is a hard
+        # preference.  An explicit location filter already narrows the page, and
+        # unknown/missing locations are never treated as a mismatch.
+        outside_area = 0
+        if not params.include_out_of_area and not filters.get("location"):
+            kept: list[JobSummary] = []
+            for item in visible:
+                verdict = job_in_area(
+                    item.location_text, item.workplace_type, preferences_for_area
+                )
+                if verdict is False:
+                    outside_area += 1
+                    continue
+                if verdict is None and preferences_for_area.get("locations"):
+                    item.rank_reasons = [
+                        *item.rank_reasons,
+                        "Location not recorded, so your area preference could not be applied.",
+                    ]
+                kept.append(item)
+            visible = kept
+
         if params.sort == "fit":
             visible.sort(key=lambda item: (-(item.fit_score or -1), item.title))
         elif params.sort == "credibility":
@@ -227,6 +256,7 @@ class JobsUseCase:
             window=len(summaries),
             window_truncated=len(summaries) >= params.window,
             hidden_by_policy=hidden_count,
+            outside_area=outside_area,
             needs_attention=needs_attention,
             new_since=new_since,
         )

@@ -82,6 +82,9 @@ class FakeBrowserProvider:
     async def robots_allowed(self, url: str) -> bool:
         return self._robots_allowed
 
+    async def close_session(self, session_id: str) -> None:
+        return None
+
     async def close_all(self) -> None:
         return None
 

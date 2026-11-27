@@ -18,7 +18,6 @@ from typing import Any, cast
 from app.application.auto_discover import (
     AUTO_DISCOVER_INTERVAL_S,
     AUTO_DISCOVER_POLL_S,
-    AUTO_DISCOVER_STARTUP_DELAY_S,
     AutoDiscoverUseCase,
     effective_crawl_interval_s,
 )
@@ -66,6 +65,11 @@ from app.worker.ipc.handlers.tasks import TasksHandlers
 from app.worker.ipc.transport import NdjsonTransport
 
 MAX_CONCURRENT_REQUESTS = 8
+
+#: Per-source scheduler tasks the worker keeps alive.  The full seed can hold
+#: tens of thousands of boards; passes cover anything beyond this cap, so the
+#: registry cannot turn into tens of thousands of sleeping asyncio tasks.
+MAX_SCHEDULED_SOURCES = 2000
 #: How often due suppressions are lapsed in the background (spec §8.2: daily;
 #: the query is indexed and cheap, so a shorter tick only makes expiry prompt).
 MAINTENANCE_POLL_S = 900.0
@@ -330,6 +334,7 @@ def _build_dispatcher(
 
     dispatcher.register("discovery.run", discovery.discovery.run, params_model=DiscoveryRunParams)
     dispatcher.register("discovery.auto_discover", discovery.discovery.auto_discover, params_model=EmptyParams)
+    dispatcher.register("discovery.get_status", discovery.discovery.get_status, params_model=EmptyParams)
     dispatcher.register(
         "crawl_runs.list",
         discovery.discovery.list_runs,
@@ -555,10 +560,22 @@ class DiscoveryWiring:
         return len(changed)
 
     async def sync_scheduler(self, *, run_immediately: bool = True) -> None:
-        """(Re)schedule every enabled source on its effective (tier) cadence."""
-        enabled = await self.registry.list_sources(enabled_only=True)
+        """(Re)schedule enabled sources on their effective (tier) cadence.
+
+        The per-source loop is a convenience for a hand-full of boards; the
+        discovery passes already crawl every due source.  With a full seed
+        registry (tens of thousands of rows) one task per source would cost
+        more memory than it returns, so scheduling is capped, manual sources
+        first.  Sources beyond the cap are still crawled by the passes.
+        """
+        enabled = list(await self.registry.list_sources(enabled_only=True))
+        manual = [source for source in enabled if "probe_status" not in source.schedule]
+        discovered = [
+            source for source in enabled if "probe_status" in source.schedule
+        ]
+        selected = (manual + discovered)[:MAX_SCHEDULED_SOURCES]
         self.scheduler.schedule_sources(
-            list(enabled),
+            selected,
             lambda source: self.run_source(source.id),
             run_immediately=run_immediately,
             interval_for=self.interval_for,
@@ -637,6 +654,11 @@ async def main() -> int:
         required=True,
         help="Directory for the worker database and logs",
     )
+    parser.add_argument(
+        "--no-background-discovery",
+        action="store_true",
+        help="Do not start discovery/crawling on launch (integration tests)",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir).resolve()
@@ -700,19 +722,16 @@ async def main() -> int:
 
     # Continuous auto-discovery + crawl trigger.  The last completed pass is
     # persisted, so a worker restart resumes the cadence instead of starting a
-    # fresh one.  The first check waits out the startup delay, which keeps app
-    # launch off the network and out of integration test runs.
+    # fresh one.  The normal hourly cadence now only starts after the startup
+    # backlog drain, which keeps the crawl gate busy instead of waiting a full
+    # interval per small batch.
     async def _auto_discover_loop() -> None:
-        await asyncio.sleep(AUTO_DISCOVER_STARTUP_DELAY_S)
         while True:
-            # Re-read each turn: a settings update changes the pause without a
-            # worker restart.
-            interval_s = _auto_discover_interval_s(wiring.config)
             try:
+                # Re-read each turn: a settings update changes the pause
+                # without a worker restart.
+                interval_s = _auto_discover_interval_s(wiring.config)
                 result = await wiring.auto_discover_use_case.run_if_due(interval_s)
-            except Exception as exc:  # noqa: BLE001 - the loop must keep running
-                logger.warning("discovery.auto_discover.failed", error=str(exc))
-            else:
                 if result is not None and (
                     result.registered or result.tiers_changed
                 ):
@@ -720,7 +739,83 @@ async def main() -> int:
                     # scheduler must use; the pass itself already crawled what
                     # was due, so the next run waits a full interval.
                     await wiring.sync_scheduler(run_immediately=False)
+            except Exception as exc:  # noqa: BLE001 - the loop must keep running
+                logger.warning("discovery.auto_discover.failed", error=str(exc))
             await asyncio.sleep(AUTO_DISCOVER_POLL_S)
+
+    async def _seed_sweep() -> None:
+        """Register the rest of the bundled seed in the background at launch."""
+        try:
+            registered = await wiring.auto_discover_use_case.import_seed()
+            if registered:
+                # The new boards are crawled by the backlog drain; the
+                # per-source loops only need to know about them for the normal
+                # cadence.  A scheduler failure must not skip the drain.
+                await wiring.sync_scheduler(run_immediately=False)
+        except Exception as exc:  # noqa: BLE001 - seeding must not kill the worker
+            logger.warning("discovery.seed_import.failed", error=str(exc))
+
+    async def _drain_initial_crawls() -> None:
+        """Crawl never-attempted boards back-to-back until the backlog is empty.
+
+        Each batch is larger than the crawl gate, so the gate always has queued
+        work.  There is no sleep between batches: the gate and per-origin rate
+        limits are the politeness mechanism, not an artificial timer.  Every
+        started board writes a crawl run immediately, so an interrupted run
+        resumes with exactly the remaining boards on the next launch.
+        """
+        attempted = 0
+        while True:
+            try:
+                crawled, failed = (
+                    await wiring.auto_discover_use_case.crawl_backlog_batch()
+                )
+            except Exception as exc:  # noqa: BLE001 - the normal loop still runs
+                logger.warning("discovery.catch_up.failed", error=str(exc))
+                return
+            if crawled + failed == 0:
+                return
+            attempted += crawled + failed
+            logger.info(
+                "discovery.catch_up.progress",
+                attempted=attempted,
+                crawled=crawled,
+                failed=failed,
+            )
+            await asyncio.sleep(0)
+
+    async def _initial_pass() -> None:
+        """One discovery pass at launch (index queries, tiers, first crawl)."""
+        try:
+            await wiring.auto_discover_use_case.run(catch_up=True)
+        except Exception as exc:  # noqa: BLE001 - crawling must still continue
+            logger.warning("discovery.initial_pass.failed", error=str(exc))
+
+    async def _background_discovery() -> None:
+        """Seed, start discovery, and drain the first-crawl backlog.
+
+        The seed sweep takes seconds on a first launch (nothing on later
+        ones) and registers the whole catalogue offline.  Discovery then runs
+        concurrently with the drain: the initial pass looks for new boards and
+        crawls what is due while the drain works through every never-attempted
+        seed board at the crawl gate's throughput.  The normal hourly cadence
+        takes over once the backlog is empty.  No failure here may silently
+        skip the pass loop: each stage handles its own error and the loop is
+        still entered.
+        """
+        await _seed_sweep()
+        pass_task = asyncio.create_task(_initial_pass())
+        try:
+            await _drain_initial_crawls()
+            await pass_task
+        except Exception as exc:  # noqa: BLE001 - the pass loop still runs
+            logger.warning("discovery.startup.failed", error=str(exc))
+        finally:
+            if not pass_task.done():
+                pass_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pass_task
+        await _auto_discover_loop()
 
     async def _maintenance_loop() -> None:
         from app.application.commands.applications import SuppressionsUseCase
@@ -757,7 +852,20 @@ async def main() -> int:
                     logger.warning("intelligence.pass_failed", error=str(exc))
             await asyncio.sleep(MAINTENANCE_POLL_S)
 
-    discovery_task = asyncio.create_task(_auto_discover_loop())
+    if args.no_background_discovery:
+        discovery_task = asyncio.create_task(asyncio.sleep(0))
+    else:
+        discovery_task = asyncio.create_task(_background_discovery())
+
+        def _report_background_exit(task: asyncio.Task[None]) -> None:
+            """A stopped discovery task must be visible, never silent."""
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.error("discovery.background_stopped", error=str(exc))
+
+        discovery_task.add_done_callback(_report_background_exit)
     maintenance_task = asyncio.create_task(_maintenance_loop())
     transport = NdjsonTransport(sys.stdin, sys.stdout)
     writer_task = asyncio.create_task(event_writer(publisher.queue, transport.write))

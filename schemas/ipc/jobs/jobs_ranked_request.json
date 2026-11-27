@@ -56,6 +56,10 @@
       "default": false,
       "type": "boolean"
     },
+    "include_out_of_area": {
+      "default": false,
+      "type": "boolean"
+    },
     "ensure_fit": {
       "default": false,
       "type": "boolean"

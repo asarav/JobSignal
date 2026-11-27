@@ -119,6 +119,12 @@ def test_normalize_job_accepts_epoch_millisecond_posted_at():
     assert job.posted_at == datetime(2026, 1, 1, tzinfo=UTC)
 
 
+def test_date_only_posted_at_is_stored_as_utc():
+    payload = {"posted_at": "2026-01-01"}
+    job = normalize_job(_raw(payload), _source(), company_name="acme", now=NOW)
+    assert job.posted_at == datetime(2026, 1, 1, tzinfo=UTC)
+
+
 def test_workplace_inferred_from_merged_locations_field():
     # Extraction merges fields into a new payload, so the normalizer sees the
     # plural ``locations`` rather than the connector's singular ``location``.

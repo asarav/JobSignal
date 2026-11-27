@@ -7,6 +7,26 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "available_jobs": {
+      "default": 0,
+      "type": "integer"
+    },
+    "considered": {
+      "default": 0,
+      "type": "integer"
+    },
+    "scored": {
+      "default": 0,
+      "type": "integer"
+    },
+    "reused": {
+      "default": 0,
+      "type": "integer"
+    },
+    "truncated": {
+      "default": false,
+      "type": "boolean"
     }
   },
   "title": "MatchingRunResponse",

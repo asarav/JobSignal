@@ -408,6 +408,13 @@
       "response_schema": "schemas/ipc/discovery/discovery_auto_discover_response.json"
     },
     {
+      "method": "discovery.get_status",
+      "long_running": false,
+      "timeout_s": 60.0,
+      "request_schema": "schemas/ipc/discovery/discovery_get_status_request.json",
+      "response_schema": "schemas/ipc/discovery/discovery_get_status_response.json"
+    },
+    {
       "method": "applications.create",
       "long_running": false,
       "timeout_s": 60.0,

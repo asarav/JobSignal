@@ -149,6 +149,7 @@ function callsFor(createdApplicationId: string): Call[] {
     { method: "sources.add", params: { url: "https://example.test/jobs" } },
     { method: "discovery.run", params: { source_id: "preview-src-1" } },
     { method: "discovery.auto_discover", params: {} },
+    { method: "discovery.get_status", params: {} },
     { method: "crawl_runs.list", params: { limit: 1 } },
     { method: "jobs.list", params: { filters: {}, limit: 100 } },
     { method: "jobs.search", params: { query: "engineer", limit: 10 } },
@@ -260,6 +261,6 @@ describe("Preview response schema parity", () => {
 
     expect(errors).toEqual([]);
     expect(seen.size).toBe(calls.length);
-    expect(calls.length).toBe(56);
+    expect(calls.length).toBe(57);
   });
 });

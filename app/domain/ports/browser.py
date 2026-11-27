@@ -37,6 +37,8 @@ class BrowserProvider(Protocol):
         """
         return True
 
+    async def close_session(self, session_id: str) -> None: ...
+
     async def close_all(self) -> None: ...
 
 

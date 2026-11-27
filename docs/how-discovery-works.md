@@ -7,10 +7,18 @@ account and without asking you first.
 
 ## The continuous pass
 
-Discovery keeps running. When one bounded pass finishes, the worker pauses for
-`discovery.auto_discover_interval_minutes` (default 60) and starts the next, so
-new boards and postings keep arriving and every board already registered is
-re-checked as its interval comes due. One pass:
+Discovery starts with the app: the first pass runs as soon as the worker is
+ready, and a startup import registers the whole bundled seed catalogue in the
+background (below), so opening Job Signal begins filling the corpus instead of
+waiting for a grace period. Discovery then keeps running. When one bounded pass
+finishes, the worker pauses for `discovery.auto_discover_interval_minutes`
+(default 60) and starts the next, so new boards and postings keep arriving and
+every board already registered is re-checked as its interval comes due. The startup seed import runs before that first pass, and a
+dedicated backlog drain then crawls every never-attempted board continuously:
+it selects batches larger than the crawl gate and starts the next batch
+immediately, so the gate stays saturated and the per-origin rate limiter (not
+a timer) sets the pace.  The normal cadence starts once the backlog is empty.
+One pass:
 
 1. **Ask every enabled discovery provider for candidate career sites.**
    `discovery.web_index` queries a public web URL index for fixed-host ATS
@@ -67,8 +75,21 @@ re-checked as its interval comes due. One pass:
    `discovery.warmup_passes` (default 5) passes back-to-back, each still bounded
    by the pass caps and the crawl gate. A pass keeps
    `discovery.seed_boards_per_pass` slots for the seed tail so live discovery
-   cannot starve it. The loop stops early once a pass registers nothing new;
-   afterwards the normal continuous cadence takes over.
+   cannot starve it. The loop stops early once a pass registers nothing new.
+9. **The full seed arrives before the first pass.** On launch an import walks
+   the bundled seed and registers every board that is not already known, in
+   batches and without network calls (the whole catalogue takes seconds). Boards the
+   build saw hiring are normal sources; boards it saw empty enter the probation
+   path so they cannot displace hiring boards in a crawl. The sweep is
+   resumable and idempotent, records the manifest total when it completes, and
+   is skipped on later launches for the same seed.  Immediately after it, the
+   worker drains every remaining never-attempted board in batches of 400 with
+   no sleep between batches; the crawl gate (`crawl.global_concurrency`, default
+   8) and the per-origin rate limit decide the actual request rate, so the
+   first sweep runs at the gate's throughput instead of a fixed number of
+   boards per interval.  A board is marked attempted when its crawl starts, so
+   an interrupted drain resumes with the remaining boards on the next launch.
+   The hourly cadence is unchanged for boards that already have a crawl.
 
 Each enabled source is also kept on its own loop at its effective interval —
 narrowed by its relevance tier — so boards and their postings are re-checked,
@@ -233,12 +254,14 @@ advanced) and are validated when saved:
 | `auto_discover_interval_minutes` | `60` | Pause between automatic passes; lower means more continuous coverage |
 | `auto_discover_interval_hours` | — | Legacy fallback used when minutes is not set |
 | `max_new_sources_per_run` | `200` | New sources registered per pass |
-| `max_crawl_sources_per_run` | `60` | Sources crawled per pass (oldest attempt first) |
+| `max_crawl_sources_per_run` | `60` | Sources crawled per steady-state pass (oldest attempt first); the startup drain is bounded by the crawl gate instead |
 | `cursor_step` | `12` | Index slices walked per pass (`discovery.domain_index` walks three of them, because domain queries are slower) |
 | `max_index_slices_per_day` | `288` | Daily ceiling on index slices across every pass; `0` pauses index discovery while crawling continues |
 | `web_index_limit` | `200` | Rows requested per Common Crawl query |
 | `web_index_cdx_limit` | `10000` | Rows requested per CDX query (one whole bucket) |
+| `bootstrap_seed_sources` | `2000` | Largest hiring seed boards registered before the first crawl; the background import covers the rest of the catalogue |
 | `warmup_passes` | `5` | Passes run back-to-back on a cold start (`0`/`1` disables) |
+| `seed_boards_per_pass` | `25` | Seed boards reserved per steady-state pass so live discovery cannot starve the tail |
 | `funnel_enabled` | `true` | Harvest and verify posting URLs; disabling it restores plain due-based crawling |
 | `funnel_postings_per_pass` | `50` | Posting URLs verified per pass (one fetch each) |
 | `tier_intervals_s` | `[3600, 86400, 604800]` | Minimum crawl spacing for hot / warm / cold sources |

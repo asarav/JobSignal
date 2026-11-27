@@ -26,3 +26,6 @@ class DiscoveryHandlers:
 
     async def auto_discover(self, params: EmptyParams) -> dict:
         return (await self._auto_discover.run()).model_dump()
+
+    async def get_status(self, params: EmptyParams) -> dict:
+        return await self._auto_discover.status()

@@ -15,6 +15,11 @@ from app.application.dto import (
 from app.application.sources import SourceRegistry
 from app.domain.models.source import SourceConfig
 
+#: Rows the Sources screen receives.  Discovery can register the whole seed
+#: catalogue, and rendering or transferring every row would make the app slow;
+#: the rest stay active and are reported through ``total``/``truncated``.
+SOURCE_LIST_LIMIT = 500
+
 
 class SourcesUseCase:
     def __init__(self, container: Container, registry: SourceRegistry) -> None:
@@ -23,8 +28,15 @@ class SourcesUseCase:
 
     async def list(self) -> SourceListResult:
         sources = await self._registry.list_sources()
+        # Boards the user added stay visible; discovered seed boards fill the
+        # rest of the page.  Both sets remain enabled and keep being crawled.
+        manual = [s for s in sources if "probe_status" not in s.schedule]
+        discovered = [s for s in sources if "probe_status" in s.schedule]
+        selected = (manual + discovered)[:SOURCE_LIST_LIMIT]
         return SourceListResult(
-            sources=[_to_info(s) for s in sources]
+            sources=[_to_info(s) for s in selected],
+            total=len(sources),
+            truncated=len(selected) < len(sources),
         )
 
     async def add(self, params: SourceAddParams) -> SourceInfo:

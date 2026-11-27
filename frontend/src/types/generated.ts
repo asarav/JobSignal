@@ -584,6 +584,27 @@ export interface DiscoveryAutoDiscoverResponse {
   queued?: number;
 }
 
+// schemas/ipc/discovery/discovery_get_status_request.json
+export interface DiscoveryGetStatusRequest {}
+
+// schemas/ipc/discovery/discovery_get_status_response.json
+/**
+ * What the background discovery loop is doing, without running a pass.
+ */
+export interface DiscoveryGetStatusResponse {
+  running?: boolean;
+  interval_minutes?: number;
+  last_pass_at?: string | null;
+  next_pass_at?: string | null;
+  last_summary?: {
+    [k: string]: unknown;
+  };
+  sources?: number;
+  enabled_sources?: number;
+  last_crawl_at?: string | null;
+  note?: string;
+}
+
 // schemas/ipc/discovery/discovery_run_request.json
 export interface DiscoveryRunRequest {
   source_id: string;
@@ -878,6 +899,7 @@ export interface JobsRankedRequest {
   sort?: "rank" | "fit" | "freshness" | "credibility";
   include_suppressed?: boolean;
   include_hidden?: boolean;
+  include_out_of_area?: boolean;
   ensure_fit?: boolean;
   min_fit?: number | null;
   risk_classes?: string[];
@@ -896,6 +918,7 @@ export interface JobsRankedResponse {
   window?: number;
   window_truncated?: boolean;
   hidden_by_policy?: number;
+  outside_area?: number;
   needs_attention?: number;
   new_since?: number | null;
 }
@@ -1212,6 +1235,11 @@ export interface MatchingRunResponse {
   results?: {
     [k: string]: unknown;
   }[];
+  available_jobs?: number;
+  considered?: number;
+  scored?: number;
+  reused?: number;
+  truncated?: boolean;
 }
 
 // schemas/ipc/matching/matching_update_weights_request.json
@@ -1482,7 +1510,7 @@ export interface ResumeSetActiveResponse {
 export interface ResumeSetSkillStatusRequest {
   profile_id?: string;
   keyword_id: string;
-  status: "have_experience" | "learning" | "no_experience" | "not_relevant";
+  status: "extensive_experience" | "have_experience" | "learning" | "no_experience" | "not_relevant";
 }
 
 // schemas/ipc/resume/resume_set_skill_status_response.json
@@ -1634,6 +1662,8 @@ export interface SourcesListRequest {}
 // schemas/ipc/sources/sources_list_response.json
 export interface SourcesListResponse {
   sources: SourcesListResponseSourceInfo[];
+  total?: number;
+  truncated?: boolean;
 }
 export interface SourcesListResponseSourceInfo {
   source_id: string;

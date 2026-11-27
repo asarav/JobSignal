@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { COUNTS_CHANGED_EVENT } from "../../hooks/useSetupStatus";
 import { workerClient } from "../../services/workerClient";
 import { lastVisitCutoff, readLastVisit } from "./lastVisit";
 import type { WorkflowState } from "./nextStep";
@@ -83,7 +84,14 @@ export function useWorkflowState(): WorkflowSnapshot {
     setRevision((value) => value + 1);
     // Navigation badges share these counts; keep them in step without another
     // full-list fetch on the screen that changed the data.
-    window.dispatchEvent(new Event("jobsignal:counts-changed"));
+    window.dispatchEvent(new Event(COUNTS_CHANGED_EVENT));
+  }, []);
+
+  useEffect(() => {
+    // A resume import or a profile save changes this state without navigating.
+    const onChanged = () => setRevision((value) => value + 1);
+    window.addEventListener(COUNTS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(COUNTS_CHANGED_EVENT, onChanged);
   }, []);
 
   return { ...state, loading, error, refresh };

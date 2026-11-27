@@ -419,7 +419,8 @@ class SqliteJobRepository:
                   posting_status, content_hash, first_seen_at, last_seen_at, fetched_at,
                    updated_at_hint,
                   created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO NOTHING""",
                 (job_id, company_id, title, normalized_title, title_family, description_text, description_html,
                  json.dumps(locations), workplace_type, employment_type, seniority, json.dumps(salary) if salary else None,
                  posted_at, source_id, source_posting_id, canonical_url, json.dumps(original_urls), department,

@@ -408,6 +408,10 @@ class SourceInfo(DTO):
 
 class SourceListResult(DTO):
     sources: list[SourceInfo]
+    #: Every enabled board, including the rows omitted from ``sources`` when the
+    #: full seed has been imported.  The UI shows the bounded page, not 58k rows.
+    total: int = 0
+    truncated: bool = False
 
 
 class SourceAddParams(DTO):
@@ -582,6 +586,10 @@ class RankedJobParams(DTO):
     sort: Literal["rank", "fit", "freshness", "credibility"] = "rank"
     include_suppressed: bool = False
     include_hidden: bool = False
+    #: Reveal roles outside the candidate's stated area.  The default withholds
+    #: a posting whose known location conflicts with the profile and relocation
+    #: is off; unknown locations are always shown.
+    include_out_of_area: bool = False
     #: Compute missing fit for the ranking window (bounded).
     ensure_fit: bool = False
     #: Optional display filters applied after fit/risk are resolved.
@@ -603,6 +611,8 @@ class RankedJobListResult(DTO):
     window: int = 0
     window_truncated: bool = False
     hidden_by_policy: int = 0
+    #: Rows withheld because their known location is outside the profile's area.
+    outside_area: int = 0
     #: Whole-corpus counts, not the paged/ranked slice (dashboard headline).
     needs_attention: int = 0
     new_since: int | None = None
@@ -661,6 +671,12 @@ class ResumeProfileResult(DTO):
 
 class MatchingRunResult(DTO):
     results: list[dict[str, Any]] = Field(default_factory=list)
+    #: What the run considered, so "nothing happened" is never the only answer.
+    available_jobs: int = 0
+    considered: int = 0
+    scored: int = 0
+    reused: int = 0
+    truncated: bool = False
 
 class MatchingResultsResult(DTO):
     results: list[dict[str, Any]] = Field(default_factory=list)
@@ -727,7 +743,13 @@ class MatchingWeightHistoryResult(DTO):
 class ResumeSkillStatusParams(DTO):
     profile_id: str = "default"
     keyword_id: str
-    status: Literal["have_experience", "learning", "no_experience", "not_relevant"]
+    status: Literal[
+        "extensive_experience",
+        "have_experience",
+        "learning",
+        "no_experience",
+        "not_relevant",
+    ]
 
 
 class ResumeParseParams(DTO):
@@ -930,6 +952,20 @@ class AutoDiscoverResult(DTO):
     empty: int = 0
     #: Candidates carried into the next pass instead of being dropped.
     queued: int = 0
+
+
+class DiscoveryStatusResult(DTO):
+    """What the background discovery loop is doing, without running a pass."""
+
+    running: bool = False
+    interval_minutes: int = 60
+    last_pass_at: str | None = None
+    next_pass_at: str | None = None
+    last_summary: dict[str, Any] = Field(default_factory=dict)
+    sources: int = 0
+    enabled_sources: int = 0
+    last_crawl_at: str | None = None
+    note: str = ""
 
 
 def task_summary(task: Any) -> TaskSummary:

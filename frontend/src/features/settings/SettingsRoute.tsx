@@ -91,6 +91,8 @@ export function SettingsRoute() {
   const [settings, setSettings] = useState<SettingsGetResponse | null>(null);
   const [plugins, setPlugins] = useState<PluginsListResponsePluginInfo[]>([]);
   const [sources, setSources] = useState<SourcesListResponseSourceInfo[]>([]);
+  const [sourceTotal, setSourceTotal] = useState(0);
+  const [sourcesTruncated, setSourcesTruncated] = useState(false);
   const [intervals, setIntervals] = useState<Record<string, string>>({});
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [snippetRows, setSnippetRows] = useState<Array<{ question: string; answer: string }>>(
@@ -122,6 +124,8 @@ export function SettingsRoute() {
       setSettings(nextSettings);
       setPlugins(nextPlugins.plugins);
       setSources(nextSources.sources);
+      setSourceTotal(nextSources.total ?? nextSources.sources.length);
+      setSourcesTruncated(nextSources.truncated ?? false);
       setAnswers({
         ...((nextSettings.config as SettingsConfig).autofill?.answers ?? {}),
       });
@@ -425,6 +429,14 @@ export function SettingsRoute() {
                 No sources configured yet. Add one above to start collecting jobs.
               </p>
             ) : (
+              <>
+              {sourcesTruncated ? (
+                <p className="mt-3 text-xs text-slate-500">
+                  Showing {sources.length} of {sourceTotal} boards. Discovery keeps
+                  the rest enabled and crawls them; the list shows your own boards
+                  first.
+                </p>
+              ) : null}
               <ul className="mt-3 divide-y divide-slate-100">
                 {sources.map((source) => (
                   <li
@@ -489,6 +501,7 @@ export function SettingsRoute() {
                   </li>
                 ))}
               </ul>
+              </>
             )}
           </section>
 

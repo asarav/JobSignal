@@ -5,6 +5,7 @@ import { Navigation } from "./Navigation";
 
 const mocks = vi.hoisted(() => ({
   listResumeVersions: vi.fn(),
+  listSources: vi.fn(),
   listSavedJobs: vi.fn(),
   listApplications: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock("../services/workerClient", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.listResumeVersions.mockResolvedValue({ versions: [] });
+  mocks.listSources.mockResolvedValue({ sources: [] });
   mocks.listSavedJobs.mockResolvedValue({ jobs: [], total: 0 });
   mocks.listApplications.mockResolvedValue({ applications: [], total: 0, summary: {} });
 });
@@ -52,7 +54,9 @@ describe("Navigation", () => {
       "/discover",
     );
     expect(screen.queryByRole("link", { name: "Search Profiles" })).toBeNull();
-    expect(await screen.findByText("Setup needed")).toBeTruthy();
+    expect(
+      await screen.findByText("Setup needed: import a resume, add a job source"),
+    ).toBeTruthy();
   });
 
   it("shows ready and follow-up counts as badges", async () => {
@@ -70,6 +74,7 @@ describe("Navigation", () => {
 
   it("reports a ready profile and collapses Insights", async () => {
     mocks.listResumeVersions.mockResolvedValue({ versions: [{ id: "v1" }] });
+    mocks.listSources.mockResolvedValue({ sources: [{ source_id: "s1" }] });
     renderNav("/resume");
 
     expect(await screen.findByText("Ready")).toBeTruthy();

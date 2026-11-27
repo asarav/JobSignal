@@ -259,9 +259,12 @@ def parse_posted_at(payload: Mapping[str, Any] | None) -> datetime | None:
                 continue
         if isinstance(value, str) and value:
             try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             except ValueError:
                 continue
+            # Date-only values parse naive; store every posting date as UTC so
+            # later comparisons never mix naive and aware datetimes.
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
 
 

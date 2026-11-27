@@ -95,6 +95,13 @@ def parse_date_token(tok: str) -> date | None:
             return date(int(m.group(2)), int(m.group(1)), 1)
         except ValueError:
             return None
+    # ISO month from the profile editor (``2025-08``).
+    m = re.match(r"(\d{4})-(\d{1,2})$", tok)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), 1)
+        except ValueError:
+            return None
     # "Month Year" or "Month, Year"
     m = re.match(r"([a-z]+)\s*,?\s*(\d{2,4})", tok)
     if m:
@@ -279,6 +286,22 @@ def _clean_piece(text: str) -> str | None:
     return cleaned or None
 
 
+def _clean_education_piece(text: str) -> str:
+    """Strip bullets and separators from an education line.
+
+    Resume education lines often end with a decorative dash or bullet
+    (``M.S. of Technology — •``).  Left in, that punctuation became the degree,
+    field or institution value.
+    """
+    cleaned = (text or "").replace("\u2022", " ").replace("\u00b7", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Drop leading separators left by a degree abbreviation, but keep a
+    # trailing period so "B.S." and "Japanese Language." stay intact.
+    cleaned = cleaned.lstrip(" \t,;|.–—-)")
+    cleaned = cleaned.strip(" \t,;|–—")
+    return cleaned
+
+
 def parse_experience_header(header: str) -> tuple[str | None, str | None]:
     """Split an experience header into ``(employer, title)`` (spec sec 10.2).
 
@@ -326,31 +349,51 @@ def extract_education_entries(text: str) -> list[dict[str, str]]:
                     fill_next["start"] = dates.group("start")
                     fill_next["end"] = dates.group("end")
                 if not fill_next.get("institution"):
-                    fill_next["institution"] = _clean_piece(_DATE_RE.sub(" ", raw)) or ""
+                    candidate = _clean_education_piece(_DATE_RE.sub(" ", raw))
+                    # A bullet of coursework is not an institution.
+                    if candidate and not candidate.startswith("-"):
+                        fill_next["institution"] = candidate
                 fill_next = None
                 continue
-            pending.append(raw)
-            pending = pending[-2:]
+            candidate = _clean_education_piece(raw)
+            if candidate:
+                pending.append(candidate)
+                pending = pending[-2:]
             continue
         dates = _DATE_RE.search(raw)
         stripped = _DATE_RE.sub(" ", raw)
         degree = degree_match.group(0)
+        # The abbreviation pattern stops before "B.S."'s final period.
+        if stripped[degree_match.end() : degree_match.end() + 1] == ".":
+            degree = f"{degree}."
         of_match = _DEGREE_OF_RE.search(stripped[degree_match.end() :])
         if of_match:
             degree = f"{degree} of {of_match.group(1)}"
-        field_match = _FIELD_RE.search(stripped)
-        trailing = _clean_piece(stripped[degree_match.end() :])
+        # A dash or "at" separates the degree/field from the institution; it is
+        # not part of either value.
+        segments = re.split(
+            r"\s+[–—-]\s+|\s+at\s+", stripped[degree_match.end() :], maxsplit=1
+        )
+        field_part = segments[0] if segments else ""
+        institution_hint = (
+            _clean_education_piece(segments[1]) if len(segments) > 1 else ""
+        )
+        field_match = _FIELD_RE.search(field_part)
         if field_match is not None:
-            field = _clean_piece(field_match.group(1)) or ""
-        elif trailing and not of_match and not trailing.lower().startswith("of "):
-            field = trailing
+            field = _clean_education_piece(field_match.group(1))
         else:
-            field = ""
-        before = _clean_piece(stripped[: degree_match.start()])
-        institution = before or (_clean_piece(pending[-1]) if pending else None)
+            trailing = _clean_education_piece(field_part)
+            if trailing and not of_match and not trailing.lower().startswith("of "):
+                field = trailing
+            else:
+                field = ""
+        before = _clean_education_piece(stripped[: degree_match.start()])
+        institution = before or institution_hint or (
+            pending[-1] if pending else ""
+        )
         entry = {
             "institution": institution or "",
-            "degree": _clean_piece(degree) or "",
+            "degree": _clean_education_piece(degree) or "",
             "field": field,
             "start": dates.group("start") if dates else "",
             "end": dates.group("end") if dates else "",

@@ -1,0 +1,65 @@
+{
+  "additionalProperties": false,
+  "description": "What the background discovery loop is doing, without running a pass.",
+  "properties": {
+    "running": {
+      "default": false,
+      "type": "boolean"
+    },
+    "interval_minutes": {
+      "default": 60,
+      "type": "integer"
+    },
+    "last_pass_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "next_pass_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "last_summary": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "sources": {
+      "default": 0,
+      "type": "integer"
+    },
+    "enabled_sources": {
+      "default": 0,
+      "type": "integer"
+    },
+    "last_crawl_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "note": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "DiscoveryGetStatusResponse",
+  "type": "object"
+}

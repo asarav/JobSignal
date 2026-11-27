@@ -21,9 +21,10 @@ class MatchingHandlers:
         self._container = container
 
     async def run(self, params: MatchingRunParams) -> dict:
-        job_ids = params.job_ids if params.job_ids else None
-        results = await self._matching.run(params.profile_id, job_ids)
-        return {"results": results}
+        results, summary = await self._matching.run_with_summary(
+            params.profile_id, params.job_ids
+        )
+        return {"results": results, **summary}
 
     async def get_results(self, params: ResumeProfileParams) -> dict:
         return await self._matching.get_results(params.profile_id)

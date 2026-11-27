@@ -118,6 +118,7 @@ class SkillEvidence(StrEnum):
 
 
 class UserSkillStatus(StrEnum):
+    EXTENSIVE_EXPERIENCE = "extensive_experience"
     HAVE_EXPERIENCE = "have_experience"
     LEARNING = "learning"
     NO_EXPERIENCE = "no_experience"

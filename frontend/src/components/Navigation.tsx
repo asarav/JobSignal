@@ -7,6 +7,7 @@ import {
   type NavigationItem,
 } from "../routes/routes";
 import { workerClient } from "../services/workerClient";
+import { useSetupStatus } from "../hooks/useSetupStatus";
 import { useWorkerStore } from "../stores/workerStore";
 import { StatusPill } from "./StatusPill";
 
@@ -55,22 +56,21 @@ export function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   const status = useWorkerStore((state) => state.status);
   const isPreview = useWorkerStore((state) => state.isPreview);
   const [insightsOpen, setInsightsOpen] = useState(true);
-  const [hasResume, setHasResume] = useState<boolean | null>(null);
   const [readyToApply, setReadyToApply] = useState(0);
   const [followUps, setFollowUps] = useState(0);
+  const setup = useSetupStatus();
 
   const loadCounts = useCallback(async () => {
     try {
-      const [resume, saved, applications] = await Promise.all([
-        workerClient.listResumeVersions(),
+      const [saved, applications] = await Promise.all([
         workerClient.listSavedJobs({ view: "ready", limit: 1 }),
         workerClient.listApplications({ limit: 1 }),
       ]);
-      setHasResume((resume.versions ?? []).length > 0);
       setReadyToApply(saved.total ?? saved.jobs.length);
       setFollowUps(applications.summary?.follow_up ?? 0);
     } catch {
-      setHasResume(null);
+      setReadyToApply(0);
+      setFollowUps(0);
     }
   }, []);
 
@@ -88,6 +88,26 @@ export function Navigation({ onNavigate }: { onNavigate?: () => void }) {
     "/saved": readyToApply,
     "/applications": followUps,
   };
+
+  // Name the missing step instead of a bare "Setup needed"; a checked, complete
+  // profile says Ready even when a crawl has not produced matches yet.
+  const setupLabel = !setup.checked
+    ? {
+        text: "Resume not checked",
+        tone: "text-slate-400",
+        title: "The worker has not answered the resume list yet.",
+      }
+    : setup.missing.length === 0
+      ? {
+          text: "Ready",
+          tone: "text-emerald-400",
+          title: "A resume and at least one job source are set up.",
+        }
+      : {
+          text: `Setup needed: ${setup.missing.join(", ")}`,
+          tone: "text-amber-300",
+          title: `Still missing: ${setup.missing.join(", ")}.`,
+        };
 
   return (
     <div className="flex h-full flex-col bg-ink-900 text-slate-200">
@@ -138,15 +158,10 @@ export function Navigation({ onNavigate }: { onNavigate?: () => void }) {
                     />
                     {item.to === "/resume" ? (
                       <span
-                        className={`ml-3 block text-[11px] ${
-                          hasResume ? "text-emerald-400" : "text-amber-300"
-                        }`}
+                        title={setupLabel.title}
+                        className={`ml-3 block text-[11px] ${setupLabel.tone}`}
                       >
-                        {hasResume === null
-                          ? "Resume not checked"
-                          : hasResume
-                            ? "Ready"
-                            : "Setup needed"}
+                        {setupLabel.text}
                       </span>
                     ) : null}
                   </li>

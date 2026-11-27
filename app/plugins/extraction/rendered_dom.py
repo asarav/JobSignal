@@ -41,7 +41,12 @@ class RenderedDomStrategy(StrategyBase):
         self._browser = browser
 
     def can_attempt(self, target: ExtractionTarget) -> bool:
-        return self._browser is not None and bool(target.url)
+        if self._browser is None or not target.url:
+            return False
+        # A connector that already returned the posting's markup has the real
+        # content: rendering the same URL again would only add a browser round
+        # trip (and, with several crawls in flight, contend for the browser).
+        return not (target.html and target.html.strip())
 
     async def extract(
         self, target: ExtractionTarget, ctx: ExecutionContext
@@ -70,7 +75,10 @@ class RenderedDomStrategy(StrategyBase):
         try:
             html = await self._browser.rendered_html(session_id)
         finally:
-            await self._browser.close_all()
+            # Close only this session: concurrent extractions share the
+            # provider, and closing the whole browser would abort them with
+            # "Target page, context or browser has been closed".
+            await self._browser.close_session(session_id)
         if not html:
             return Err(
                 PortError(

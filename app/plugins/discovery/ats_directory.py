@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -177,6 +177,20 @@ class AtsDirectoryProvider:
         return [
             _discovered(record, observed_at) for record in self._catalog.bootstrap(limit)
         ]
+
+    def seed_candidates(self) -> Iterator[DiscoveredSource]:
+        """Every board in the seed, for the startup import sweep.
+
+        Unlike ``bootstrap_candidates`` this does not stop at a limit and does
+        not drop verified-empty boards: the caller registers them with a
+        probation status so they cannot displace hiring boards in a crawl.
+        """
+        if self._catalog is None:
+            yield from self._legacy_sources()
+            return
+        observed_at = datetime.now(UTC)
+        for record in self._catalog.records():
+            yield _discovered(record, observed_at)
 
     def _legacy_sources(self) -> list[DiscoveredSource]:
         observed_at = datetime.now(UTC)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,6 +34,10 @@ _STRATEGIES = [
 ]
 _MODEL = WeightedScoringModel()
 
+#: Jobs one unbounded run scores, newest first.  The corpus can be much larger;
+#: the summary reports the truncation instead of implying full coverage.
+MATCHING_JOB_WINDOW = 200
+
 
 class MatchingUseCase:
     def __init__(self, container: Container) -> None:
@@ -42,6 +46,20 @@ class MatchingUseCase:
     async def run(
         self, profile_id: str = "default", job_ids: list[str] | None = None
     ) -> list[dict[str, Any]]:
+        """Score jobs and return the per-job results."""
+        results, _summary = await self.run_with_summary(profile_id, job_ids)
+        return results
+
+    async def run_with_summary(
+        self, profile_id: str = "default", job_ids: list[str] | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Score jobs and report what was considered.
+
+        An empty or omitted ``job_ids`` means "everything collected": the UI
+        sends an empty list for its Recompute button, and an empty list must
+        never be read as an explicit empty target set.
+        """
+        explicit = [str(job_id) for job_id in (job_ids or []) if job_id]
         async with self._container.uow_factory() as uow:
             profile = await uow.resumes.get_profile(profile_id)
             version_id = str(profile.get("active_resume_version_id") or "") if profile else ""
@@ -81,16 +99,23 @@ class MatchingUseCase:
                 model_id=_MODEL.id, model_version=_MODEL.version, weights=weights
             )
 
-            if job_ids is None:
-                jobs = await uow.jobs.list(limit=200)
-            else:
+            jobs: Sequence[Mapping[str, object]]
+            if explicit:
                 jobs = []
-                for job_id in job_ids:
+                for job_id in explicit:
                     job = await uow.jobs.get(job_id)
                     if job:
                         jobs.append(job)
+                available = len(jobs)
+                truncated = False
+            else:
+                jobs = await uow.jobs.list(limit=MATCHING_JOB_WINDOW)
+                available = await uow.jobs.count()
+                truncated = available > len(jobs)
 
             results: list[dict[str, Any]] = []
+            scored = 0
+            reused = 0
             for job in jobs:
                 job_dict = dict(job)
                 job_id = str(job_dict.get("id"))
@@ -98,6 +123,7 @@ class MatchingUseCase:
                 existing = await uow.matches.find_result(profile_id, job_id, input_hash)
                 if existing is not None:
                     results.append(_summary(existing, reused=True))
+                    reused += 1
                     continue
                 match = _MODEL.evaluate(cand, job_dict, None, _STRATEGIES, cfg)
                 await uow.matches.delete_results(profile_id, job_id)
@@ -148,8 +174,16 @@ class MatchingUseCase:
                         "reused": False,
                     }
                 )
+                scored += 1
             await uow.commit()
-        return results
+        summary = {
+            "available_jobs": available,
+            "considered": len(jobs),
+            "scored": scored,
+            "reused": reused,
+            "truncated": truncated,
+        }
+        return results, summary
 
     async def get_results(
         self, profile_id: str = "default", limit: int = 50
