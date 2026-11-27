@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app.infrastructure.persistence.sqlite.adoption import app_data_roots
 from app.infrastructure.persistence.sqlite.migrator import migrate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -464,10 +465,29 @@ async def test_resume_parse_skill_status_and_keywords(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_first_launch_adopts_the_previous_installs_database(tmp_path):
+async def test_first_launch_adopts_the_previous_installs_database(
+    tmp_path, monkeypatch
+):
     """A renamed identifier or a fresh install picks up the rows on disk."""
-    appdata = tmp_path / "appdata"
-    legacy_worker = appdata / "com.jobsignal.app" / "worker"
+    # Changing APPDATA also moves Python's user site-packages on Windows, which
+    # is where this environment installs third-party packages; read it before
+    # the environment changes and keep it on the child's path.
+    user_site = site.getusersitepackages()
+    python_path = os.pathsep.join(
+        [str(ROOT), *([user_site] if Path(user_site).is_dir() else [])]
+    )
+    located = {
+        "APPDATA": str(tmp_path / "appdata"),
+        "XDG_DATA_HOME": str(tmp_path / "appdata"),
+        "HOME": str(tmp_path / "home"),
+    }
+    for key, value in located.items():
+        monkeypatch.setenv(key, value)
+    # Ask the worker's own helper where its app data root is, so the test
+    # follows the platform layout (APPDATA on Windows, Application Support on
+    # macOS, XDG_DATA_HOME on Linux) instead of assuming one of them.
+    root = app_data_roots()[0]
+    legacy_worker = root / "com.jobsignal.app" / "worker"
     legacy_worker.mkdir(parents=True)
     legacy_db = legacy_worker / "lodestar.sqlite"
     await migrate(legacy_db)
@@ -479,22 +499,10 @@ async def test_first_launch_adopts_the_previous_installs_database(tmp_path):
     finally:
         conn.close()
 
-    target = appdata / "com.jobsignal.desktop" / "worker"
-    # Changing APPDATA also moves Python's user site-packages on Windows, which
-    # is where this environment installs third-party packages; keep it on the
-    # path so the child can still import the worker's dependencies.
-    user_site = site.getusersitepackages()
-    python_path = os.pathsep.join(
-        [str(ROOT), *([user_site] if Path(user_site).is_dir() else [])]
-    )
+    target = root / "com.jobsignal.desktop" / "worker"
     worker = await spawn_worker(
         target,
-        env_extra={
-            "APPDATA": str(appdata),
-            "XDG_DATA_HOME": str(appdata),
-            "HOME": str(appdata / "home"),
-            "PYTHONPATH": python_path,
-        },
+        env_extra={**located, "PYTHONPATH": python_path},
     )
     try:
         health = await worker.request("system.health")

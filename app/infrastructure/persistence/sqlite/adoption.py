@@ -86,19 +86,24 @@ class _Candidate:
     identifier: str
 
 
-def app_data_roots() -> list[Path]:
-    """The per-user application-data root for this platform."""
+def app_data_roots(home: Path | None = None) -> list[Path]:
+    """The per-user application-data root for this platform.
+
+    ``home`` exists so the layout of a platform that is not the current one can
+    be pinned by a test; callers pass nothing and get this user's home.
+    """
+    home = home or Path.home()
     if sys.platform == "win32":
         base = os.environ.get("APPDATA")
         if base:
             return [Path(base)]
-        return [Path.home() / "AppData" / "Roaming"]
+        return [home / "AppData" / "Roaming"]
     if sys.platform == "darwin":
-        return [Path.home() / "Library" / "Application Support"]
+        return [home / "Library" / "Application Support"]
     base = os.environ.get("XDG_DATA_HOME")
     if base:
         return [Path(base)]
-    return [Path.home() / ".local" / "share"]
+    return [home / ".local" / "share"]
 
 
 def installed_data_dir(

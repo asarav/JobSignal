@@ -179,6 +179,35 @@ async def test_an_explicit_data_directory_disables_adoption(tmp_path) -> None:
     assert legacy.is_file()
 
 
+def test_windows_root_is_appdata(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(adoption.sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    assert adoption.app_data_roots(home=tmp_path) == [tmp_path / "roaming"]
+
+
+def test_macos_root_is_application_support(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(adoption.sys, "platform", "darwin")
+    roots = adoption.app_data_roots(home=tmp_path)
+    assert roots == [tmp_path / "Library" / "Application Support"]
+    assert adoption.installed_data_dir(roots) == (
+        tmp_path
+        / "Library"
+        / "Application Support"
+        / adoption.CURRENT_IDENTIFIER
+        / adoption.WORKER_SUBDIR
+    ).resolve()
+
+
+def test_linux_root_follows_xdg_data_home(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(adoption.sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert adoption.app_data_roots(home=tmp_path) == [tmp_path / "xdg"]
+    monkeypatch.delenv("XDG_DATA_HOME")
+    assert adoption.app_data_roots(home=tmp_path) == [
+        tmp_path / ".local" / "share"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_prefers_the_most_recently_written_previous_install(tmp_path) -> None:
     roots = [tmp_path]
