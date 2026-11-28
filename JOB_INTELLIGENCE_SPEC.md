@@ -1481,16 +1481,25 @@ Default behavior: fill the **current step only**, then wait. A `MutationObserver
 
 ### 14.1 Database settings
 
+Once, when the database file is opened for migration:
+
+```sql
+PRAGMA journal_mode = WAL;
+```
+
 On every connection:
 
 ```sql
-PRAGMA busy_timeout = 30000;   -- a writer waits for the lock instead of failing
-PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 PRAGMA synchronous = NORMAL;
 PRAGMA temp_store = MEMORY;
 PRAGMA cache_size = -20000;       -- ~20 MB
 ```
+
+WAL is a property of the file, so it is switched once instead of per
+connection: re-issuing the switch needs a database-wide lock and reports
+`database is locked` immediately, without waiting out `busy_timeout`.
 
 - **Single writer** connection (serialized via an async queue) + a small pool of read connections (default 4).
 - Migrations: forward-only numbered SQL files `NNNN_description.sql` in `infrastructure/persistence/sqlite/migrations/`, tracked in `schema_migrations(version, name, applied_at, checksum)`. Each runs in a transaction. Before migrating an existing DB, create a timestamped backup (`.bak` via SQLite online backup API). Migration tests apply all migrations to an empty DB and to fixtures of prior versions.

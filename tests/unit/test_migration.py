@@ -2,8 +2,6 @@
 
 import asyncio
 import sqlite3
-import threading
-import time
 
 import aiosqlite
 from app.infrastructure.persistence.sqlite.migrator import (
@@ -151,60 +149,44 @@ def test_fts5_query_empty_and_whitespace():
     assert SqliteJobRepository._fts5_query("   ") == ""
 
 
-def test_busy_timeout_is_set_before_the_journal_mode_switch():
-    """The wait has to be in place before anything else asks for a lock."""
-    assert PRAGMAS[0] == "PRAGMA busy_timeout = 30000;"
+def test_pragmas_do_not_switch_the_journal_mode():
+    """The switch needs a database-wide lock, so it cannot run per connection."""
+    assert not any("journal_mode" in pragma for pragma in PRAGMAS)
 
 
-def test_a_writer_waits_out_a_locked_database(tmp_path):
-    """A writer queues behind the lock instead of failing on it.
-
-    A first launch writes from the seed import, the discovery pass and the
-    backlog drain at once, one connection per unit of work.  SQLite allows one
-    writer, so the others must wait: five seconds was short enough for a crawl
-    to give up with "database is locked" on a fresh install.
-    """
-    db = tmp_path / "busy.sqlite"
+def test_migrate_leaves_the_database_in_wal(tmp_path):
+    """WAL is switched once, while migration is the only connection open."""
+    db = tmp_path / "wal.sqlite"
     asyncio.run(migrate(db))
-
-    async def prepare() -> None:
-        async with aiosqlite.connect(db) as conn:
-            await conn.execute("CREATE TABLE busy_probe(id INTEGER PRIMARY KEY)")
-            await conn.commit()
-
-    asyncio.run(prepare())
-
-    def hold_the_write_lock() -> None:
-        conn = sqlite3.connect(db, timeout=30)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute("INSERT INTO busy_probe VALUES (1)")
-            time.sleep(1.0)
-            conn.commit()
-        finally:
-            conn.close()
-
-    async def write_behind_it() -> int:
-        async with aiosqlite.connect(db) as conn:
-            await apply_pragmas(conn)
-            await conn.execute("INSERT INTO busy_probe VALUES (2)")
-            await conn.commit()
-            cur = await conn.execute("PRAGMA busy_timeout")
-            row = await cur.fetchone()
-            return int(row[0]) if row else 0
-
-    holder = threading.Thread(target=hold_the_write_lock)
-    holder.start()
+    conn = sqlite3.connect(db)
     try:
-        time.sleep(0.2)
-        configured_timeout = asyncio.run(write_behind_it())
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     finally:
-        holder.join()
+        conn.close()
+    assert str(mode).lower() == "wal"
 
-    probe = sqlite3.connect(db)
+
+def test_opening_a_connection_does_not_need_a_journal_mode_switch(tmp_path):
+    """A connection opens cleanly while another holds the write lock.
+
+    This is the "database is locked" a crawl reported on first start.  A
+    database that is not in WAL -- a data directory that cannot host SQLite's
+    shared-memory WAL keeps its own journal mode -- plus a per-connection
+    ``PRAGMA journal_mode = WAL`` makes SQLite answer with a busy error
+    immediately, without waiting out ``busy_timeout``.
+    """
+    db = tmp_path / "delete_mode.sqlite"
+    holder = sqlite3.connect(db, isolation_level=None)
     try:
-        ids = [row[0] for row in probe.execute("SELECT id FROM busy_probe ORDER BY id")]
+        assert holder.execute("PRAGMA journal_mode = DELETE").fetchone()[0] == "delete"
+        holder.execute("CREATE TABLE t(x)")
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute("INSERT INTO t VALUES (1)")
+
+        async def open_a_connection() -> None:
+            async with aiosqlite.connect(db) as conn:
+                await apply_pragmas(conn)
+
+        asyncio.run(open_a_connection())
     finally:
-        probe.close()
-    assert configured_timeout == 30000
-    assert ids == [1, 2]
+        holder.close()

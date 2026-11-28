@@ -8,16 +8,14 @@ from pathlib import Path
 import aiosqlite
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-#: Applied to every connection, in this order.  ``busy_timeout`` comes first on
-#: purpose: it is what makes a writer wait for the lock at all, and the
-#: journal-mode switch below needs that wait too when another connection is
-#: mid-transaction.  A first launch writes from three directions at once (the
-#: seed import, the discovery pass and the backlog drain), one connection per
-#: unit of work, so SQLite serializes them; five seconds was short enough for a
-#: waiting writer to give up and fail a crawl with "database is locked".
+#: Applied to every connection.  Deliberately no ``journal_mode``: WAL belongs
+#: to the file, not to a connection, and is switched once in ``_migrate``.
+#: Re-issuing the switch here fails with "database is locked" the moment
+#: another connection is mid-transaction -- immediately, without consulting
+#: ``busy_timeout`` -- so a data directory that cannot host WAL (a synced or
+#: network folder) would fail every crawl until the mode stuck.
 PRAGMAS = (
-    "PRAGMA busy_timeout = 30000;",
-    "PRAGMA journal_mode = WAL;",
+    "PRAGMA busy_timeout = 5000;",
     "PRAGMA foreign_keys = ON;",
     "PRAGMA synchronous = NORMAL;",
     "PRAGMA temp_store = MEMORY;",
@@ -114,6 +112,12 @@ async def _migrate(db_path: Path) -> int:
     files = list_migration_files()
     async with aiosqlite.connect(db_path) as conn:
         await apply_pragmas(conn)
+        # WAL is a property of the file, so ask for it exactly once, while this
+        # is the only connection open.  A filesystem that cannot host SQLite's
+        # shared-memory WAL (a synced or network folder) keeps its own journal
+        # mode instead; the app still runs, and no later connection re-asks and
+        # fails on the database-wide lock that switch needs.
+        await conn.execute("PRAGMA journal_mode = WAL;")
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
