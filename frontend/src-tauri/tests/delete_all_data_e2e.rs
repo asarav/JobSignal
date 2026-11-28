@@ -1,5 +1,6 @@
 //! §18.2 end to end: typed confirmation, worker exit, path-scoped wipe,
-//! restart, and a fresh schema-18 database, against the frozen sidecar.
+//! restart, and a fresh database at the shipped schema, against the frozen
+//! sidecar.
 //!
 //! Run with a built sidecar:
 //!   python scripts/build_worker.py
@@ -10,6 +11,36 @@ use std::time::{Duration, Instant};
 
 use lodestar_lib::Supervisor;
 use serde_json::json;
+
+/// The schema version this build migrates to: the highest numbered migration.
+///
+/// Deriving it keeps the e2e honest when a migration is added, instead of
+/// pinning a number that goes stale and fails the desktop build.
+fn shipped_schema_version() -> u64 {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("app")
+        .join("infrastructure")
+        .join("persistence")
+        .join("sqlite")
+        .join("migrations");
+    let mut highest = 0;
+    for entry in std::fs::read_dir(&directory).expect("migrations directory") {
+        let path = entry.expect("migration entry").path();
+        if path.extension().and_then(|value| value.to_str()) != Some("sql") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("migration file name is UTF-8");
+        let prefix = name.split('_').next().unwrap_or_default();
+        highest = highest.max(prefix.parse::<u64>().expect("numeric migration prefix"));
+    }
+    assert!(highest > 0, "no migrations found in {}", directory.display());
+    highest
+}
 
 fn frozen_worker() -> Option<PathBuf> {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
@@ -65,6 +96,7 @@ fn process_is_alive(pid: u32) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_all_data_end_to_end_against_a_real_worker() {
+    let expected_schema = shipped_schema_version();
     let Some(worker) = frozen_worker() else {
         eprintln!("skipping delete-all-data e2e: no frozen worker in binaries/");
         return;
@@ -103,7 +135,7 @@ async fn delete_all_data_end_to_end_against_a_real_worker() {
         )
         .await;
     assert_eq!(initial["ok"], true, "{initial}");
-    assert_eq!(initial["result"]["schema_version"], 18);
+    assert_eq!(initial["result"]["schema_version"], expected_schema);
     let old_pid = supervisor.last_child_pid_for_test();
     assert_ne!(old_pid, 0);
 
@@ -180,10 +212,10 @@ async fn delete_all_data_end_to_end_against_a_real_worker() {
         )
         .await;
     assert_eq!(fresh["ok"], true, "{fresh}");
-    assert_eq!(fresh["result"]["schema_version"], 18);
+    assert_eq!(fresh["result"]["schema_version"], expected_schema);
     eprintln!(
         "delete-all-data e2e: worker {old_pid} exited, {new_pid} restarted, \
-         data dir wiped, sibling intact, schema 18"
+         data dir wiped, sibling intact, schema {expected_schema}"
     );
 
     supervisor.shutdown_for_test().await;
