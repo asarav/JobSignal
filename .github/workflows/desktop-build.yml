@@ -108,7 +108,37 @@ jobs:
 
       - name: Build native bundles
         working-directory: frontend
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -o pipefail
+          # hdiutil intermittently fails to create the DMG with "Resource busy"
+          # on hosted macOS runners: XProtect/Spotlight grabs the staging image
+          # it has just created, so the .app bundles fine and the DMG step
+          # fails. Retry that flake (and only that flake), cleaning up the
+          # stale image and mount between attempts.
+          # https://github.com/actions/runner-images/issues/7522
+          log="${RUNNER_TEMP:-/tmp}/tauri-build.log"
+          attempts=1
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            attempts=3
+          fi
+          for ((attempt = 1; attempt <= attempts; attempt++)); do
+            if npm run tauri build -- --target ${{ matrix.target }} 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if [[ "$RUNNER_OS" != "macOS" ]] || ! grep -Eq 'bundle_dmg\.sh|hdiutil' "$log"; then
+              echo "::error::tauri build failed"
+              exit 1
+            fi
+            if [[ "$attempt" -eq "$attempts" ]]; then
+              echo "::error::DMG bundling still failed with hdiutil 'Resource busy' after $attempt attempts"
+              exit 1
+            fi
+            echo "::warning::DMG bundling hit hdiutil 'Resource busy' (attempt $attempt/$attempts); detaching stale volumes and retrying"
+            hdiutil detach -force "/Volumes/Job Signal" 2>/dev/null || true
+            find src-tauri/target -name 'rw.*.dmg' -delete
+            sleep $((attempt * 10))
+          done
 
       - name: Sidecar handshake smoke
         shell: bash
