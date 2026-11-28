@@ -8,11 +8,18 @@ from pathlib import Path
 import aiosqlite
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+#: Applied to every connection, in this order.  ``busy_timeout`` comes first on
+#: purpose: it is what makes a writer wait for the lock at all, and the
+#: journal-mode switch below needs that wait too when another connection is
+#: mid-transaction.  A first launch writes from three directions at once (the
+#: seed import, the discovery pass and the backlog drain), one connection per
+#: unit of work, so SQLite serializes them; five seconds was short enough for a
+#: waiting writer to give up and fail a crawl with "database is locked".
 PRAGMAS = (
+    "PRAGMA busy_timeout = 30000;",
     "PRAGMA journal_mode = WAL;",
     "PRAGMA foreign_keys = ON;",
     "PRAGMA synchronous = NORMAL;",
-    "PRAGMA busy_timeout = 5000;",
     "PRAGMA temp_store = MEMORY;",
     "PRAGMA cache_size = -20000;",
 )

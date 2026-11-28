@@ -1484,10 +1484,10 @@ Default behavior: fill the **current step only**, then wait. A `MutationObserver
 On every connection:
 
 ```sql
+PRAGMA busy_timeout = 30000;   -- a writer waits for the lock instead of failing
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 5000;
 PRAGMA temp_store = MEMORY;
 PRAGMA cache_size = -20000;       -- ~20 MB
 ```
