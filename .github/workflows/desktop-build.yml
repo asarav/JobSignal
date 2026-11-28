@@ -106,9 +106,34 @@ jobs:
         working-directory: frontend/src-tauri
         run: cargo test --test delete_all_data_e2e -- --nocapture
 
+      - name: Resolve build version
+        id: version
+        shell: bash
+        # Tauri names every installer after bundle.version, and tauri.conf.json
+        # pins that to 0.0.0 so untagged builds stay unversioned. A tagged
+        # release takes the version from its tag instead, so the MSI/DMG/DEB/
+        # AppImage file names match the release they are published under.
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          if [[ -z "$version" ]]; then
+            echo "No release_tag given; bundling at the version in tauri.conf.json."
+            echo "version=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+            echo "::error::release_tag '$RELEASE_TAG' is not a vX.Y.Z version tag."
+            exit 1
+          fi
+          echo "Bundling version $version (from tag $RELEASE_TAG)."
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Build native bundles
         working-directory: frontend
         shell: bash
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -o pipefail
           # hdiutil intermittently fails to create the DMG with "Resource busy"
@@ -117,13 +142,18 @@ jobs:
           # fails. Retry that flake (and only that flake), cleaning up the
           # stale image and mount between attempts.
           # https://github.com/actions/runner-images/issues/7522
+          config=()
+          if [[ -n "$BUILD_VERSION" ]]; then
+            printf '{"version":"%s"}\n' "$BUILD_VERSION" > "$RUNNER_TEMP/version.json"
+            config=(--config "$RUNNER_TEMP/version.json")
+          fi
           log="${RUNNER_TEMP:-/tmp}/tauri-build.log"
           attempts=1
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             attempts=3
           fi
           for ((attempt = 1; attempt <= attempts; attempt++)); do
-            if npm run tauri build -- --target ${{ matrix.target }} 2>&1 | tee "$log"; then
+            if npm run tauri build -- --target ${{ matrix.target }} "${config[@]}" 2>&1 | tee "$log"; then
               exit 0
             fi
             if [[ "$RUNNER_OS" != "macOS" ]] || ! grep -Eq 'bundle_dmg\.sh|hdiutil' "$log"; then
